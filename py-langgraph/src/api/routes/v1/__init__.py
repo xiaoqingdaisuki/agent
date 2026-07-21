@@ -1,0 +1,265 @@
+"""
+External API v1 — 给前端 UI 使用
+"""
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+from typing import Optional
+from datetime import datetime
+from src.services import (
+    ConversationService,
+    AgentService,
+    KnowledgeService,
+    Capabilities,
+    BusinessError,
+    BusinessErrorCode,
+    Message,
+)
+
+router = APIRouter()
+
+
+# ============ 请求/响应模型 ============
+
+class CreateConversationRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=100)
+    mode: str = Field(default="chat", pattern="^(chat|knowledge|mixed)$")
+
+
+class SendMessageRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+
+
+class MessageResponse(BaseModel):
+    id: str
+    role: str
+    content: str
+    created_at: str
+
+
+class ConversationResponse(BaseModel):
+    id: str
+    title: str
+    mode: str
+    created_at: str
+    message_count: int
+
+
+class DocumentResponse(BaseModel):
+    id: str
+    name: str
+    size: int
+    status: str
+    chunks: int
+    category: Optional[str] = None
+    created_at: str
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+# ============ 健康检查 ============
+
+@router.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "version": "0.2.0",
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+# ============ 会话管理 ============
+
+@router.post("/conversations", response_model=ConversationResponse, status_code=201)
+async def create_conversation(req: CreateConversationRequest):
+    try:
+        conv = ConversationService.create(req.title, req.mode)
+        return conv.to_dict()
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": "创建会话失败"},
+        )
+
+
+@router.get("/conversations")
+async def list_conversations():
+    return ConversationService.list()
+
+
+@router.get("/conversations/{conv_id}")
+async def get_conversation(conv_id: str):
+    conv = ConversationService.get(conv_id)
+    if not conv:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
+        )
+    return conv.to_dict()
+
+
+@router.delete("/conversations/{conv_id}")
+async def delete_conversation(conv_id: str):
+    deleted = ConversationService.delete(conv_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
+        )
+    return {"success": True}
+
+
+@router.get("/conversations/{conv_id}/messages")
+async def get_messages(conv_id: str):
+    conv = ConversationService.get(conv_id)
+    if not conv:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
+        )
+    return []
+
+
+@router.post("/conversations/{conv_id}/messages", response_model=MessageResponse)
+async def send_message(conv_id: str, req: SendMessageRequest):
+    try:
+        conv = ConversationService.get(conv_id)
+        if not conv:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
+            )
+
+        ConversationService.append_user_message(conv_id, req.content)
+        reply = await AgentService.chat(conv_id, req.content)
+
+        return reply.to_dict()
+    except BusinessError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.to_dict())
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": "发送消息失败"},
+        )
+
+
+@router.delete("/conversations/{conv_id}/messages")
+async def clear_messages(conv_id: str):
+    conv = ConversationService.get(conv_id)
+    if not conv:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
+        )
+    return {"success": True}
+
+
+# ============ 知识库管理 ============
+
+@router.post("/knowledge/documents", response_model=DocumentResponse, status_code=201)
+async def upload_document(request: Request):
+    """上传文档（multipart/form-data）"""
+    try:
+        form = await request.form()
+        file = form.get("file")
+        category = form.get("category", "")
+
+        if not file:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "file is required"},
+            )
+
+        from fastapi import UploadFile
+        from src.services import KnowledgeService
+
+        if hasattr(file, "read"):
+            content = await file.read()
+            filename = file.filename or "unknown"
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "invalid file"},
+            )
+
+        doc = await KnowledgeService.upload_document(content, filename, category or None)
+        return doc.to_dict()
+
+    except BusinessError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.to_dict())
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"文档上传失败: {str(e)}"},
+        )
+
+
+@router.get("/knowledge/documents")
+async def list_documents():
+    return KnowledgeService.list_documents()
+
+
+@router.get("/knowledge/documents/{doc_id}")
+async def get_document(doc_id: str):
+    doc = KnowledgeService.get_document(doc_id)
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "文档不存在"},
+        )
+    return doc.to_dict()
+
+
+@router.delete("/knowledge/documents/{doc_id}")
+async def delete_document(doc_id: str):
+    deleted = KnowledgeService.delete_document(doc_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "文档不存在"},
+        )
+    return {"success": True}
+
+
+@router.post("/knowledge/documents/{doc_id}/reindex")
+async def reindex_document(doc_id: str):
+    try:
+        doc = await KnowledgeService.reindex_document(doc_id)
+        return doc.to_dict()
+    except BusinessError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.to_dict())
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": "重新索引失败"},
+        )
+
+
+@router.post("/knowledge/search")
+async def search_knowledge(req: SearchRequest):
+    try:
+        results = await KnowledgeService.search(req.query, req.top_k)
+        return {"results": results}
+    except BusinessError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.to_dict())
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": "检索失败"},
+        )
+
+
+# ============ 能力查询 ============
+
+@router.get("/capabilities")
+async def get_capabilities():
+    return Capabilities.get()

@@ -1,0 +1,28 @@
+{
+  "name": "ts-langchain-agent",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx --no-check src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "langchain": "^0.3",
+    "@langchain/core": "^0.3",
+    "@langchain/openai": "^0.1",
+    "@langchain/anthropic": "^0.1",
+    "zod": "^3.23",
+    "fastify": "^4.26",
+    "@fastify/cors": "^8.4",
+    "dotenv": "^16.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.5",
+    "tsx": "^4.7",
+    "vitest": "^2.0",
+    "@types/node": "^22.0"
+  }
+}
