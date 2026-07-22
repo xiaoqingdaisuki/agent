@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 from typing import Literal
 from typing_extensions import TypedDict
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, SystemMessage
 import operator
 
 
@@ -19,7 +19,11 @@ def get_llm(provider: str = "openai"):
         from src.config.settings import settings
         return ChatAnthropic(model=settings.anthropic_model)
     from src.config.settings import settings
-    return ChatOpenAI(model=settings.openai_model)
+    return ChatOpenAI(
+        model=settings.openai_model,
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+    )
 
 
 def build_chat_agent(checkpointer=None):
@@ -32,10 +36,9 @@ def build_chat_agent(checkpointer=None):
     from src.prompts.system import SYSTEM_PROMPT
 
     llm = get_llm()
-    llm_with_prompt = llm.bind_prompt(SYSTEM_PROMPT)
 
     def agent_node(state: AgentState):
-        response = llm_with_prompt.invoke(state["messages"])
+        response = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), *state["messages"]])
         return {"messages": [response]}
 
     builder = StateGraph(AgentState)
@@ -69,10 +72,9 @@ def build_tool_agent(checkpointer=None):
     from src.tools import tools
 
     llm = get_llm()
-    llm_with_prompt = llm.bind_prompt(TOOL_CALLING_PROMPT)
 
     def agent_node(state: AgentState):
-        response = llm_with_prompt.invoke(state["messages"])
+        response = llm.invoke([SystemMessage(content=TOOL_CALLING_PROMPT), *state["messages"]])
         return {"messages": [response]}
 
     builder = StateGraph(AgentState)

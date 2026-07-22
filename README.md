@@ -131,7 +131,7 @@ cp .env.example .env
 npm run dev
 ```
 
-服务：`http://localhost:3001`
+服务：`http://localhost:6001`
 
 ### Python 版本
 
@@ -143,7 +143,7 @@ cp .env.example .env
 uvicorn src.api.main:app --reload
 ```
 
-服务：`http://localhost:3002`
+服务：`http://localhost:6002`
 
 ## API 接口
 

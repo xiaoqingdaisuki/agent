@@ -89,7 +89,7 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
 
 # 服务端口
-PORT=3001
+PORT=6001
 
 # Qdrant 向量数据库（RAG 功能需要）
 QDRANT_URL=http://localhost:6333
@@ -106,12 +106,12 @@ npm run build
 npm start
 ```
 
-服务启动在 `http://localhost:3001`
+服务启动在 `http://localhost:6001`
 
 ### 4. 验证
 
 ```bash
-curl http://localhost:3001/api/v1/health
+curl http://localhost:6001/api/v1/health
 ```
 
 ## 部署
@@ -141,7 +141,7 @@ cp ts-langchain/.env.example ts-langchain/.env
 ```env
 OPENAI_API_KEY=sk-your-api-key
 OPENAI_MODEL=gpt-4o-mini
-PORT=3001
+PORT=6001
 QDRANT_URL=http://qdrant:6333
 ```
 
@@ -170,7 +170,7 @@ docker-compose logs -f ts-agent
 **6. 验证**
 
 ```bash
-curl http://localhost:3001/api/v1/health
+curl http://localhost:6001/api/v1/health
 ```
 
 ## API 接口
@@ -213,7 +213,7 @@ POST /api/internal/agent/chat/stream    流式对话
 | `OPENAI_BASE_URL` | API 地址 | `https://api.openai.com/v1` | 否 |
 | `ANTHROPIC_API_KEY` | Anthropic API 密钥 | - | 否 |
 | `ANTHROPIC_MODEL` | Anthropic 模型 | `claude-3-5-haiku-20241022` | 否 |
-| `PORT` | 服务端口 | `3001` | 否 |
+| `PORT` | 服务端口 | `6001` | 否 |
 | `QDRANT_URL` | Qdrant 地址 | `http://localhost:6333` | 否 |
 
 ## 故障排查
@@ -222,11 +222,11 @@ POST /api/internal/agent/chat/stream    流式对话
 
 ```bash
 # Linux/Mac
-lsof -i :3001
+lsof -i :6001
 kill -9 <PID>
 
 # Windows
-netstat -ano | findstr :3001
+netstat -ano | findstr :6001
 taskkill /PID <PID> /F
 ```
 
@@ -261,4 +261,3 @@ npm start        # 启动编译后的服务
 npm test         # 运行测试（vitest）
 npm run test:run # 运行测试（不监听）
 ```
-

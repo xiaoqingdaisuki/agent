@@ -94,7 +94,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 
 # API 服务
 HOST=0.0.0.0
-PORT=3002
+PORT=6002
 
 # 数据库（checkpoint 持久化，可选）
 POSTGRES_URI=postgresql://agent:agent@localhost:5432/agent
@@ -110,15 +110,15 @@ QDRANT_URL=http://localhost:6333
 uvicorn src.api.main:app --reload
 
 # 生产模式
-uvicorn src.api.main:app --host 0.0.0.0 --port 3002
+uvicorn src.api.main:app --host 0.0.0.0 --port 6002
 ```
 
-服务启动在 `http://localhost:3002`
+服务启动在 `http://localhost:6002`
 
 ### 4. 验证
 
 ```bash
-curl http://localhost:3002/api/v1/health
+curl http://localhost:6002/api/v1/health
 ```
 
 ## 部署
@@ -149,7 +149,7 @@ cp py-langgraph/.env.example py-langgraph/.env
 OPENAI_API_KEY=sk-your-api-key
 OPENAI_MODEL=gpt-4o-mini
 HOST=0.0.0.0
-PORT=3002
+PORT=6002
 POSTGRES_URI=postgresql://agent:agent@postgres:5432/agent
 QDRANT_URL=http://qdrant:6333
 ```
@@ -179,7 +179,7 @@ docker-compose logs -f py-agent
 **6. 验证**
 
 ```bash
-curl http://localhost:3002/api/v1/health
+curl http://localhost:6002/api/v1/health
 ```
 
 ## API 接口
@@ -223,7 +223,7 @@ POST /api/internal/agent/chat/stream    流式对话
 | `ANTHROPIC_API_KEY` | Anthropic API 密钥 | - | 否 |
 | `ANTHROPIC_MODEL` | Anthropic 模型 | `claude-3-5-haiku-20241022` | 否 |
 | `HOST` | 服务监听地址 | `0.0.0.0` | 否 |
-| `PORT` | 服务端口 | `3002` | 否 |
+| `PORT` | 服务端口 | `6002` | 否 |
 | `POSTGRES_URI` | PostgreSQL 连接字符串 | `postgresql://agent:agent@localhost:5432/agent` | 否 |
 | `QDRANT_URL` | Qdrant 地址 | `http://localhost:6333` | 否 |
 
@@ -233,11 +233,11 @@ POST /api/internal/agent/chat/stream    流式对话
 
 ```bash
 # Linux/Mac
-lsof -i :3002
+lsof -i :6002
 kill -9 <PID>
 
 # Windows
-netstat -ano | findstr :3002
+netstat -ano | findstr :6002
 taskkill /PID <PID> /F
 ```
 
@@ -265,7 +265,7 @@ taskkill /PID <PID> /F
 uvicorn src.api.main:app --reload
 
 # 生产模式
-uvicorn src.api.main:app --host 0.0.0.0 --port 3002
+uvicorn src.api.main:app --host 0.0.0.0 --port 6002
 
 # 运行测试
 pytest

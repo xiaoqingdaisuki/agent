@@ -4,10 +4,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+    openai_base_url: str | None = None
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-3-5-haiku-20241022"
     host: str = "0.0.0.0"
-    port: int = 3002
+    port: int = 6002
     postgres_uri: str = "postgresql://agent:agent@localhost:5432/agent"
     qdrant_url: str = "http://localhost:6333"
 
