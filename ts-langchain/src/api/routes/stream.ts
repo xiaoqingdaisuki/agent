@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { createToolAgent } from "../../agents/tool-agent";
 
-let toolAgent: ReturnType<typeof createToolAgent> | null = null;
+let toolAgent: Awaited<ReturnType<typeof createToolAgent>> | null = null;
 
 export async function registerStreamRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string } }>(
@@ -13,7 +13,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       }
 
       if (!toolAgent) {
-        toolAgent = createToolAgent();
+        toolAgent = await createToolAgent();
       }
 
       reply.raw.setHeader("Content-Type", "text/event-stream");

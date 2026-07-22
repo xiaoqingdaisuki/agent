@@ -1,7 +1,7 @@
 import { DynamicStructuredTool } from "langchain/tools";
 import { z } from "zod";
 
-export const weatherTool = new DynamicStructuredTool({
+export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "get_weather",
   description: "Get the current weather for a city. Use this when the user asks about weather.",
   schema: z.object({
@@ -14,9 +14,9 @@ export const weatherTool = new DynamicStructuredTool({
     const temp = temps[Math.floor(Math.random() * temps.length)];
     return `Weather in ${city}: ${temp}°F, ${condition}`;
   },
-});
+} as any);
 
-export const calculatorTool = new DynamicStructuredTool({
+export const calculatorTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "calculator",
   description: "Evaluate a math expression. Use this for calculations.",
   schema: z.object({
@@ -31,6 +31,6 @@ export const calculatorTool = new DynamicStructuredTool({
       return `Error: Cannot evaluate '${expression}'`;
     }
   },
-});
+} as any);
 
 export const tools = [weatherTool, calculatorTool];

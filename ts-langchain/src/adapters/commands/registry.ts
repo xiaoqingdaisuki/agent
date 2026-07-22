@@ -3,7 +3,7 @@
  * 装饰器模式注册指令
  */
 
-import { NormalizedMessage } from "./types.js";
+import { NormalizedMessage } from "../types.js";
 
 export type CommandHandler = (msg: NormalizedMessage, args: string[]) => Promise<string>;
 

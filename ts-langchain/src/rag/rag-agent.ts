@@ -59,7 +59,7 @@ function createRetrieverTool(retriever: Retriever) {
 export class RAGAgent {
   private retriever: Retriever;
   private splitter: TextSplitter;
-  private agent: ReturnType<typeof AgentExecutor>;
+  private agent: Promise<AgentExecutor>;
 
   constructor(options: RAGOptions) {
     this.retriever = new Retriever({
@@ -73,7 +73,7 @@ export class RAGAgent {
   /**
    * 创建 RAG Agent — 声明式配置
    */
-  private createAgent(options: RAGOptions) {
+  private async createAgent(options: RAGOptions): Promise<AgentExecutor> {
     const model = new ChatOpenAI({
       modelName: options.model || process.env.OPENAI_MODEL || "gpt-4o-mini",
       configuration: {
@@ -103,13 +103,17 @@ Be concise and accurate in your responses.`,
     ]);
 
     // LangChain 声明式：prompt + createOpenAIToolsAgent + AgentExecutor
-    const agent = createOpenAIToolsAgent({
+    const agent = await createOpenAIToolsAgent({
       llm: model as any,
-      tools: [retrieverTool],
+      tools: [retrieverTool] as any,
       prompt,
     });
 
-    return new AgentExecutor({ agent, tools: [retrieverTool], verbose: false });
+    return new AgentExecutor({
+      agent: agent as any,
+      tools: [retrieverTool] as any,
+      verbose: false,
+    });
   }
 
   /**
@@ -129,7 +133,8 @@ Be concise and accurate in your responses.`,
    * 对话
    */
   async chat(message: string, history: any[] = []) {
-    const result = await this.agent.invoke(
+    const agent = await this.agent;
+    const result = await agent.invoke(
       { input: message, chat_history: history },
       { configurable: { thread_id: "rag-session" } }
     );

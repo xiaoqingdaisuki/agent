@@ -148,15 +148,15 @@ export class ConversationService {
 
 export class AgentService {
   private static chatAgent: ReturnType<typeof createChatAgent> | null = null;
-  private static toolAgent: ReturnType<typeof createToolAgent> | null = null;
+  private static toolAgent: Awaited<ReturnType<typeof createToolAgent>> | null = null;
 
   private static getChatAgent() {
     if (!this.chatAgent) this.chatAgent = createChatAgent();
     return this.chatAgent;
   }
 
-  private static getToolAgent() {
-    if (!this.toolAgent) this.toolAgent = createToolAgent();
+  private static async getToolAgent() {
+    if (!this.toolAgent) this.toolAgent = await createToolAgent();
     return this.toolAgent;
   }
 
@@ -165,7 +165,7 @@ export class AgentService {
       const history = getHistory(conversationId);
       const input = { input: content, chat_history: history };
 
-      const agent = this.getToolAgent();
+      const agent = await this.getToolAgent();
       const result = await (agent as any).invoke(input);
 
       const reply: Message = {
@@ -204,7 +204,7 @@ export class AgentService {
     content: string
   ): AsyncGenerator<string, void, unknown> {
     try {
-      const agent = this.getToolAgent();
+      const agent = await this.getToolAgent();
       const input = { input: content, chat_history: [] };
       const stream = await (agent as any).stream(input, { tags: ["stream"] });
 
@@ -257,7 +257,7 @@ export class KnowledgeService {
     category?: string
   ): Promise<Document> {
     try {
-      const doc = DocumentLoader.loadFromBuffer(buffer, filename);
+      const doc = await DocumentLoader.loadFromBuffer(buffer, filename);
       const chunks = this.splitter.split(doc);
 
       // 索引到向量库
