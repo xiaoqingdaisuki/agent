@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { createChatAgent, chat } from "../../agents/chat-agent";
+import { createChatAgent, chat } from "../../agents/chat-agent.js";
 
 let chatAgent: ReturnType<typeof createChatAgent> | null = null;
 

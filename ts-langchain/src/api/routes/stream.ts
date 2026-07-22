@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { createToolAgent } from "../../agents/tool-agent";
+import { createToolAgent } from "../../agents/tool-agent.js";
 
 let toolAgent: Awaited<ReturnType<typeof createToolAgent>> | null = null;
 
