@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str | None = None
+    image_model: str = "step-image-edit-2"
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-3-5-haiku-20241022"
     host: str = "0.0.0.0"

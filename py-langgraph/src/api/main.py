@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from .routes.v1 import router as v1_router
 from .routes.internal import router as internal_router
-from .routes import chat, stream, tools
+from .routes import chat, images, stream, tools
 
 
 def create_app() -> FastAPI:
@@ -17,6 +17,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router, prefix="/chat", tags=["chat"])
     app.include_router(stream.router, prefix="/stream", tags=["stream"])
     app.include_router(tools.router, prefix="/tools", tags=["tools"])
+    app.include_router(images.router, prefix="/images", tags=["images"])
 
     return app
 
