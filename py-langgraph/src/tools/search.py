@@ -16,6 +16,13 @@ WEATHER_CODES = {
 }
 
 
+def _clean_html(text: str) -> str:
+    text = unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 # ============ Weather Tool ============
 
 class WeatherInput(BaseModel):
@@ -79,13 +86,6 @@ def get_weather(city: str) -> str:
 
 
 # ============ Web Search Tool (Multi-source) ============
-
-def _clean_html(text: str) -> str:
-    text = unescape(text)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
 
 def _search_bing(query: str) -> str | None:
     with httpx.Client(timeout=10) as client:

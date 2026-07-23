@@ -15,14 +15,15 @@ const prompt = ChatPromptTemplate.fromMessages([
 let toolAgent: Promise<AgentExecutor> | null = null;
 
 export async function createToolAgent(systemPromptOverride?: string): Promise<AgentExecutor> {
-  if (toolAgent) return toolAgent;
-
+  // Always rebuild when a specific system prompt is provided
+  if (toolAgent && !systemPromptOverride) {
+    return toolAgent;
+  }
   toolAgent = buildToolAgent(systemPromptOverride);
   return toolAgent;
 }
 
 async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecutor> {
-
   const model = new ChatOpenAI({
     modelName: process.env.OPENAI_MODEL,
     configuration: {
@@ -46,5 +47,11 @@ async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecu
     prompt: dynamicPrompt,
   });
 
-  return new AgentExecutor({ agent: agent as any, tools: tools as any, verbose: false });
+  return new AgentExecutor({
+    agent: agent as any,
+    tools: tools as any,
+    verbose: false,
+    handleParsingErrors: true,
+    maxIterations: 3,
+  });
 }

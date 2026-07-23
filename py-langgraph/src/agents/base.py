@@ -117,9 +117,9 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
     builder.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
     builder.add_edge("tools", "agent")
 
-    # 编译时附加 checkpointer 和中断点（人机协同）
+    # 编译时附加 checkpointer
     cp = checkpointer or _get_default_checkpointer()
     return builder.compile(
         checkpointer=cp,
-        interrupt_before=["tools"],  # 工具调用前暂停，人工确认
+        # interrupt_before=["tools"],  # 关闭：生产环境不需要每次工具调用都人工确认
     )
