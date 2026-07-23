@@ -57,9 +57,9 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
       const weatherData = await weatherRes.json();
 
       const c = weatherData.current_weather;
-      const desc = WEATHER_CODES[c.weathercode] || `未知`;
+      const desc = WEATHER_CODES[c.weathercode] || "未知";
       return `🌤 ${name}（${country}）当前天气：\n🌡 温度：${c.temperature}°C\n🌦 天气：${desc}\n💨 风速：${c.windspeed} km/h`;
-    } catch (e) {
+    } catch {
       // Open-Meteo 失败，尝试 wttr.in 备用
       try {
         const wttrRes = await fetch(`https://wttr.in/${encodeURIComponent(city)}?format=j1&lang=zh`, {
@@ -82,54 +82,157 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
   },
 });
 
-// ============ Web Search Tool ============
+// ============ Web Search Tool (Multi-source) ============
+
+async function searchBing(query: string): Promise<string | null> {
+  const res = await fetch(
+    `https://www.bing.com/search?q=${encodeURIComponent(query)}&setmkt=zh-CN`,
+    {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+      },
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+
+  if (!res.ok) return null;
+  const html = await res.text();
+
+  const results: string[] = [];
+  const seen = new Set<string>();
+  const itemRegex = /<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/g;
+  let match;
+
+  while ((match = itemRegex.exec(html)) && results.length < 5) {
+    const item = match[1];
+    const titleMatch = item.match(/<h2><a href="([^"]+)"[^>]*>([\s\S]*?)<\/a><\/h2>/);
+    if (!titleMatch) continue;
+
+    const url = titleMatch[1];
+    const title = titleMatch[2]
+      .replace(/<[^>]+>/g, "")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .trim();
+
+    if (!title || seen.has(url)) continue;
+    seen.add(url);
+
+    const snippetMatch = item.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+    const snippet = snippetMatch
+      ? snippetMatch[1]
+          .replace(/<[^>]+>/g, "")
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&quot;/g, '"')
+          .trim()
+      : "无摘要";
+
+    results.push(`• ${title}\n  ${url}\n  ${snippet}`);
+  }
+
+  return results.length > 0 ? `🔍 搜索结果（${query}）：\n\n${results.join("\n\n")}` : null;
+}
+
+async function searchSearx(query: string): Promise<string | null> {
+  const instances = [
+    "https://search.sapti.me",
+    "https://searx.be",
+    "https://search.bus-hit.me",
+  ];
+
+  for (const instance of instances) {
+    try {
+      const res = await fetch(
+        `${instance}/search?q=${encodeURIComponent(query)}&format=json&engines=google,bing,duckduckgo&pageno=1`,
+        {
+          headers: { Accept: "application/json", "User-Agent": "curl/7.68" },
+          signal: AbortSignal.timeout(8000),
+        }
+      );
+
+      if (!res.ok) continue;
+      const data = await res.json();
+
+      if (data.results?.length) {
+        const results = data.results
+          .slice(0, 5)
+          .map((r: any) => `• ${r.title}\n  ${r.url}\n  ${(r.content || "").slice(0, 100)}`);
+        return `🔍 搜索结果（${query}）：\n\n${results.join("\n\n")}`;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+async function searchDuckDuckGo(query: string): Promise<string | null> {
+  const res = await fetch(
+    `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
+    { signal: AbortSignal.timeout(8000) }
+  );
+
+  if (!res.ok) return null;
+  const data = await res.json();
+
+  const results: string[] = [];
+  if (data.Abstract) {
+    results.push(`📋 ${data.Abstract}`);
+    if (data.AbstractURL) results.push(`   来源：${data.AbstractURL}`);
+  }
+  if (data.RelatedTopics?.length) {
+    results.push("\n📌 相关结果：");
+    for (const topic of data.RelatedTopics.slice(0, 5)) {
+      if (topic.Text && !topic.Text.includes("search for")) {
+        results.push(`• ${topic.Text}`);
+        if (topic.FirstURL) results.push(`  链接：${topic.FirstURL}`);
+      }
+    }
+  }
+
+  return results.length > 0 ? results.join("\n") : null;
+}
 
 export const webSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "web_search",
   description:
-    "在互联网上搜索最新信息。当用户问及时事、新闻、最新动态、知识查询，或你不知道答案时使用此工具获取最新信息。",
+    "在互联网上搜索最新信息。当用户问及时事、新闻、最新动态、知识查询、活动信息，或你不知道答案时使用此工具获取最新信息。",
   schema: z.object({
-    query: z.string().describe("搜索关键词，尽量简洁明确"),
+    query: z.string().describe("搜索关键词，尽量简洁明确，例如'深圳8月28日活动'"),
   }),
   func: async ({ query }) => {
+    // 1) Bing
     try {
-      const res = await fetch(
-        `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`
-      );
-      if (!res.ok) {
-        return `搜索失败：无法连接到搜索引擎。`;
-      }
-      const data = await res.json();
-
-      const results: string[] = [];
-
-      if (data.Abstract) {
-        results.push(`📋 摘要：${data.Abstract}`);
-        if (data.AbstractURL) {
-          results.push(`   来源：${data.AbstractURL}`);
-        }
-      }
-
-      if (data.RelatedTopics && data.RelatedTopics.length > 0) {
-        results.push(`\n📌 相关结果：`);
-        for (const topic of data.RelatedTopics.slice(0, 5)) {
-          if (topic.Text && !topic.Text.includes("search for")) {
-            results.push(`• ${topic.Text}`);
-            if (topic.FirstURL) {
-              results.push(`  链接：${topic.FirstURL}`);
-            }
-          }
-        }
-      }
-
-      if (results.length === 0) {
-        return `未找到关于 "${query}" 的相关信息，请尝试其他关键词。`;
-      }
-
-      return results.join("\n");
-    } catch (error) {
-      return `搜索出错：${error instanceof Error ? error.message : "未知错误"}`;
+      const bing = await searchBing(query);
+      if (bing) return bing;
+    } catch {
+      // continue
     }
+
+    // 2) Searx
+    try {
+      const searx = await searchSearx(query);
+      if (searx) return searx;
+    } catch {
+      // continue
+    }
+
+    // 3) DuckDuckGo
+    try {
+      const ddg = await searchDuckDuckGo(query);
+      if (ddg) return ddg;
+    } catch {
+      // all failed
+    }
+
+    return `❌ 搜索暂时不可用，无法获取关于"${query}"的信息。请稍后重试。`;
   },
 });
 
