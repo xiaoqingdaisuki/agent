@@ -36,44 +36,55 @@ class WeatherInput(BaseModel):
 
 @tool(args_schema=WeatherInput)
 def get_weather(city: str) -> str:
-    """查询指定城市的实时天气信息（温度、天气状况、风速等）。当用户问天气、气温、下雨、下雪等情况时使用。"""
+    """查询指定城市的实时天气信息（温度、天气状况、风速等）。当用户问天气、气温、下雨、下雪等情况时使用。优先通过 Open-Meteo 获取，如果失败再用 web_search 搜索。"""
+    # 尝试 Open-Meteo
     try:
         with httpx.Client(timeout=10) as client:
-            # Step 1: Geocoding
             geo_res = client.get(
                 "https://geocoding-api.open-meteo.com/v1/search",
                 params={"name": city, "count": 1, "language": "zh", "format": "json"},
             )
+            geo_res.raise_for_status()
             geo_data = geo_res.json()
 
             if not geo_data.get("results"):
-                return f'找不到城市 "{city}"，请检查城市名称是否正确。'
+                raise ValueError(f"找不到城市: {city}")
 
-            result = geo_data["results"][0]
-            lat = result["latitude"]
-            lon = result["longitude"]
-            name = result["name"]
-            country = result.get("country", "")
-
-            # Step 2: Weather data
+            r = geo_data["results"][0]
             weather_res = client.get(
                 "https://api.open-meteo.com/v1/forecast",
                 params={
-                    "latitude": lat,
-                    "longitude": lon,
+                    "latitude": r["latitude"],
+                    "longitude": r["longitude"],
                     "current_weather": "true",
                     "timezone": "auto",
                 },
             )
-            weather_data = weather_res.json()
+            weather_res.raise_for_status()
+            wdata = weather_res.json()
 
-            current = weather_data["current_weather"]
-            temp = current["temperature"]
-            wind_speed = current["windspeed"]
-            code = current["weathercode"]
+            c = wdata["current_weather"]
+            desc = WEATHER_CODES.get(c["weathercode"], f"未知")
+            return f"🌤 {r['name']}（{r.get('country', '')}）当前天气：\n🌡 温度：{c['temperature']}°C\n🌦 天气：{desc}\n💨 风速：{c['windspeed']} km/h"
+    except Exception:
+        pass
 
-            desc = WEATHER_CODES.get(code, f"未知 (代码: {code})")
+    # 备用：wttr.in
+    try:
+        with httpx.Client(timeout=10) as client:
+            wttr_res = client.get(
+                f"https://wttr.in/{city}",
+                params={"format": "j1", "lang": "zh"},
+                headers={"User-Agent": "curl/7.68"},
+            )
+            wttr_res.raise_for_status()
+            wdata = wttr_res.json()
+            curr = wdata["current_condition"][0]
+            area = wdata["nearest_area"][0]
+            area_name = area["areaName"][0]["value"]
+            country = area["country"][0]["value"]
+            return f"🌤 {area_name}（{country}）当前天气：\n🌡 温度：{curr['temp_C']}°C（体感 {curr['FeelsLikeC']}°C）\n🌦 天气：{curr['weatherDesc'][0]['value']}\n💨 风速：{curr['windspeedKmph']} km/h\n💧 湿度：{curr['humidity']}%"
+    except Exception:
+        pass
 
-            return f"🌤 {name}（{country}）当前天气：\n🌡 温度：{temp}°C\n🌦 天气：{desc}\n💨 风速：{wind_speed} km/h"
-    except Exception as e:
-        return f"天气查询出错：{str(e)}"
+    return f"❌ 天气查询暂时不可用（网络或服务异常）。请使用 web_search 工具搜索\"{city}天气\"获取信息。"

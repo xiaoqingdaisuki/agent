@@ -34,46 +34,50 @@ const WEATHER_CODES: Record<number, string> = {
 
 export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "get_weather",
-  description: "查询指定城市的实时天气信息（温度、天气状况、风速等）。当用户问天气、气温、下雨、下雪等情况时使用此工具。",
+  description:
+    "【天气查询工具】查询指定城市的实时天气。用户问天气、气温、下雨、下雪、冷不冷、热不热时，必须先调用此工具。优先通过 Open-Meteo 获取，如果失败再用 web_search 搜索。",
   schema: z.object({
-    city: z.string().describe("城市名称，如 '北京'、'上海'、'New York'"),
+    city: z.string().describe("城市名称，支持中文如 '北京' '上海' '深圳'，也支持英文如 'Beijing' 'Shanghai'"),
   }),
   func: async ({ city }) => {
+    // 尝试 Open-Meteo
     try {
-      // Step 1: Geocoding
       const geoRes = await fetch(
         `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh&format=json`
       );
-      if (!geoRes.ok) {
-        return `天气查询失败：无法获取城市 "${city}" 的位置信息。`;
-      }
+      if (!geoRes.ok) throw new Error(`Geocoding HTTP ${geoRes.status}`);
       const geoData = await geoRes.json();
-
-      if (!geoData.results || geoData.results.length === 0) {
-        return `找不到城市 "${city}"，请检查城市名称是否正确。`;
-      }
+      if (!geoData.results?.length) throw new Error(`找不到城市: ${city}`);
 
       const { latitude, longitude, name, country } = geoData.results[0];
-
-      // Step 2: Weather data
       const weatherRes = await fetch(
         `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true&timezone=auto`
       );
-      if (!weatherRes.ok) {
-        return `天气查询失败：无法获取 ${name} 的天气数据。`;
-      }
+      if (!weatherRes.ok) throw new Error(`Weather HTTP ${weatherRes.status}`);
       const weatherData = await weatherRes.json();
 
-      const current = weatherData.current_weather;
-      const temp = current.temperature;
-      const windSpeed = current.windspeed;
-      const weatherCode = current.weathercode;
-
-      const weatherDesc = WEATHER_CODES[weatherCode] || `未知 (代码: ${weatherCode})`;
-
-      return `🌤 ${name}（${country}）当前天气：\n🌡 温度：${temp}°C\n🌦 天气：${weatherDesc}\n💨 风速：${windSpeed} km/h`;
-    } catch (error) {
-      return `天气查询出错：${error instanceof Error ? error.message : "未知错误"}`;
+      const c = weatherData.current_weather;
+      const desc = WEATHER_CODES[c.weathercode] || `未知`;
+      return `🌤 ${name}（${country}）当前天气：\n🌡 温度：${c.temperature}°C\n🌦 天气：${desc}\n💨 风速：${c.windspeed} km/h`;
+    } catch (e) {
+      // Open-Meteo 失败，尝试 wttr.in 备用
+      try {
+        const wttrRes = await fetch(`https://wttr.in/${encodeURIComponent(city)}?format=j1&lang=zh`, {
+          headers: { "User-Agent": "curl/7.68" },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (wttrRes.ok) {
+          const wData = await wttrRes.json();
+          const curr = wData.current_condition[0];
+          const area = wData.nearest_area[0];
+          const areaName = area.areaName[0].value;
+          const country = area.country[0].value;
+          return `🌤 ${areaName}（${country}）当前天气：\n🌡 温度：${curr.temp_C}°C（体感 ${curr.FeelsLikeC}°C）\n🌦 天气：${curr.weatherDesc[0].value}\n💨 风速：${curr.windspeedKmph} km/h\n💧 湿度：${curr.humidity}%`;
+        }
+      } catch {
+        // wttr.in 也失败了
+      }
+      return `❌ 天气查询暂时不可用（网络或服务异常）。请使用 web_search 工具搜索"${city}天气"获取信息。`;
     }
   },
 });
