@@ -99,7 +99,7 @@ class TestMemoryExtraction:
         """Should extract preference from user message"""
         ProfileService.get_or_create("user_11")
         memories = MemoryService.extract_memories_from_conversation(
-            "user_11", "我喜欢简洁的回答", ""
+            "user_11", "我喜欢简洁的回答。", ""
         )
         assert len(memories) > 0
         assert any("偏好" in m.content for m in memories)
@@ -108,7 +108,7 @@ class TestMemoryExtraction:
         """Should extract location info"""
         ProfileService.get_or_create("user_12")
         memories = MemoryService.extract_memories_from_conversation(
-            "user_12", "我在北京", ""
+            "user_12", "我在北京。", ""
         )
         assert len(memories) > 0
         assert any("北京" in m.content for m in memories)

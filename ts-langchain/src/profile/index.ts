@@ -1,11 +1,3 @@
-"""
-User Profile + Memory + History 数据模型
-
-用户画像：用户基本信息与偏好
-长期记忆：Agent 记住的关于用户的事实
-问答记录：历史对话记录
-"""
-
 import { randomUUID } from "crypto";
 
 // ============ User Profile ============
@@ -30,7 +22,7 @@ export interface Memory {
   user_id: string;
   content: string;
   category: "preference" | "fact" | "decision" | "context";
-  importance: number; // 1-5
+  importance: number;
   created_at: string;
   updated_at: string;
 }
@@ -42,7 +34,7 @@ export function createMemory(userId: string, content: string, category: string =
     user_id: userId,
     content: content.trim(),
     category: category as Memory["category"],
-    importance: importance,
+    importance,
     created_at: now,
     updated_at: now,
   };
@@ -73,11 +65,10 @@ export function createQARecord(userId: string, conversationId: string, question:
 // ============ In-Memory Store ============
 
 class ProfileStore {
-  private profiles: Map<string, UserProfile> = new Map();
-  private memories: Map<string, Memory[]> = new Map();
-  private qaRecords: Map<string, QARecord[]> = new Map();
+  private profiles = new Map<string, UserProfile>();
+  private memories = new Map<string, Memory[]>();
+  private qaRecords = new Map<string, QARecord[]>();
 
-  // Profile
   getProfile(userId: string): UserProfile | undefined {
     return this.profiles.get(userId);
   }
@@ -94,7 +85,6 @@ class ProfileStore {
     return profile;
   }
 
-  // Memory
   addMemory(memory: Memory): Memory {
     const list = this.memories.get(memory.user_id) || [];
     list.push(memory);
@@ -118,7 +108,6 @@ class ProfileStore {
     return true;
   }
 
-  // Q&A History
   addQARecord(record: QARecord): QARecord {
     const list = this.qaRecords.get(record.user_id) || [];
     list.push(record);
@@ -126,7 +115,7 @@ class ProfileStore {
     return record;
   }
 
-  getQAHistory(userId: string, conversationId?: string, limit: number = 50): QARecord[] {
+  getQAHistory(userId: string, conversationId?: string, limit = 50): QARecord[] {
     let records = this.qaRecords.get(userId) || [];
     if (conversationId) {
       records = records.filter((r) => r.conversation_id === conversationId);
@@ -135,5 +124,4 @@ class ProfileStore {
   }
 }
 
-// 全局单例
 export const profileStore = new ProfileStore();

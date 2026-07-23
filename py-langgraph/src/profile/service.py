@@ -75,7 +75,7 @@ class MemoryService:
     @staticmethod
     def build_memory_context(user_id: str) -> str:
         """将记忆组装成 prompt 片段，供注入 System Prompt"""
-        memories = store.get_relevant(user_id)
+        memories = store.get_memories(user_id)[:10]
         if not memories:
             return ""
 

@@ -102,14 +102,14 @@ describe("MemoryService", () => {
 describe("Memory extraction rules", () => {
   const extractPreferences = (message: string) => {
     const results: string[] = [];
-    const patterns = [
-      /我喜欢(.+?)[。！\n]/,
-      /我爱(.+?)[。！\n]/,
-      /我讨厌(.+?)[。！\n]/,
-      /别(.+?)[。！\n]/,
-      /不要(.+?)[。！\n]/,
+    const patterns: Array<[RegExp, string]> = [
+      [/我喜欢(.+?)[。！\n]/g, "preference"],
+      [/我爱(.+?)[。！\n]/g, "preference"],
+      [/我讨厌(.+?)[。！\n]/g, "preference"],
+      [/别(.+?)[。！\n]/g, "preference"],
+      [/不要(.+?)[。！\n]/g, "preference"],
     ];
-    for (const pattern of patterns) {
+    for (const [pattern] of patterns) {
       const matches = message.matchAll(pattern);
       for (const match of matches) {
         results.push(match[1].trim());
@@ -120,12 +120,12 @@ describe("Memory extraction rules", () => {
 
   const extractInfo = (message: string) => {
     const results: string[] = [];
-    const patterns = [
-      /我在(.+?)[。！\n]/,
-      /我叫(.+?)[。！\n]/,
-      /我是(.+?)[。！\n]/,
+    const patterns: Array<[RegExp, string]> = [
+      [/我在(.+?)[。！\n]/g, "fact"],
+      [/我叫(.+?)[。！\n]/g, "fact"],
+      [/我是(.+?)[。！\n]/g, "fact"],
     ];
-    for (const pattern of patterns) {
+    for (const [pattern] of patterns) {
       const matches = message.matchAll(pattern);
       for (const match of matches) {
         results.push(match[1].trim());
@@ -135,19 +135,19 @@ describe("Memory extraction rules", () => {
   };
 
   it("should extract preference from '我喜欢'", () => {
-    const results = extractPreferences("我喜欢简洁的回答");
+    const results = extractPreferences("我喜欢简洁的回答。");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]).toBe("简洁的回答");
   });
 
   it("should extract location from '我在'", () => {
-    const results = extractInfo("我在北京");
+    const results = extractInfo("我在北京。");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]).toBe("北京");
   });
 
   it("should extract name from '我叫'", () => {
-    const results = extractInfo("我叫小明");
+    const results = extractInfo("我叫小明。");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]).toBe("小明");
   });

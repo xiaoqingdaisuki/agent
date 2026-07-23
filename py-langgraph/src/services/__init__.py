@@ -41,7 +41,7 @@ class BusinessError(Exception):
 
 class Conversation:
     def __init__(self, title: str, mode: str = "chat"):
-        self.id = f"conv_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        self.id = f"conv_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         self.title = title
         self.mode = mode
         self.created_at = datetime.now().isoformat()
@@ -75,7 +75,7 @@ class Message:
 
 class Document:
     def __init__(self, name: str, size: int, chunks: int = 0, category: str = None):
-        self.id = f"doc_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        self.id = f"doc_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         self.name = name
         self.size = size
         self.status = "indexed"

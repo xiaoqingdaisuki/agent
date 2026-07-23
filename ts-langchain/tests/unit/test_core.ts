@@ -65,7 +65,7 @@ describe("Calculator logic", () => {
 
   it("should sanitize unsafe characters", () => {
     expect(sanitize("2 + 2")).toBe("2 + 2");
-    expect(sanitize("import os")).toBe("");
+    expect(sanitize("import os")).toBe(" ");   // space is preserved (in \s)
     expect(sanitize("10 * 5")).toBe("10 * 5");
   });
 

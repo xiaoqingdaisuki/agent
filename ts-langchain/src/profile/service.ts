@@ -36,8 +36,8 @@ export class ProfileService {
     return profileStore.getProfile(userId);
   }
 
-  static update(userId: string, updates: Partial<UserProfile>): UserProfile | undefined {
-    return profileStore.updateProfile(userId, updates);
+  static update(userId: string, updates?: Partial<UserProfile>): UserProfile | undefined {
+    return profileStore.updateProfile(userId, updates ?? {});
   }
 }
 
@@ -82,13 +82,13 @@ export class MemoryService {
     const newMemories: Memory[] = [];
     const q = question.toLowerCase();
 
-    // 偏好提取规则
-    const preferencePatterns = [
-      [/我喜欢(.+?)[。！\n]/, "preference"],
-      [/我爱(.+?)[。！\n]/, "preference"],
-      [/我讨厌(.+?)[。！\n]/, "preference"],
-      [/别(.+?)[。！\n]/, "preference"],
-      [/不要(.+?)[。！\n]/, "preference"],
+    // 偏好提取规则（matchAll 需要 /g flag）
+    const preferencePatterns: Array<[RegExp, string]> = [
+      [/我喜欢(.+?)[。！\n]/g, "preference"],
+      [/我爱(.+?)[。！\n]/g, "preference"],
+      [/我讨厌(.+?)[。！\n]/g, "preference"],
+      [/别(.+?)[。！\n]/g, "preference"],
+      [/不要(.+?)[。！\n]/g, "preference"],
     ];
 
     for (const [pattern, category] of preferencePatterns) {
@@ -101,11 +101,11 @@ export class MemoryService {
       }
     }
 
-    // 个人信息提取规则
-    const infoPatterns = [
-      [/我在(.+?)[。！\n]/, "fact"],
-      [/我叫(.+?)[。！\n]/, "fact"],
-      [/我是(.+?)[。！\n]/, "fact"],
+    // 个人信息提取规则（matchAll 需要 /g flag）
+    const infoPatterns: Array<[RegExp, string]> = [
+      [/我在(.+?)[。！\n]/g, "fact"],
+      [/我叫(.+?)[。！\n]/g, "fact"],
+      [/我是(.+?)[。！\n]/g, "fact"],
     ];
 
     for (const [pattern, category] of infoPatterns) {

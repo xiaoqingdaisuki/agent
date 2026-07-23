@@ -59,6 +59,7 @@ class TestConversationService:
     def test_list_conversations(self):
         """Should list all conversations"""
         ConversationService.create("Conv 1")
+        import time; time.sleep(0.01)
         ConversationService.create("Conv 2")
         convs = ConversationService.list()
         assert len(convs) >= 2

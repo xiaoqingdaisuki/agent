@@ -10,7 +10,6 @@ LangGraph 的 checkpointer 机制：
 
 from typing import Optional
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 
 def get_checkpointer(checkpoint_type: str = "memory"):
@@ -21,11 +20,17 @@ def get_checkpointer(checkpoint_type: str = "memory"):
         checkpoint_type: "memory" | "postgres"
     """
     if checkpoint_type == "postgres":
-        from src.config.settings import settings
-        return AsyncPostgresSaver.from_conn_string(
-            settings.postgres_uri,
-            pipeline=False,
-        )
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            from src.config.settings import settings
+            return AsyncPostgresSaver.from_conn_string(
+                settings.postgres_uri,
+                pipeline=False,
+            )
+        except ImportError:
+            raise ImportError(
+                "Postgres checkpointer requires: pip install langgraph[postgres]"
+            )
     return MemorySaver()
 
 
