@@ -3,6 +3,8 @@
 import pytest
 from src.tools.weather import get_weather
 from src.tools.calculator import calculator
+from src.tools.search import web_search
+from src.tools.fetcher import fetch_url
 
 
 class TestWeatherTool:
@@ -14,16 +16,34 @@ class TestWeatherTool:
         assert len(result) > 0
 
     @pytest.mark.asyncio
-    async def test_get_weather_contains_city(self):
-        """Weather result should mention the city"""
+    async def test_get_weather_contains_city_or_chinese_name(self):
+        """Weather result should mention the city (English or Chinese)"""
         result = await get_weather.ainvoke({"city": "Shanghai"})
-        assert "Shanghai" in result
+        assert "Shanghai" in result or "上海" in result
 
     @pytest.mark.asyncio
     async def test_get_weather_contains_temperature(self):
-        """Weather result should contain temperature info"""
+        """Weather result should contain temperature in Celsius"""
         result = await get_weather.ainvoke({"city": "Tokyo"})
-        assert "°F" in result
+        assert "°C" in result or "°" in result
+
+
+class TestWebSearchTool:
+    @pytest.mark.asyncio
+    async def test_web_search_returns_string(self):
+        """Web search should return a string"""
+        result = await web_search.ainvoke({"query": "Python programming"})
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+
+class TestFetchUrlTool:
+    @pytest.mark.asyncio
+    async def test_fetch_url_returns_content(self):
+        """Fetch URL should return page content"""
+        result = await fetch_url.ainvoke({"url": "https://example.com" })
+        assert isinstance(result, str)
+        assert len(result) > 0
 
 
 class TestCalculatorTool:

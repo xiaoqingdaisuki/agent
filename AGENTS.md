@@ -15,6 +15,14 @@
 - Python 项目：Python 3.11+，ruff 格式化，pytest 测试
 - 两个项目的 API 接口保持一致（/chat, /stream, /tools, /health）
 
+### 编译验证规则
+
+**任何代码修改完成后，必须本地编译/检查通过才能提交：**
+
+- TS 项目：运行 `npm run build`（tsc），必须零错误
+- Python 项目：运行 `ruff check src/`，必须零错误
+- 如果编译报错，必须修改到编译通过为止，不能跳过
+
 ## 基础设施
 
 `docker-compose.yml` 提供共享基础设施：
