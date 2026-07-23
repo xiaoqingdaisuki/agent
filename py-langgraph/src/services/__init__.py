@@ -260,20 +260,46 @@ class KnowledgeService:
 
 class AgentService:
     @staticmethod
-    async def chat(conversation_id: str, content: str) -> Message:
+    async def chat(conversation_id: str, content: str, user_id: str = None) -> Message:
         try:
             from src.agents.base import build_tool_agent
+            from src.profile.service import MemoryService, ProfileService, HistoryService
 
-            agent = build_tool_agent()
+            # 构建记忆上下文
+            system_prompt = None
+            if user_id:
+                try:
+                    ProfileService.get_or_create(user_id)
+                    memory_context = MemoryService.build_memory_context(user_id)
+                    if memory_context:
+                        from src.prompts.system import TOOL_CALLING_PROMPT
+                        system_prompt = f"{memory_context}\n\n{TOOL_CALLING_PROMPT}"
+                except Exception:
+                    pass
+
+            agent = build_tool_agent(system_prompt_override=system_prompt)
             config = {"configurable": {"thread_id": conversation_id}}
+            if user_id:
+                config["configurable"]["user_id"] = user_id
 
             result = await agent.ainvoke(
-                {"messages": [{"role": "user", "content": content}]},
+                {"messages": [{"role": "user", "content": content}], "user_id": user_id},
                 config=config,
             )
 
             reply_content = result["messages"][-1].content or "抱歉，我没有理解您的问题。"
-            return Message("assistant", reply_content)
+            reply = Message("assistant", reply_content)
+
+            # 记录问答历史 + 提取新记忆
+            if user_id:
+                try:
+                    HistoryService.record(user_id, conversation_id, content, reply_content)
+                    MemoryService.extract_memories_from_conversation(user_id, content, reply_content)
+                    ProfileService.update(user_id)
+                except Exception:
+                    pass
+
+            return reply
 
         except Exception as error:
             error_msg = str(error)
@@ -296,22 +322,48 @@ class AgentService:
             )
 
     @staticmethod
-    async def chat_stream(conversation_id: str, content: str):
+    async def chat_stream(conversation_id: str, content: str, user_id: str = None):
         try:
             from src.agents.base import build_tool_agent
+            from src.profile.service import MemoryService, ProfileService, HistoryService
 
-            agent = build_tool_agent()
+            system_prompt = None
+            if user_id:
+                try:
+                    ProfileService.get_or_create(user_id)
+                    memory_context = MemoryService.build_memory_context(user_id)
+                    if memory_context:
+                        from src.prompts.system import TOOL_CALLING_PROMPT
+                        system_prompt = f"{memory_context}\n\n{TOOL_CALLING_PROMPT}"
+                except Exception:
+                    pass
+
+            agent = build_tool_agent(system_prompt_override=system_prompt)
             config = {"configurable": {"thread_id": conversation_id}}
+            if user_id:
+                config["configurable"]["user_id"] = user_id
 
+            full_answer = ""
             async for event in agent.astream_events(
-                {"messages": [{"role": "user", "content": content}]},
+                {"messages": [{"role": "user", "content": content}], "user_id": user_id},
                 config=config,
                 version="v2",
             ):
                 if event["event"] == "on_chat_model_stream":
                     chunk = event["data"]["chunk"]
                     if chunk.content:
+                        full_answer += chunk.content
                         yield chunk.content
+
+            # Record Q&A + extract memories
+            if user_id and full_answer:
+                try:
+                    HistoryService.record(user_id, conversation_id, content, full_answer)
+                    MemoryService.extract_memories_from_conversation(user_id, content, full_answer)
+                    ProfileService.update(user_id)
+                except Exception:
+                    pass
+
         except Exception as error:
             error_msg = str(error)
             if "rate limit" in error_msg.lower():

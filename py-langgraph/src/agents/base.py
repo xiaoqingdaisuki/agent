@@ -38,7 +38,18 @@ def build_chat_agent(checkpointer=None):
     llm = get_llm()
 
     def agent_node(state: AgentState):
-        response = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), *state["messages"]])
+        system_prompt = SYSTEM_PROMPT
+        user_id = state.get("user_id")
+        if user_id:
+            try:
+                from src.profile.service import MemoryService
+                memory_context = MemoryService.build_memory_context(user_id)
+                if memory_context:
+                    system_prompt = f"{memory_context}\n\n{SYSTEM_PROMPT}"
+            except ImportError:
+                pass
+
+        response = llm.invoke([SystemMessage(content=system_prompt), *state["messages"]])
         return {"messages": [response]}
 
     builder = StateGraph(AgentState)
@@ -64,7 +75,7 @@ def should_continue(state: AgentState) -> Literal["tools", END]:
     return END
 
 
-def build_tool_agent(checkpointer=None):
+def build_tool_agent(checkpointer=None, system_prompt_override=None):
     """
     工具调用 Agent — 带条件路由的 StateGraph
 
@@ -79,9 +90,21 @@ def build_tool_agent(checkpointer=None):
     from src.tools import tools
 
     llm = get_llm()
+    base_prompt = system_prompt_override or TOOL_CALLING_PROMPT
 
     def agent_node(state: AgentState):
-        response = llm.invoke([SystemMessage(content=TOOL_CALLING_PROMPT), *state["messages"]])
+        system_prompt = base_prompt
+        user_id = state.get("user_id")
+        if user_id:
+            try:
+                from src.profile.service import MemoryService
+                memory_context = MemoryService.build_memory_context(user_id)
+                if memory_context:
+                    system_prompt = f"{memory_context}\n\n{base_prompt}"
+            except ImportError:
+                pass
+
+        response = llm.invoke([SystemMessage(content=system_prompt), *state["messages"]])
         return {"messages": [response]}
 
     builder = StateGraph(AgentState)

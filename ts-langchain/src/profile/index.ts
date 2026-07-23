@@ -1,0 +1,139 @@
+"""
+User Profile + Memory + History 数据模型
+
+用户画像：用户基本信息与偏好
+长期记忆：Agent 记住的关于用户的事实
+问答记录：历史对话记录
+"""
+
+import { randomUUID } from "crypto";
+
+// ============ User Profile ============
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  preferences: Record<string, any>;
+  created_at: string;
+  last_active_at: string;
+}
+
+export function createUserProfile(id: string, name: string = ""): UserProfile {
+  const now = new Date().toISOString();
+  return { id, name, preferences: {}, created_at: now, last_active_at: now };
+}
+
+// ============ Memory ============
+
+export interface Memory {
+  id: string;
+  user_id: string;
+  content: string;
+  category: "preference" | "fact" | "decision" | "context";
+  importance: number; // 1-5
+  created_at: string;
+  updated_at: string;
+}
+
+export function createMemory(userId: string, content: string, category: string = "fact", importance: number = 3): Memory {
+  const now = new Date().toISOString();
+  return {
+    id: `mem_${Date.now()}_${randomUUID().slice(0, 8)}`,
+    user_id: userId,
+    content: content.trim(),
+    category: category as Memory["category"],
+    importance: importance,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+// ============ Q&A History ============
+
+export interface QARecord {
+  id: string;
+  user_id: string;
+  conversation_id: string;
+  question: string;
+  answer: string;
+  timestamp: string;
+}
+
+export function createQARecord(userId: string, conversationId: string, question: string, answer: string): QARecord {
+  return {
+    id: `qa_${Date.now()}_${randomUUID().slice(0, 8)}`,
+    user_id: userId,
+    conversation_id: conversationId,
+    question,
+    answer,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+// ============ In-Memory Store ============
+
+class ProfileStore {
+  private profiles: Map<string, UserProfile> = new Map();
+  private memories: Map<string, Memory[]> = new Map();
+  private qaRecords: Map<string, QARecord[]> = new Map();
+
+  // Profile
+  getProfile(userId: string): UserProfile | undefined {
+    return this.profiles.get(userId);
+  }
+
+  createProfile(profile: UserProfile): UserProfile {
+    this.profiles.set(profile.id, profile);
+    return profile;
+  }
+
+  updateProfile(userId: string, updates: Partial<UserProfile>): UserProfile | undefined {
+    const profile = this.profiles.get(userId);
+    if (!profile) return undefined;
+    Object.assign(profile, updates, { last_active_at: new Date().toISOString() });
+    return profile;
+  }
+
+  // Memory
+  addMemory(memory: Memory): Memory {
+    const list = this.memories.get(memory.user_id) || [];
+    list.push(memory);
+    this.memories.set(memory.user_id, list);
+    return memory;
+  }
+
+  getMemories(userId: string, category?: string): Memory[] {
+    let memories = this.memories.get(userId) || [];
+    if (category) {
+      memories = memories.filter((m) => m.category === category);
+    }
+    return memories.sort((a, b) => b.importance - a.importance);
+  }
+
+  deleteMemory(userId: string, memoryId: string): boolean {
+    const list = this.memories.get(userId) || [];
+    const index = list.findIndex((m) => m.id === memoryId);
+    if (index === -1) return false;
+    list.splice(index, 1);
+    return true;
+  }
+
+  // Q&A History
+  addQARecord(record: QARecord): QARecord {
+    const list = this.qaRecords.get(record.user_id) || [];
+    list.push(record);
+    this.qaRecords.set(record.user_id, list);
+    return record;
+  }
+
+  getQAHistory(userId: string, conversationId?: string, limit: number = 50): QARecord[] {
+    let records = this.qaRecords.get(userId) || [];
+    if (conversationId) {
+      records = records.filter((r) => r.conversation_id === conversationId);
+    }
+    return records.slice(-limit);
+  }
+}
+
+// 全局单例
+export const profileStore = new ProfileStore();

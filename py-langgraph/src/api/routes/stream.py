@@ -10,6 +10,7 @@ router = APIRouter()
 class StreamRequest(BaseModel):
     message: str
     thread_id: str | None = None
+    user_id: str | None = None
 
 
 @router.post("")
@@ -20,11 +21,17 @@ async def stream(request: StreamRequest):
     agent = build_tool_agent()
     thread_id = request.thread_id or "default"
     config = {"configurable": {"thread_id": thread_id}}
+    if request.user_id:
+        config["configurable"]["user_id"] = request.user_id
+
+    input_data = {"messages": [{"role": "user", "content": request.message}]}
+    if request.user_id:
+        input_data["user_id"] = request.user_id
 
     async def event_generator():
         try:
             async for event in agent.astream_events(
-                {"messages": [{"role": "user", "content": request.message}]},
+                input_data,
                 config=config,
                 version="v2",
             ):

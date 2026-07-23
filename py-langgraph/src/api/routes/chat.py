@@ -10,6 +10,7 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     message: str
     thread_id: str | None = None
+    user_id: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -24,8 +25,12 @@ async def chat(request: ChatRequest):
         thread_id = request.thread_id or "default"
         config = {"configurable": {"thread_id": thread_id}}
 
+        input_data = {"messages": [{"role": "user", "content": request.message}]}
+        if request.user_id:
+            input_data["user_id"] = request.user_id
+
         result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": request.message}]},
+            input_data,
             config=config,
         )
 

@@ -4,11 +4,11 @@ import { createChatAgent, chat } from "../../agents/chat-agent.js";
 let chatAgent: ReturnType<typeof createChatAgent> | null = null;
 
 export async function registerChatRoutes(app: FastifyInstance) {
-  app.post<{ Body: { message: string; thread_id?: string } }>(
+  app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
     "/chat",
     async (request, reply) => {
       try {
-        const { message, thread_id } = request.body;
+        const { message, thread_id, user_id } = request.body;
         if (!message) {
           return reply.status(400).send({ error: "message is required" });
         }
@@ -18,7 +18,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
         }
 
         const threadId = thread_id || crypto.randomUUID();
-        const result = await chat(chatAgent, message, threadId);
+        const result = await chat(chatAgent, message, threadId, user_id);
 
         return { reply: result.reply, thread_id: result.threadId };
       } catch (error: any) {

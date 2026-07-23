@@ -25,9 +25,25 @@ export function createChatAgent(): ChatOpenAI {
   return chatAgent;
 }
 
-export async function chat(agent: ChatOpenAI, message: string, threadId: string) {
+export async function chat(agent: ChatOpenAI, message: string, threadId: string, userId?: string) {
+  let systemPrompt = SYSTEM_PROMPT;
+
+  // 注入用户记忆
+  if (userId) {
+    try {
+      const { MemoryService, ProfileService } = await import("../profile/service.js");
+      const profile = ProfileService.getOrCreate(userId);
+      const memoryContext = MemoryService.buildMemoryContext(userId);
+      if (memoryContext) {
+        systemPrompt = `${memoryContext}\n\n${SYSTEM_PROMPT}`;
+      }
+    } catch {
+      // 记忆模块不可用时静默降级
+    }
+  }
+
   const response = await agent.invoke([
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     ...getHistory(threadId).map(toOpenAIMessage),
     { role: "user", content: message },
   ]);

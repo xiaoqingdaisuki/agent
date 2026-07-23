@@ -17,6 +17,7 @@ import {
   BusinessErrorCode,
 } from "../../../services/index.js";
 import { clearHistory } from "../../../memory/conversation.js";
+import { ProfileService, MemoryService, HistoryService } from "../../../profile/service.js";
 
 export async function registerV1Routes(app: FastifyInstance) {
   // ============ 健康检查 ============
@@ -26,7 +27,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     timestamp: new Date().toISOString(),
   }));
 
-  // ============ 会话管理 ============
+  // ============ 会话管理 ==========
 
   app.post<{
     Body: { title: string; mode?: "chat" | "knowledge" | "mixed" };
@@ -87,7 +88,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string };
-    Body: { content: string };
+    Body: { content: string; user_id?: string };
   }>("/conversations/:id/messages", async (request, reply) => {
     try {
       const { content } = request.body;
@@ -105,7 +106,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       }
 
       ConversationService.appendUserMessage(request.params.id, content);
-      const assistantMessage = await AgentService.chat(request.params.id, content);
+      const assistantMessage = await AgentService.chat(request.params.id, content, request.body.user_id);
 
       return reply.status(200).send({ message: assistantMessage });
     } catch (error: any) {
@@ -132,11 +133,10 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   );
 
-  // ============ 知识库管理 ============
+  // ============ 知识库管理 ==========
 
   app.post("/knowledge/documents", async (request, reply) => {
     try {
-      // 处理文件上传（简化版）
       const body: any = request.body;
       const file = body.file as { data?: Buffer; filename?: string } | undefined;
 
@@ -221,8 +221,133 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   });
 
-  // ============ 能力查询 ============
+  // ============ 能力查询 ==========
   app.get("/capabilities", async () => {
     return CapabilitiesService.getCapabilities();
+  });
+
+  // ============ 用户画像 + 记忆 + 历史 ==========
+
+  app.get("/profile", async (request, reply) => {
+    try {
+      const userId = (request.query as any).user_id;
+      if (!userId) {
+        return reply.status(400).send({
+          error: { code: BusinessErrorCode.INVALID_REQUEST, message: "user_id is required" },
+        });
+      }
+      const profile = ProfileService.getOrCreate(userId, (request.query as any).name);
+      return profile;
+    } catch (error: any) {
+      return reply.status(500).send({
+        error: { code: BusinessErrorCode.INTERNAL_ERROR, message: "获取用户画像失败" },
+      });
+    }
+  });
+
+  app.patch("/profile", async (request, reply) => {
+    try {
+      const { user_id } = request.query as any;
+      const body = request.body as any;
+      if (!user_id) {
+        return reply.status(400).send({
+          error: { code: BusinessErrorCode.INVALID_REQUEST, message: "user_id is required" },
+        });
+      }
+      const profile = ProfileService.update(user_id, {
+        name: body.name,
+        preferences: body.preferences,
+      });
+      if (!profile) {
+        return reply.status(404).send({
+          error: { code: BusinessErrorCode.NOT_FOUND, message: "用户画像不存在" },
+        });
+      }
+      return profile;
+    } catch (error: any) {
+      return reply.status(500).send({
+        error: { code: BusinessErrorCode.INTERNAL_ERROR, message: "更新用户画像失败" },
+      });
+    }
+  });
+
+  app.get("/memory", async (request, reply) => {
+    try {
+      const { user_id, category } = request.query as any;
+      if (!user_id) {
+        return reply.status(400).send({
+          error: { code: BusinessErrorCode.INVALID_REQUEST, message: "user_id is required" },
+        });
+      }
+      const memories = MemoryService.listAll(user_id);
+      const filtered = category ? memories.filter((m: any) => m.category === category) : memories;
+      return { memories: filtered };
+    } catch (error: any) {
+      return reply.status(500).send({
+        error: { code: BusinessErrorCode.INTERNAL_ERROR, message: "获取记忆失败" },
+      });
+    }
+  });
+
+  app.post("/memory", async (request, reply) => {
+    try {
+      const { user_id } = request.query as any;
+      const body = request.body as any;
+      if (!user_id) {
+        return reply.status(400).send({
+          error: { code: BusinessErrorCode.INVALID_REQUEST, message: "user_id is required" },
+        });
+      }
+      if (!body.content) {
+        return reply.status(400).send({
+          error: { code: BusinessErrorCode.INVALID_REQUEST, message: "content is required" },
+        });
+      }
+      const memory = MemoryService.add(user_id, body.content, body.category || "fact", body.importance || 3);
+      return reply.status(201).send(memory);
+    } catch (error: any) {
+      return reply.status(500).send({
+        error: { code: BusinessErrorCode.INTERNAL_ERROR, message: "添加记忆失败" },
+      });
+    }
+  });
+
+  app.delete("/memory", async (request, reply) => {
+    try {
+      const { user_id, memory_id } = request.query as any;
+      if (!user_id || !memory_id) {
+        return reply.status(400).send({
+          error: { code: BusinessErrorCode.INVALID_REQUEST, message: "user_id and memory_id are required" },
+        });
+      }
+      const deleted = MemoryService.delete(user_id, memory_id);
+      if (!deleted) {
+        return reply.status(404).send({
+          error: { code: BusinessErrorCode.NOT_FOUND, message: "记忆不存在" },
+        });
+      }
+      return { success: true };
+    } catch (error: any) {
+      return reply.status(500).send({
+        error: { code: BusinessErrorCode.INTERNAL_ERROR, message: "删除记忆失败" },
+      });
+    }
+  });
+
+  app.get("/history", async (request, reply) => {
+    try {
+      const { user_id, conversation_id, limit } = request.query as any;
+      if (!user_id) {
+        return reply.status(400).send({
+          error: { code: BusinessErrorCode.INVALID_REQUEST, message: "user_id is required" },
+        });
+      }
+      const records = HistoryService.getHistory(user_id, conversation_id, limit ? Number(limit) : 50);
+      return { history: records };
+    } catch (error: any) {
+      return reply.status(500).send({
+        error: { code: BusinessErrorCode.INTERNAL_ERROR, message: "获取历史记录失败" },
+      });
+    }
   });
 }

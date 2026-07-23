@@ -9,4 +9,6 @@ export default defineConfig({
       reporter: ["text", "json"],
     },
   },
+  // Use tsconfig.tests.json for type checking (includes tests/ + src/)
+  tsconfig: "./tsconfig.tests.json",
 });

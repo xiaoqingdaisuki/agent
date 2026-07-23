@@ -14,6 +14,8 @@ import { getHistory, clearHistory } from "../memory/conversation.js";
 import { RAGAgent } from "../rag/rag-agent.js";
 import { DocumentLoader } from "../rag/loader.js";
 import { TextSplitter } from "../rag/splitter.js";
+import { MemoryService, ProfileService, HistoryService } from "../profile/service.js";
+import { TOOL_CALLING_PROMPT } from "../prompts/system.js";
 
 // ============ 类型定义 ============
 
@@ -160,13 +162,30 @@ export class AgentService {
     return this.toolAgent;
   }
 
-  static async chat(conversationId: string, content: string): Promise<Message> {
+  static async chat(conversationId: string, content: string, userId?: string): Promise<Message> {
     try {
       const history = getHistory(conversationId);
-      const input = { input: content, chat_history: history };
+      let systemPrompt = TOOL_CALLING_PROMPT;
 
-      const agent = await this.getToolAgent();
-      const result = await (agent as any).invoke(input);
+      // 注入用户记忆
+      if (userId) {
+        try {
+          const profile = ProfileService.getOrCreate(userId);
+          const memoryContext = MemoryService.buildMemoryContext(userId);
+          if (memoryContext) {
+            systemPrompt = `${memoryContext}\n\n${TOOL_CALLING_PROMPT}`;
+          }
+        } catch {
+          // 记忆模块不可用时静默降级
+        }
+      }
+
+      // 每次请求重建 agent 以注入动态 system prompt
+      const agent = await createToolAgent(systemPrompt);
+      const result = await (agent as any).invoke({
+        input: content,
+        chat_history: history,
+      });
 
       const reply: Message = {
         id: crypto.randomUUID(),
@@ -174,6 +193,17 @@ export class AgentService {
         content: (result.output as string) || "抱歉，我没有理解您的问题。",
         createdAt: new Date().toISOString(),
       };
+
+      // 记录问答历史 + 提取新记忆
+      if (userId) {
+        try {
+          HistoryService.record(userId, conversationId, content, reply.content);
+          MemoryService.extractMemoriesFromConversation(userId, content, reply.content);
+          ProfileService.update(userId);
+        } catch {
+          // 记忆记录失败不影响主流程
+        }
+      }
 
       return reply;
     } catch (error: any) {
@@ -201,16 +231,43 @@ export class AgentService {
 
   static async *chatStream(
     conversationId: string,
-    content: string
+    content: string,
+    userId?: string
   ): AsyncGenerator<string, void, unknown> {
     try {
-      const agent = await this.getToolAgent();
-      const input = { input: content, chat_history: [] };
-      const stream = await (agent as any).stream(input, { tags: ["stream"] });
+      let systemPrompt = TOOL_CALLING_PROMPT;
 
+      if (userId) {
+        try {
+          const profile = ProfileService.getOrCreate(userId);
+          const memoryContext = MemoryService.buildMemoryContext(userId);
+          if (memoryContext) {
+            systemPrompt = `${memoryContext}\n\n${TOOL_CALLING_PROMPT}`;
+          }
+        } catch {
+          // memory module unavailable
+        }
+      }
+
+      const agent = await createToolAgent(systemPrompt);
+      const stream = await (agent as any).stream({ input: content, chat_history: [] }, { tags: ["stream"] });
+
+      let fullAnswer = "";
       for await (const chunk of stream) {
         if (chunk?.output) {
+          fullAnswer += chunk.output;
           yield chunk.output;
+        }
+      }
+
+      // Record Q&A + extract memories
+      if (userId && fullAnswer) {
+        try {
+          HistoryService.record(userId, conversationId, content, fullAnswer);
+          MemoryService.extractMemoriesFromConversation(userId, content, fullAnswer);
+          ProfileService.update(userId);
+        } catch {
+          // silent
         }
       }
     } catch (error: any) {
