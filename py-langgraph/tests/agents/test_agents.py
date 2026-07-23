@@ -1,0 +1,58 @@
+"""Tests for agent builder"""
+
+import pytest
+from unittest.mock import patch, MagicMock
+
+
+class TestBuildChatAgent:
+    @pytest.mark.asyncio
+    async def test_returns_compiled_graph(self):
+        """build_chat_agent should return a compiled LangGraph agent"""
+        with patch("src.agents.base.ChatOpenAI") as MockLLM:
+            mock_llm = MagicMock()
+            mock_llm.invoke.return_value = MagicMock(content="Hello!")
+            MockLLM.return_value = mock_llm
+
+            from src.agents.base import build_chat_agent
+            agent = build_chat_agent()
+
+            assert agent is not None
+            # Should be able to invoke with messages
+            result = await agent.ainvoke(
+                {"messages": [{"role": "user", "content": "Hi"}]},
+                config={"configurable": {"thread_id": "test"}},
+            )
+            assert "messages" in result
+
+
+class TestBuildToolAgent:
+    @pytest.mark.asyncio
+    async def test_returns_compiled_graph(self):
+        """build_tool_agent should return a compiled LangGraph agent"""
+        with patch("src.agents.base.ChatOpenAI") as MockLLM:
+            mock_llm = MagicMock()
+            mock_llm.invoke.return_value = MagicMock(content="Hello!", tool_calls=[])
+            MockLLM.return_value = mock_llm
+
+            from src.agents.base import build_tool_agent
+            agent = build_tool_agent()
+
+            assert agent is not None
+
+
+class TestMemoryModule:
+    def test_get_default_checkpointer(self):
+        """Should return a MemorySaver instance"""
+        from src.memory import get_default_checkpointer
+        from langgraph.checkpoint.memory import MemorySaver
+
+        saver = get_default_checkpointer()
+        assert isinstance(saver, MemorySaver)
+
+    def test_get_default_checkpointer_is_singleton(self):
+        """Should return the same instance on repeated calls"""
+        from src.memory import get_default_checkpointer
+
+        saver1 = get_default_checkpointer()
+        saver2 = get_default_checkpointer()
+        assert saver1 is saver2
