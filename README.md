@@ -10,8 +10,8 @@
 | 控制流 | 隐式（框架内部处理循环） | 显式（自己定义每个节点和边） |
 | 条件路由 | middleware 层面 | `add_conditional_edges()` 一等公民 |
 | 状态管理 | 隐式消息列表 | 显式 TypedDict State |
-| 持久化 | 无内置 | `checkpointer` 内置（对话可暂停/恢复） |
-| 人机协同 | 需自行实现 | `interrupt_before` 原生支持 |
+| 持久化 | 无 checkpoint（会话记忆存内存 Map） | `checkpointer` 内置（PostgresSaver，对话可暂停/恢复） |
+| 人机协同 | 需自行实现 | `interrupt_before` 原生支持（工具调用前可插入人工确认） |
 | 多 Agent | 需自行编排 | supervisor + `Command` 路由 |
 
 ## 项目结构
@@ -21,9 +21,8 @@ agent/
 ├── ts-langchain/           # TS 版：纯 LangChain 声明式配置
 │   ├── src/
 │   │   ├── agents/
-│   │   │   ├── chat-agent.ts       # 纯对话 Agent
-│   │   │   ├── tool-agent.ts       # 工具调用 Agent
-│   │   │   └── rag-agent.ts        # RAG Agent（检索器包装成 tool）
+│   │   │   ├── chat-agent.ts       # 对话 Agent（ChatOpenAI 封装）
+│   │   │   └── tool-agent.ts       # 工具调用 Agent
 │   │   ├── rag/
 │   │   │   ├── loader.ts           # 文档加载（TXT, MD）
 │   │   │   ├── splitter.ts         # 文本切分（递归字符切分）
@@ -33,27 +32,35 @@ agent/
 │   │   │   └── rag-agent.ts        # RAG Agent
 │   │   ├── services/
 │   │   │   └── index.ts            # Service Layer（业务编排）
-│   │   ├── adapters/
-│   │   │   ├── types.ts            # NormalizedMessage 统一消息格式
-│   │   │   ├── qq.ts               # QQ 适配器（OneBot v11 HTTP）
-│   │   │   ├── bot.ts              # Bot Service（指令 + Agent）
-│   │   │   └── commands/
-│   │   │       ├── registry.ts     # 指令注册中心
-│   │   │       ├── help.ts         # /help
-│   │   │       ├── status.ts       # /status
-│   │   │       └── clear.ts        # /clear
+│   │   ├── tools/
+│   │   │   ├── registry.ts         # 工具注册中心
+│   │   │   ├── contracts.ts        # ToolDescriptor / ToolCategory 定义
+│   │   │   ├── runtime/
+│   │   │   │   ├── index.ts        # 运行时导出
+│   │   │   │   └── executor.ts     # ToolExecutor 安全执行器
+│   │   │   ├── weather.ts          # 天气查询
+│   │   │   ├── web-search.ts       # 联网搜索
+│   │   │   ├── web-read.ts         # 网页读取
+│   │   │   ├── file-read.ts        # 文件读取
+│   │   │   ├── calculator.ts       # 安全计算
+│   │   │   ├── knowledge.ts        # 知识库检索
+│   │   │   ├── memory-session.ts   # 会话记忆检索
+│   │   │   ├── memory-user.ts      # 用户长期记忆（读写）
+│   │   │   └── observability.ts    # 可观测性（审计日志）
 │   │   ├── api/
 │   │   │   ├── routes/
 │   │   │   │   ├── v1/             # External API（前端 UI 使用）
 │   │   │   │   │   └── index.ts
-│   │   │   │   ├── internal/       # Internal API（QQ Bot 使用）
-│   │   │   │   │   └── index.ts
 │   │   │   │   ├── chat.ts
 │   │   │   │   ├── stream.ts
-│   │   │   │   └── tools.ts
+│   │   │   │   ├── tools.ts
+│   │   │   │   └── images.ts       # 图片生成
 │   │   │   ├── middleware/
 │   │   │   │   └── error.ts        # 统一错误处理
 │   │   │   └── index.ts            # Fastify 应用入口
+│   │   ├── profile/
+│   │   │   ├── index.ts            # UserProfile / Memory / QARecord 模型
+│   │   │   └── service.ts          # ProfileService（画像 + 记忆 + 问答历史）
 │   │   ├── prompts/
 │   │   │   └── system.ts           # Prompt 模板
 │   │   ├── memory/
@@ -67,7 +74,7 @@ agent/
 ├── py-langgraph/           # Python 版：LangGraph 显式图编排
 │   ├── src/
 │   │   ├── agents/
-│   │   │   ├── base.py            # 通用图构建基类
+│   │   │   ├── base.py            # 通用图构建基类（AgentState, get_llm）
 │   │   │   ├── chat_agent.py      # 对话 Agent（StateGraph: node=model）
 │   │   │   ├── tool_agent.py      # 工具调用 Agent（StateGraph + ToolNode + 条件边）
 │   │   │   └── rag_agent.py       # RAG Agent（StateGraph: retrieve → grade → generate）
@@ -77,37 +84,51 @@ agent/
 │   │   │   ├── embedder.py        # 向量化（OpenAI Embedding）
 │   │   │   ├── vector_store.py    # Qdrant 向量存储
 │   │   │   ├── retriever.py       # 检索器
-│   │   │   └── rag_agent.py       # RAG Agent
+│   │   │   └── rag_agent.py       # RAG Agent（LangGraph 图）
 │   │   ├── services/
 │   │   │   └── __init__.py        # Service Layer（业务编排）
-│   │   ├── adapters/
-│   │   │   ├── types.py           # NormalizedMessage 统一消息格式
-│   │   │   ├── qq.py              # QQ 适配器（OneBot v11 HTTP）
-│   │   │   ├── bot.py             # Bot Service（指令 + Agent）
-│   │   │   ├── registry.py        # 指令注册中心
-│   │   │   └── commands/
-│   │   │       ├── help.py        # /help
-│   │   │       ├── status.py      # /status
-│   │   │       └── clear.py       # /clear
+│   │   ├── tools/
+│   │   │   ├── registry.py        # 工具注册中心（ToolRegistry + 权限裁剪）
+│   │   │   ├── contracts.py       # ToolDescriptor / ToolCategory / ToolRisk 定义
+│   │   │   ├── weather.py         # 天气查询
+│   │   │   ├── search.py          # 联网搜索
+│   │   │   ├── fetcher.py         # 网页读取
+│   │   │   ├── file_reader.py     # 文件读取
+│   │   │   ├── calculator.py      # 安全计算
+│   │   │   ├── knowledge.py       # 知识库检索
+│   │   │   ├── memory_session.py  # 会话记忆检索
+│   │   │   ├── memory_user.py     # 用户长期记忆（读写）
+│   │   │   ├── observability.py   # 可观测性（审计日志）
+│   │   │   └── runtime/
+│   │   │       ├── __init__.py    # 运行时导出
+│   │   │       └── executor.py    # ToolExecutor 安全执行器
+│   │   ├── profile/
+│   │   │   ├── models.py          # UserProfile / Memory / QARecord / ProfileStore
+│   │   │   └── service.py         # ProfileService（画像 + 记忆 + 问答历史）
 │   │   ├── api/
 │   │   │   ├── routes/
 │   │   │   │   ├── v1/            # External API（前端 UI 使用）
 │   │   │   │   │   └── __init__.py
-│   │   │   │   ├── internal/      # Internal API（QQ Bot 使用）
-│   │   │   │   │   └── __init__.py
 │   │   │   │   ├── chat.py
 │   │   │   │   ├── stream.py
-│   │   │   │   └── tools.py
+│   │   │   │   ├── tools.py
+│   │   │   │   └── images.py      # 图片生成
 │   │   │   └── main.py            # FastAPI 应用入口
 │   │   ├── prompts/
 │   │   │   └── system.py          # Prompt 模板
 │   │   ├── memory/
-│   │   │   └── checkpoint.py      # Checkpoint 存储（PostgresSaver）
+│   │   │   └── __init__.py        # 记忆模块（LangGraph Checkpoint 由图层管理）
 │   │   └── config/
 │   │       └── settings.py        # 环境变量配置（Pydantic Settings）
 │   ├── pyproject.toml
 │   ├── requirements.txt
 │   └── .env.example
+│
+├── contracts/
+│   └── tools/
+│       ├── context.schema.json    # 工具上下文 Schema
+│       ├── error.schema.json      # 工具错误 Schema
+│       └── manifest.schema.json   # 工具清单 Schema
 │
 ├── docker-compose.yml      # 共享基础设施（Postgres + Qdrant）
 └── README.md
@@ -167,13 +188,24 @@ GET  /api/v1/knowledge/documents/:id   文档详情
 DELETE /api/v1/knowledge/documents/:id 删除文档
 POST /api/v1/knowledge/documents/:id/reindex 重新索引
 POST /api/v1/knowledge/search          知识检索
+
+GET  /api/v1/profile?user_id=xxx       用户画像
+PATCH /api/v1/profile                  更新画像
+
+GET  /api/v1/memory?user_id=xxx        记忆列表
+POST /api/v1/memory                    添加记忆
+DELETE /api/v1/memory                  删除记忆
+
+GET  /api/v1/history?user_id=xxx       问答历史
 ```
 
-两个版本 Internal API（QQ Bot 使用）一致：
+旧路由（保留兼容）：
 
 ```
-POST /api/internal/agent/chat           直接对话
-POST /api/internal/agent/chat/stream    流式对话
+POST /chat                              直接对话
+POST /stream                            流式对话
+GET  /tools                             可用工具列表
+POST /images/generations                图片生成
 ```
 
 ## 开发工作流
@@ -199,6 +231,7 @@ POST /api/internal/agent/chat/stream    流式对话
 - **运行时**：Python 3.11+
 - **Agent 框架**：LangGraph (`StateGraph` + `ToolNode`)
 - **工具定义**：Pydantic
-- **Checkpoint**：PostgresSaver / SqliteSaver
+- **Checkpoint**：LangGraph 内置（PostgresSaver / SqliteSaver）
 - **API 框架**：FastAPI
+- **测试**：pytest + pytest-asyncio
 - **追踪**：LangSmith
