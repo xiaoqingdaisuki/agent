@@ -17,6 +17,10 @@ from src.tools.weather import get_weather, _DESCRIPTOR as WEATHER_DESCRIPTOR
 from src.tools.search import web_search, _DESCRIPTOR as SEARCH_DESCRIPTOR
 from src.tools.fetcher import web_read, _DESCRIPTOR as READ_DESCRIPTOR
 from src.tools.calculator import calculator, DESCRIPTOR as CALC_DESCRIPTOR
+from src.tools.knowledge import knowledge_search, _DESCRIPTOR as KNOWLEDGE_DESCRIPTOR
+from src.tools.file_reader import file_read, _DESCRIPTOR as FILE_READ_DESCRIPTOR
+from src.tools.memory_session import memory_session_search, _SESSION_DESCRIPTOR as SESSION_DESCRIPTOR
+from src.tools.memory_user import memory_user_search, memory_user_save, _USER_SEARCH_DESCRIPTOR, _USER_SAVE_DESCRIPTOR
 
 
 # ============ 工具注册表 ============
@@ -35,7 +39,12 @@ class ToolRegistry:
             (get_weather, WEATHER_DESCRIPTOR),
             (web_search, SEARCH_DESCRIPTOR),
             (web_read, READ_DESCRIPTOR),
+            (file_read, FILE_READ_DESCRIPTOR),
             (calculator, CALC_DESCRIPTOR),
+            (knowledge_search, KNOWLEDGE_DESCRIPTOR),
+            (memory_session_search, SESSION_DESCRIPTOR),
+            (memory_user_search, _USER_SEARCH_DESCRIPTOR),
+            (memory_user_save, _USER_SAVE_DESCRIPTOR),
         ]
 
         for tool_fn, descriptor in default_tools:

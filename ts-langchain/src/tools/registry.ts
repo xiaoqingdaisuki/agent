@@ -12,6 +12,10 @@ import { weatherTool, weatherDescriptor } from "./weather.js";
 import { webSearchTool, webSearchDescriptor } from "./web-search.js";
 import { webReadTool, webReadDescriptor } from "./web-read.js";
 import { calculatorTool, calculatorDescriptor } from "./calculator.js";
+import { knowledgeSearchTool, knowledgeSearchDescriptor } from "./knowledge.js";
+import { fileReadTool, fileReadDescriptor } from "./file-read.js";
+import { memorySessionSearchTool, sessionMemoryDescriptor } from "./memory-session.js";
+import { memoryUserSearchTool, memoryUserSaveTool, userMemorySearchDescriptor, userMemorySaveDescriptor } from "./memory-user.js";
 import type { DynamicStructuredTool } from "langchain/tools";
 
 // ============ 工具注册表 ============
@@ -33,6 +37,11 @@ class ToolRegistry {
     this.register(webSearchTool, webSearchDescriptor);
     this.register(webReadTool, webReadDescriptor);
     this.register(calculatorTool, calculatorDescriptor);
+    this.register(knowledgeSearchTool, knowledgeSearchDescriptor);
+    this.register(fileReadTool, fileReadDescriptor);
+    this.register(memorySessionSearchTool, sessionMemoryDescriptor);
+    this.register(memoryUserSearchTool, userMemorySearchDescriptor);
+    this.register(memoryUserSaveTool, userMemorySaveDescriptor);
   }
 
   register(tool: DynamicStructuredTool, descriptor: ToolDescriptor): void {

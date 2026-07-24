@@ -47,8 +47,8 @@ class TestToolsEndpoint:
         data = response.json()
         assert isinstance(data, list)
         tool_names = [t["name"] for t in data]
-        assert "get_weather" in tool_names
-        assert "calculator" in tool_names
+        assert "weather.current" in tool_names
+        assert "math.calculate" in tool_names
 
 
 class TestCapabilitiesEndpoint:

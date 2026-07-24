@@ -10,9 +10,11 @@
  *   4. 执行工具（带超时）
  *   5. 结果脱敏（result_sanitize）
  *   6. 审计记录（audit_record）
+ *   7. 指标记录（metrics）
  */
 
 import type { ToolDescriptor, ToolCallContext, ToolRuntimeResult, ToolResultEnvelope } from "../contracts.js";
+import { recordToolMetric } from "../observability.js";
 
 // ============ 审计记录 ============
 
@@ -207,6 +209,18 @@ export function recordAudit(entry: Omit<AuditEntry, "timestamp">): void {
   if (auditLog.length > 1000) {
     auditLog.splice(0, auditLog.length - 1000);
   }
+
+  // 同步记录可观测性指标
+  recordToolMetric({
+    tool_name: entry.tool_name,
+    tool_version: entry.tool_version,
+    ok: entry.ok,
+    error_code: entry.error_code,
+    duration_ms: entry.duration_ms,
+    risk_level: entry.risk_level,
+    user_id: entry.user_id,
+    tenant_id: entry.tenant_id,
+  });
 }
 
 // ============ 辅助函数 ============

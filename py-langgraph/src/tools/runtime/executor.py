@@ -28,6 +28,7 @@ from src.tools.contracts import (
     ToolResultMeta,
     ToolRuntimeResult,
 )
+from src.tools.observability import record_tool_metric
 
 TInput = TypeVar("TInput")
 TOutput = TypeVar("TOutput")
@@ -328,3 +329,14 @@ def _record_audit(
         "request_id": request_id,
         "trace_id": trace_id,
     })
+    # 同步记录可观测性指标
+    record_tool_metric(
+        tool_name=tool_name,
+        tool_version=tool_version,
+        ok=ok,
+        error_code=error_code,
+        duration_ms=duration_ms,
+        risk_level=risk_level,
+        user_id=context.user_id,
+        tenant_id=context.tenant_id,
+    )
