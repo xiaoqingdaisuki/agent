@@ -151,7 +151,7 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
       } catch {
         // wttr.in 也失败了
       }
-      return `❌ 天气查询暂时不可用（网络或服务异常）。请使用 web_search 工具搜索"${city}天气"获取信息。`;
+      return `🌤 天气查询暂时不可用（网络或服务异常）。你可以直接告诉用户当前无法查询天气，并建议稍后重试。`;
     }
   },
 });

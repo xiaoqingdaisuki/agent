@@ -27,7 +27,7 @@ interface SearchResultItem {
 
 function searchResultsToText(results: SearchResultItem[], query: string): string {
   if (results.length === 0) {
-    return `❌ 未找到关于"${query}"的相关结果。`;
+    return `联网搜索未返回结果。你可以基于你的知识直接回答用户关于"${query}"的问题，同时说明这是基于训练数据而非实时搜索。`;
   }
 
   const lines: string[] = [`🔍 搜索结果（${query}） — 共 ${results.length} 条：\n`];
@@ -246,7 +246,7 @@ export const webSearchDescriptor: ToolDescriptor = {
   version: "1.0.0",
   title: "互联网搜索",
   description:
-    "【强制联网搜索】在互联网上搜索最新信息并返回事实核查结果。当用户问及任何可能需要事实核查的内容时必须使用：历史事件、时事新闻、政策法规、具体数据、人物动态、公司信息、体育赛事、学术研究、百科知识等。模型训练数据有截止日期，只有联网搜索能保证信息时效性。",
+    "在互联网上搜索最新信息并返回事实核查结果。当用户问及可能需要事实核查的内容时使用：历史事件、时事新闻、政策法规、具体数据、人物动态、公司信息、体育赛事、学术研究、百科知识等。",
   category: "SEARCH",
   risk_level: "R1",
   side_effect: "read",
@@ -272,7 +272,7 @@ export const webSearchDescriptor: ToolDescriptor = {
 export const webSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "web.search",
   description:
-    "【强制联网搜索】在互联网上搜索最新信息并返回事实核查结果。当用户问及任何可能需要事实核查的内容时都必须调用此工具：历史事件、时事新闻、政策法规、具体数据/统计、人物动态、公司/产品信息、体育赛事比分、学术研究、百科知识、节日纪念日、地理位置、语言翻译、影视书籍评价等。模型训练数据有截止日期且可能不准确，只有联网搜索能保证信息时效性和准确性。不要凭训练记忆回答任何事实性问题。",
+    "在互联网上搜索最新信息并返回结果。当用户问及可能需要事实核查的内容时使用：历史事件、时事新闻、政策法规、具体数据、人物动态、公司/产品信息、体育赛事、学术研究、百科知识等。如果搜索结果不理想，可以基于你的知识直接回答。",
   schema: z.object({
     query: z.string().describe("搜索关键词，尽量简洁明确，如'深圳8月28日活动'"),
   }),

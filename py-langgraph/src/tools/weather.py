@@ -147,4 +147,4 @@ def get_weather(city: str, days: int = 7) -> str:
     except Exception:
         pass
 
-    return f"❌ 天气查询暂时不可用（网络或服务异常）。请使用 web_search 工具搜索\"{city}天气\"获取信息。"
+    return "🌤 天气查询暂时不可用（网络或服务异常）。你可以直接告诉用户当前无法查询天气，并建议稍后重试。"

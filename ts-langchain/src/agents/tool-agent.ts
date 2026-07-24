@@ -39,13 +39,18 @@ function convertXmlToolCalls(message: BaseMessage): BaseMessage {
       args[pn] = pt.substring(ves, vee).trim();
       pp = vee + P_C.length;
     }
-    toolCalls.push({ name: fn, args, id: "call_" + fn + "_001" });
+    toolCalls.push({
+      id: "call_" + fn + "_001",
+      type: "function",
+      function: { name: fn, arguments: JSON.stringify(args) },
+    });
     pos = fe + F_C.length;
   }
   if (toolCalls.length === 0) return message;
   let clean = content;
   for (const tc of toolCalls) {
-    const sm = F_O + tc.name + ">";
+    const fnName = (tc as any).function?.name ?? tc.name;
+    const sm = F_O + fnName + ">";
     const em = F_C;
     const si = clean.indexOf(sm);
     if (si !== -1) {
@@ -124,6 +129,6 @@ async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecu
     tools: tools as any,
     verbose: false,
     handleParsingErrors: true,
-    maxIterations: 2,
+    maxIterations: 3,  // 3 轮 = 1 次工具调用 + 最终回答，或 2 次工具调用 + 最终回答
   });
 }

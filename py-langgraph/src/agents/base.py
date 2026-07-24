@@ -96,7 +96,7 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
     for func_match in re.finditer(tag_open + "(.*?)" + tag_close, content, re.DOTALL):
         func_name = func_match.group(1)
         params_text = func_match.group(2)
-        args = {}
+        args: dict[str, str] = {}
         for param_match in re.finditer(param_open + "(.*?)" + param_close, params_text, re.DOTALL):
             args[param_match.group(1)] = param_match.group(2).strip()
         tool_calls.append({
@@ -176,6 +176,10 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
         # 工具调用计数：如果模型返回了 tool_calls，递增计数器
         current_count = state.get("tool_call_count", 0)
         if hasattr(response, "tool_calls") and response.tool_calls:
+            current_count += 1
+            tool_names = [tc.get("function", {}).get("name", tc.get("name", "?")) for tc in response.tool_calls]
+            import logging
+            logging.getLogger("agent").info(f"[tool_call #{current_count}] tools: {tool_names} | content: {(response.content or '')[:80]}")
             current_count += 1
 
         return {"messages": [response], "tool_call_count": current_count}

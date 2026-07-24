@@ -48,7 +48,7 @@ class SearchResultItem:
 def search_results_to_text(results: list[SearchResultItem], query: str) -> str:
     """将结构化结果转换为展示文本"""
     if not results:
-        return f"❌ 未找到关于\"{query}\"的相关结果。"
+        return f'联网搜索未返回结果。你可以基于你的知识直接回答用户关于"{query}"的问题，同时说明这是基于训练数据而非实时搜索。'
 
     lines = [f"🔍 搜索结果（{query}） — 共 {len(results)} 条：\n"]
     for i, r in enumerate(results, 1):
@@ -236,7 +236,7 @@ _DESCRIPTOR = ToolDescriptor(
     name="web.search",
     version="1.0.0",
     title="互联网搜索",
-    description="【强制联网搜索】在互联网上搜索最新信息。当用户问及任何可能需要事实核查的内容时必须使用：历史事件、时事新闻、政策法规、具体数据、人物动态、公司信息、体育赛事、学术研究、百科知识等。模型训练数据有截止日期，只有联网搜索能保证信息时效性。",
+    description="在互联网上搜索最新信息。当用户问及可能需要事实核查的内容时使用：历史事件、时事新闻、政策法规、具体数据、人物动态、公司信息、体育赛事、学术研究、百科知识等。如果搜索结果不理想，可以基于你的知识直接回答。",
     category="SEARCH",
     risk_level="R1",
     side_effect="read",
@@ -256,6 +256,6 @@ class SearchInput(BaseModel):
 
 @tool(args_schema=SearchInput)
 def web_search(query: str) -> str:
-    """【强制联网搜索】在互联网上搜索最新信息并返回事实核查结果。"""
+    """在互联网上搜索最新信息并返回结果。如果搜索结果不理想，可以基于已有知识回答。"""
     results = multi_source_search(query)
     return search_results_to_text(results, query)
