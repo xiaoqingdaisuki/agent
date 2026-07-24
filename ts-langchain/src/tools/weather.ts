@@ -1,5 +1,5 @@
 /**
- * get_weather — 查询指定城市的实时天气信息
+ * get_weather — 查询指定城市的实时天气 + 未来 N 天预报
  */
 
 import { DynamicStructuredTool } from "langchain/tools";
@@ -27,7 +27,7 @@ export const weatherDescriptor: ToolDescriptor = {
   version: "1.0.0",
   title: "天气查询",
   description:
-    "查询指定城市的实时天气信息（温度、天气状况、风速等）。当用户问天气、气温、下雨、下雪、冷不冷、热不热时使用。优先通过 Open-Meteo 获取，如果失败再用 web.search 搜索。",
+    "查询指定城市的实时天气及未来 7 天天气预报（温度、天气状况、风速等）。当用户问天气、气温、下雨、下雪、冷不冷、热不热、未来几天天气时使用。优先通过 Open-Meteo 获取，如果失败再用 web.search 搜索。",
   category: "READ",
   risk_level: "R1",
   side_effect: "read",
@@ -41,7 +41,11 @@ export const weatherDescriptor: ToolDescriptor = {
     properties: {
       city: {
         type: "string",
-        description: "城市名称，支持中文如 '北京' '上海'，也支持英文如 'Beijing'",
+        description: "城市名称，支持中文如 '北京' '上海' '深圳'，也支持英文如 'Beijing' 'Shanghai'",
+      },
+      days: {
+        type: "integer",
+        description: "预报天数，默认 7 天，范围 1-7",
       },
     },
     required: ["city"],
@@ -53,11 +57,12 @@ export const weatherDescriptor: ToolDescriptor = {
 export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "get_weather",
   description:
-    "【天气查询工具】查询指定城市的实时天气。用户问天气、气温、下雨、下雪、冷不冷、热不热时，必须先调用此工具。优先通过 Open-Meteo 获取，如果失败再用 web_search 搜索。",
+    "【天气查询工具】查询指定城市的实时天气及未来 7 天天气预报。用户问天气、气温、下雨、下雪、冷不冷、热不热、未来几天天气时，必须先调用此工具。优先通过 Open-Meteo 获取，如果失败再用 web.search 搜索。",
   schema: z.object({
     city: z.string().describe("城市名称，支持中文如 '北京' '上海' '深圳'，也支持英文如 'Beijing' 'Shanghai'"),
+    days: z.number().int().min(1).max(7).default(7).describe("预报天数，默认 7 天"),
   }),
-  func: async ({ city }) => {
+  func: async ({ city, days = 7 }) => {
     // 尝试 Open-Meteo
     try {
       const geoRes = await fetch(
@@ -68,15 +73,45 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
       if (!geoData.results?.length) throw new Error(`找不到城市: ${city}`);
 
       const { latitude, longitude, name, country } = geoData.results[0];
+
       const weatherRes = await fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true&timezone=auto`
+        `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=auto&forecast_days=${days}`
       );
       if (!weatherRes.ok) throw new Error(`Weather HTTP ${weatherRes.status}`);
-      const weatherData = (await weatherRes.json()) as { current_weather: { temperature: number; weathercode: number; windspeed: number } };
+      const weatherData = (await weatherRes.json()) as {
+        current_weather: { temperature: number; weathercode: number; windspeed: number };
+        daily?: {
+          time: string[];
+          temperature_2m_max: number[];
+          temperature_2m_min: number[];
+          weathercode: number[];
+        };
+      };
 
       const c = weatherData.current_weather;
       const desc = WEATHER_CODES[c.weathercode] || "未知";
-      return `🌤 ${name}（${country ?? ""}）当前天气：\n🌡 温度：${c.temperature}°C\n🌦 天气：${desc}\n💨 风速：${c.windspeed} km/h`;
+      const lines: string[] = [
+        `🌤 ${name}（${country ?? ""}）当前天气：`,
+        `🌡 温度：${c.temperature}°C`,
+        `🌦 天气：${desc}`,
+        `💨 风速：${c.windspeed} km/h`,
+      ];
+
+      if (weatherData.daily?.time?.length) {
+        lines.push("");
+        lines.push(`📅 未来 ${weatherData.daily.time.length} 天预报：`);
+        for (let i = 0; i < weatherData.daily.time.length; i++) {
+          const date = weatherData.daily.time[i];
+          const maxT = weatherData.daily.temperature_2m_max[i];
+          const minT = weatherData.daily.temperature_2m_min[i];
+          const wcode = weatherData.daily.weathercode[i];
+          const wdesc = WEATHER_CODES[wcode] || "未知";
+          const dayLabel = i === 0 ? "今天" : i === 1 ? "明天" : `周${"日一二三四五六"[new Date(date).getDay()]}`;
+          lines.push(`  ${dayLabel}(${date.slice(5)}) ${wdesc} ${minT}°C ~ ${maxT}°C`);
+        }
+      }
+
+      return lines.join("\n");
     } catch {
       // Open-Meteo 失败，尝试 wttr.in 备用
       try {
@@ -88,12 +123,30 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
           const wData = (await wttrRes.json()) as {
             current_condition: Array<{ temp_C: string; FeelsLikeC: string; weatherDesc: Array<{ value: string }>; windspeedKmph: string; humidity: string }>;
             nearest_area: Array<{ areaName: Array<{ value: string }>; country: Array<{ value: string }> }>;
+            weather: Array<{ date: string; maxtempC: string; mintempC: string; hourly: Array<{ time: string; weatherDesc: Array<{ value: string }> }> }>;
           };
           const curr = wData.current_condition[0];
           const area = wData.nearest_area[0];
           const areaName = area.areaName[0].value;
           const country = area.country[0].value;
-          return `🌤 ${areaName}（${country}）当前天气：\n🌡 温度：${curr.temp_C}°C（体感 ${curr.FeelsLikeC}°C）\n🌦 天气：${curr.weatherDesc[0].value}\n💨 风速：${curr.windspeedKmph} km/h\n💧 湿度：${curr.humidity}%`;
+          const lines: string[] = [
+            `🌤 ${areaName}（${country}）当前天气：`,
+            `🌡 温度：${curr.temp_C}°C（体感 ${curr.FeelsLikeC}°C）`,
+            `🌦 天气：${curr.weatherDesc[0].value}`,
+            `💨 风速：${curr.windspeedKmph} km/h`,
+            `💧 湿度：${curr.humidity}%`,
+          ];
+
+          if (wData.weather?.length) {
+            lines.push("");
+            lines.push(`📅 未来 ${wData.weather.length} 天预报：`);
+            for (const day of wData.weather) {
+              const desc = day.hourly[4]?.weatherDesc[0]?.value || "未知";
+              lines.push(`  ${day.date} ${desc} ${day.mintempC}°C ~ ${day.maxtempC}°C`);
+            }
+          }
+
+          return lines.join("\n");
         }
       } catch {
         // wttr.in 也失败了

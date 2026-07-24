@@ -1,5 +1,5 @@
 """
-get_weather — 查询指定城市的实时天气信息
+get_weather — 查询指定城市的实时天气 + 未来 N 天预报
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ _DESCRIPTOR = ToolDescriptor(
     name="weather.current",
     version="1.0.0",
     title="天气查询",
-    description="查询指定城市的实时天气信息（温度、天气状况、风速等）。当用户问天气、气温、下雨、下雪等情况时使用。",
+    description="查询指定城市的实时天气及未来 7 天天气预报（温度、天气状况、风速等）。当用户问天气、气温、下雨、下雪等情况时使用。",
     category="READ",
     risk_level="R1",
     side_effect="read",
@@ -54,12 +54,13 @@ _DESCRIPTOR = ToolDescriptor(
 # ============ LangChain Tool ============
 
 class WeatherInput(BaseModel):
-    city: str = Field(description="城市名称，如 '北京'、'上海'、'New York'")
+    city: str = Field(description="城市名称，如 '北京'、'上海'、'深圳'")
+    days: int = Field(default=7, ge=1, le=7, description="预报天数，默认 7 天，范围 1-7")
 
 
 @tool(args_schema=WeatherInput)
-def get_weather(city: str) -> str:
-    """查询指定城市的实时天气信息（温度、天气状况、风速等）。当用户问天气、气温、下雨、下雪等情况时使用。优先通过 Open-Meteo 获取，如果失败再用 web_search 搜索。"""
+def get_weather(city: str, days: int = 7) -> str:
+    """查询指定城市的实时天气及未来 7 天天气预报。当用户问天气、气温、下雨、下雪等情况时使用。优先通过 Open-Meteo 获取，如果失败再用 web_search 搜索。"""
     # 尝试 Open-Meteo
     try:
         with httpx.Client(timeout=10) as client:
@@ -80,7 +81,9 @@ def get_weather(city: str) -> str:
                     "latitude": r["latitude"],
                     "longitude": r["longitude"],
                     "current_weather": "true",
+                    "daily": "temperature_2m_max,temperature_2m_min,weathercode",
                     "timezone": "auto",
+                    "forecast_days": days,
                 },
             )
             weather_res.raise_for_status()
@@ -88,7 +91,26 @@ def get_weather(city: str) -> str:
 
             c = wdata["current_weather"]
             desc = WEATHER_CODES.get(c["weathercode"], "未知")
-            return f"🌤 {r['name']}（{r.get('country', '')}）当前天气：\n🌡 温度：{c['temperature']}°C\n🌦 天气：{desc}\n💨 风速：{c['windspeed']} km/h"
+            lines = [
+                f"🌤 {r['name']}（{r.get('country', '')}）当前天气：",
+                f"🌡 温度：{c['temperature']}°C",
+                f"🌦 天气：{desc}",
+                f"💨 风速：{c['windspeed']} km/h",
+            ]
+
+            daily = wdata.get("daily")
+            if daily and daily.get("time"):
+                lines.append("")
+                lines.append(f"📅 未来 {len(daily['time'])} 天预报：")
+                for i, date in enumerate(daily["time"]):
+                    max_t = daily["temperature_2m_max"][i]
+                    min_t = daily["temperature_2m_min"][i]
+                    wcode = daily["weathercode"][i]
+                    wdesc = WEATHER_CODES.get(wcode, "未知")
+                    weekday = "今天" if i == 0 else ("明天" if i == 1 else f"周{'日一二三四五六'[__import__('datetime').datetime.strptime(date, '%Y-%m-%d').weekday()]}")
+                    lines.append(f"  {weekday}({date[5:]}) {wdesc} {min_t}°C ~ {max_t}°C")
+
+            return "\n".join(lines)
     except Exception:
         pass
 
@@ -106,7 +128,22 @@ def get_weather(city: str) -> str:
             area = wdata["nearest_area"][0]
             area_name = area["areaName"][0]["value"]
             country = area["country"][0]["value"]
-            return f"🌤 {area_name}（{country}）当前天气：\n🌡 温度：{curr['temp_C']}°C（体感 {curr['FeelsLikeC']}°C）\n🌦 天气：{curr['weatherDesc'][0]['value']}\n💨 风速：{curr['windspeedKmph']} km/h\n💧 湿度：{curr['humidity']}%"
+            lines = [
+                f"🌤 {area_name}（{country}）当前天气：",
+                f"🌡 温度：{curr['temp_C']}°C（体感 {curr['FeelsLikeC']}°C）",
+                f"🌦 天气：{curr['weatherDesc'][0]['value']}",
+                f"💨 风速：{curr['windspeedKmph']} km/h",
+                f"💧 湿度：{curr['humidity']}%",
+            ]
+
+            if wdata.get("weather"):
+                lines.append("")
+                lines.append(f"📅 未来 {len(wdata['weather'])} 天预报：")
+                for day in wdata["weather"]:
+                    desc = day.get("hourly", [{}])[4].get("weatherDesc", [{}])[0].get("value", "未知") if day.get("hourly") else "未知"
+                    lines.append(f"  {day['date']} {desc} {day['mintempC']}°C ~ {day['maxtempC']}°C")
+
+            return "\n".join(lines)
     except Exception:
         pass
 

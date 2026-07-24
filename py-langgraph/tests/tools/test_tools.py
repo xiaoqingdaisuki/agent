@@ -21,6 +21,13 @@ class TestWeatherTool:
         result = await get_weather.ainvoke({"city": "Shanghai"})
         assert len(result) > 10
 
+    @pytest.mark.asyncio
+    async def test_get_weather_supports_days_parameter(self):
+        """Weather tool should accept days parameter for forecast length"""
+        result = await get_weather.ainvoke({"city": "Shenzhen", "days": 3})
+        assert isinstance(result, str)
+        assert len(result) > 10
+
 
 class TestWebSearchTool:
     @pytest.mark.asyncio
