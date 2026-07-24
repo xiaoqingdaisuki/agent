@@ -19,7 +19,7 @@ async def stream(request: StreamRequest):
 
     agent = build_tool_agent()
     thread_id = request.thread_id or "default"
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 20}
     if request.user_id:
         config["configurable"]["user_id"] = request.user_id
 

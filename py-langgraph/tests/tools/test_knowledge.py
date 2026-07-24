@@ -16,7 +16,7 @@ class TestKnowledgeSearchDescriptor:
         assert "knowledge.search" in _DESCRIPTOR.required_permissions
 
     def test_descriptor_timeout(self):
-        assert _DESCRIPTOR.timeout_ms == 15000
+        assert _DESCRIPTOR.timeout_ms == 12000
 
     def test_descriptor_tags(self):
         assert "rag" in _DESCRIPTOR.tags
@@ -58,13 +58,13 @@ class TestKnowledgeSearchTool:
     @pytest.mark.asyncio
     async def test_tool_returns_string(self):
         """知识库搜索在没有真实 Qdrant 时返回错误或空结果"""
-        result = knowledge_search.invoke({"query": "test", "top_k": 3})
+        result = await knowledge_search.ainvoke({"query": "test", "top_k": 3})
         assert isinstance(result, str)
         assert len(result) > 0
 
     @pytest.mark.asyncio
     async def test_tool_handles_empty_query(self):
-        result = knowledge_search.invoke({"query": "", "top_k": 3})
+        result = await knowledge_search.ainvoke({"query": "", "top_k": 3})
         assert isinstance(result, str)
         # 空查询也应该返回某种结果
         assert len(result) > 0

@@ -42,7 +42,7 @@ async def chat(request: ChatRequest):
         agent = build_tool_agent(system_prompt_override=system_prompt)
 
         thread_id = request.thread_id or "default"
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 20}
         if request.user_id:
             config["configurable"]["user_id"] = request.user_id
 

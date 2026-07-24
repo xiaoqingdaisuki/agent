@@ -73,7 +73,7 @@ async function searchBing(query: string): Promise<SearchResultItem[] | null> {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
           "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         },
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(6000),
       },
     );
 
@@ -128,7 +128,7 @@ async function searchSearx(query: string): Promise<SearchResultItem[] | null> {
         `${instance}/search?q=${encodeURIComponent(query)}&format=json&engines=google,bing,duckduckgo&pageno=1`,
         {
           headers: { Accept: "application/json", "User-Agent": "curl/7.68" },
-          signal: AbortSignal.timeout(6000),
+          signal: AbortSignal.timeout(5000),
         },
       );
 
@@ -158,7 +158,7 @@ async function searchDuckDuckGo(query: string): Promise<SearchResultItem[] | nul
   try {
     const res = await fetch(
       `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
-      { signal: AbortSignal.timeout(6000) },
+      { signal: AbortSignal.timeout(5000) },
     );
 
     if (!res.ok) return null;
@@ -250,7 +250,7 @@ export const webSearchDescriptor: ToolDescriptor = {
   category: "SEARCH",
   risk_level: "R1",
   side_effect: "read",
-  timeout_ms: 15000,
+  timeout_ms: 12000,
   required_permissions: ["web.search"],
   data_classification: ["internal"],
   owner: "tools",

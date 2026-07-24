@@ -277,7 +277,7 @@ class AgentService:
                     pass
 
             agent = build_tool_agent(system_prompt_override=system_prompt)
-            config = {"configurable": {"thread_id": conversation_id}}
+            config = {"configurable": {"thread_id": conversation_id}, "recursion_limit": 20}
             if user_id:
                 config["configurable"]["user_id"] = user_id
 
@@ -338,7 +338,7 @@ class AgentService:
                     pass
 
             agent = build_tool_agent(system_prompt_override=system_prompt)
-            config = {"configurable": {"thread_id": conversation_id}}
+            config = {"configurable": {"thread_id": conversation_id}, "recursion_limit": 20}
             if user_id:
                 config["configurable"]["user_id"] = user_id
 

@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 class AgentState(TypedDict):
     """LangGraph Agent 状态 — 显式定义，与 TS 版隐式状态形成对比"""
     messages: list[BaseMessage]
+    tool_call_count: int  # 工具调用计数器，防止无限循环
 
 
 def get_llm(provider: str = "openai"):
@@ -119,6 +120,12 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
 
 def should_continue(state: AgentState) -> Literal["tools", END]:
     """判断是否需要调用工具"""
+    # 工具调用次数上限（与 TS 版 maxIterations 对齐，每轮 = agent→tools 一次）
+    MAX_TOOL_CALLS = 5
+    call_count = state.get("tool_call_count", 0)
+    if call_count >= MAX_TOOL_CALLS:
+        return END
+
     last_message = state["messages"][-1]
     if last_message.tool_calls:
         return "tools"
@@ -146,6 +153,9 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
     llm = get_llm()
     base_prompt = system_prompt_override or TOOL_CALLING_PROMPT
 
+    # 过滤工具列表，只保留 LLM 实际需要的（移除 observability 等非 LLM 工具）
+    llm_tools = [t for t in tools if callable(t)]
+
     def agent_node(state: AgentState):
         system_prompt = base_prompt
         user_id = state.get("user_id")
@@ -163,11 +173,16 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
         # Handle XML-format tool calls (e.g. StepFun step-3.7-flash)
         response = _convert_xml_tool_calls(response)
 
-        return {"messages": [response]}
+        # 工具调用计数：如果模型返回了 tool_calls，递增计数器
+        current_count = state.get("tool_call_count", 0)
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            current_count += 1
+
+        return {"messages": [response], "tool_call_count": current_count}
 
     builder = StateGraph(AgentState)
     builder.add_node("agent", agent_node)
-    builder.add_node("tools", ToolNode(tools))
+    builder.add_node("tools", ToolNode(llm_tools))
 
     # 显式定义图的边
     builder.add_edge(START, "agent")
@@ -176,6 +191,7 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
     builder.add_edge("tools", "agent")
 
     # 编译时附加 checkpointer
+    # 递归限制在调用时通过 config={"recursion_limit": N} 传入
     cp = checkpointer or _get_default_checkpointer()
     return builder.compile(
         checkpointer=cp,

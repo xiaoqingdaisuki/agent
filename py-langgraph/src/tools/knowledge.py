@@ -67,7 +67,7 @@ _DESCRIPTOR = ToolDescriptor(
     category="SEARCH",
     risk_level="R1",
     side_effect="read",
-    timeout_ms=15000,
+    timeout_ms=12000,
     required_permissions=["knowledge.search"],
     data_classification=["internal"],
     owner="rag",
@@ -83,7 +83,7 @@ class KnowledgeSearchInput(BaseModel):
 
 
 @tool(args_schema=KnowledgeSearchInput)
-def knowledge_search(query: str, top_k: int = 5) -> str:
+async def knowledge_search(query: str, top_k: int = 5) -> str:
     """在企业知识库中搜索相关信息。适用于需要从公司文档、产品手册、技术文档等内部资料中查找答案的场景。"""
     try:
         # 动态导入，避免循环依赖
@@ -96,9 +96,8 @@ def knowledge_search(query: str, top_k: int = 5) -> str:
             top_k=top_k,
         )
 
-        # 同步调用（LangChain Tool 是同步接口）
-        import asyncio
-        results = asyncio.run(retriever.retrieve_with_context(query))
+        # 直接 await 异步检索（LangGraph 运行在 event loop 内，不可用 asyncio.run）
+        results = await retriever.retrieve_with_context(query)
 
         if not results:
             return f"📚 知识库中未找到与\"{query}\"相关的内容。"

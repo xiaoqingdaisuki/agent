@@ -74,7 +74,7 @@ def _clean_html(text: str) -> str:
 def _search_bing(query: str) -> list[SearchResultItem] | None:
     """Bing HTML 搜索"""
     try:
-        with httpx.Client(timeout=8, follow_redirects=True) as client:
+        with httpx.Client(timeout=6, follow_redirects=True) as client:
             res = client.get(
                 "https://www.bing.com/search",
                 params={"q": query, "setmkt": "zh-CN"},
@@ -132,7 +132,7 @@ def _search_searx(query: str) -> list[SearchResultItem] | None:
 
     for instance in instances:
         try:
-            with httpx.Client(timeout=6, follow_redirects=True) as client:
+            with httpx.Client(timeout=5, follow_redirects=True) as client:
                 res = client.get(
                     f"{instance}/search",
                     params={"q": query, "format": "json", "engines": "google,bing,duckduckgo", "pageno": "1"},
@@ -163,7 +163,7 @@ def _search_searx(query: str) -> list[SearchResultItem] | None:
 def _search_duckduckgo(query: str) -> list[SearchResultItem] | None:
     """DuckDuckGo API 搜索"""
     try:
-        with httpx.Client(timeout=6, follow_redirects=True) as client:
+        with httpx.Client(timeout=5, follow_redirects=True) as client:
             res = client.get(
                 "https://api.duckduckgo.com/",
                 params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
@@ -240,7 +240,7 @@ _DESCRIPTOR = ToolDescriptor(
     category="SEARCH",
     risk_level="R1",
     side_effect="read",
-    timeout_ms=15000,
+    timeout_ms=12000,
     required_permissions=["web.search"],
     data_classification=["internal"],
     owner="tools",

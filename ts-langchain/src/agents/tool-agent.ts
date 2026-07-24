@@ -70,19 +70,32 @@ function createModelWithXmlFix(model: ChatOpenAI): ChatOpenAI {
   return model;
 }
 
-const prompt = ChatPromptTemplate.fromMessages([
-  ["system", "{system_prompt}"],
-  new MessagesPlaceholder("chat_history"),
-  ["human", "{input}"],
-  new MessagesPlaceholder("agent_scratchpad"),
-]);
+// ============ 缓存 ============
 
-let toolAgent: Promise<AgentExecutor> | null = null;
+// 按 prompt 内容分片缓存，避免不同 memory context 导致 prompt 错乱
+const agentCache = new Map<string, Promise<AgentExecutor>>();
+const MAX_CACHE_SIZE = 10;
 
 export async function createToolAgent(systemPromptOverride?: string): Promise<AgentExecutor> {
-  if (toolAgent && !systemPromptOverride) return toolAgent;
-  toolAgent = buildToolAgent(systemPromptOverride);
-  return toolAgent;
+  const prompt = systemPromptOverride || TOOL_CALLING_PROMPT;
+
+  // 缓存命中：相同 prompt 直接返回
+  const cached = agentCache.get(prompt);
+  if (cached) return cached;
+
+  // 缓存淘汰：超过上限时清 oldest entry
+  if (agentCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = agentCache.keys().next().value!;
+    agentCache.delete(firstKey);
+  }
+
+  const promise = buildToolAgent(prompt);
+  agentCache.set(prompt, promise);
+  return promise;
+}
+
+export function invalidateToolAgentCache(): void {
+  agentCache.clear();
 }
 
 async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecutor> {
@@ -111,6 +124,6 @@ async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecu
     tools: tools as any,
     verbose: false,
     handleParsingErrors: true,
-    maxIterations: 3,
+    maxIterations: 2,
   });
 }
