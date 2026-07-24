@@ -203,7 +203,7 @@ async function searchDuckDuckGo(query: string): Promise<string | null> {
 export const webSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "web_search",
   description:
-    "在互联网上搜索最新信息。当用户问及时事、新闻、最新动态、知识查询、活动信息，或你不知道答案时使用此工具获取最新信息。",
+    "【强制联网搜索】在互联网上搜索最新信息并返回事实核查结果。当用户问及任何可能需要事实核查的内容时，无论是否属于你的训练知识范围，都必须调用此工具：历史事件、时事新闻、政策法规、具体数据和统计、人物动态、公司和产品信息、体育赛事比分、学术研究、百科知识、节日纪念日、地理位置、语言翻译、影视书籍评价等。模型训练数据有截止日期且可能不准确，只有联网搜索能保证信息的时效性和准确性。不要凭训练记忆回答任何事实性问题。",
   schema: z.object({
     query: z.string().describe("搜索关键词，尽量简洁明确，例如'深圳8月28日活动'"),
   }),
