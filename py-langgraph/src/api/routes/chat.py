@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from src.agents.base import build_chat_agent
+from src.agents.base import build_tool_agent
+from src.prompts.system import TOOL_CALLING_PROMPT
 
 router = APIRouter()
 
@@ -19,21 +20,40 @@ class ChatResponse(BaseModel):
 
 @router.post("", response_model=ChatResponse)
 async def chat(request: ChatRequest):
+    """旧版对话接口 — 强制走 tool agent，保证工具调用能力
+
+    与 /stream 和 /api/v1 一致，所有旧接口统一使用 build_tool_agent，
+    避免出现无工具绑定的"哑巴" agent。
+    """
     try:
-        agent = build_chat_agent()
+        # 注入用户记忆（与 v1 API / AgentService 保持一致）
+        system_prompt: str | None = None
+        if request.user_id:
+            try:
+                from src.profile.service import MemoryService, ProfileService
+                profile = ProfileService.get_or_create(request.user_id)
+                memory_context = MemoryService.build_memory_context(request.user_id)
+                if memory_context:
+                    system_prompt = f"{memory_context}\n\n{TOOL_CALLING_PROMPT}"
+            except Exception:
+                # 记忆模块不可用时静默降级，使用默认 prompt
+                pass
+
+        agent = build_tool_agent(system_prompt_override=system_prompt)
+
         thread_id = request.thread_id or "default"
         config = {"configurable": {"thread_id": thread_id}}
-
-        input_data = {"messages": [{"role": "user", "content": request.message}]}
         if request.user_id:
-            input_data["user_id"] = request.user_id
+            config["configurable"]["user_id"] = request.user_id
 
         result = await agent.ainvoke(
-            input_data,
+            {"messages": [{"role": "user", "content": request.message}], "user_id": request.user_id},
             config=config,
         )
 
         last_msg = result["messages"][-1]
-        return ChatResponse(reply=last_msg.content, thread_id=thread_id)
+        reply_text = last_msg.content or "抱歉，我没有理解您的问题。"
+
+        return ChatResponse(reply=reply_text, thread_id=thread_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

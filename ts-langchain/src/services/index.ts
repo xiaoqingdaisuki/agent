@@ -8,7 +8,6 @@
  * 4. 与 API 层解耦，前端看不到内部实现
  */
 
-import { createChatAgent } from "../agents/chat-agent.js";
 import { createToolAgent } from "../agents/tool-agent.js";
 import { getHistory, clearHistory } from "../memory/conversation.js";
 import { RAGAgent } from "../rag/rag-agent.js";
@@ -149,13 +148,7 @@ export class ConversationService {
 // ============ Agent Service ============
 
 export class AgentService {
-  private static chatAgent: ReturnType<typeof createChatAgent> | null = null;
   private static toolAgent: Awaited<ReturnType<typeof createToolAgent>> | null = null;
-
-  private static getChatAgent() {
-    if (!this.chatAgent) this.chatAgent = createChatAgent();
-    return this.chatAgent;
-  }
 
   private static async getToolAgent() {
     if (!this.toolAgent) this.toolAgent = await createToolAgent();

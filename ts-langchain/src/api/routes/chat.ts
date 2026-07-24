@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { createChatAgent, chat } from "../../agents/chat-agent.js";
-
-let chatAgent: ReturnType<typeof createChatAgent> | null = null;
+import { createToolAgent } from "../../agents/tool-agent.js";
+import { getHistory, appendMessage } from "../../memory/conversation.js";
+import { MemoryService, ProfileService } from "../../profile/service.js";
+import { HumanMessage, AIMessage } from "@langchain/core/messages";
+import { TOOL_CALLING_PROMPT } from "../../prompts/system.js";
 
 export async function registerChatRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
@@ -13,14 +15,37 @@ export async function registerChatRoutes(app: FastifyInstance) {
           return reply.status(400).send({ error: "message is required" });
         }
 
-        if (!chatAgent) {
-          chatAgent = createChatAgent();
+        const threadId = thread_id || crypto.randomUUID();
+
+        // 注入用户记忆（与 v1 API 保持一致）
+        let systemPrompt: string | undefined;
+        if (user_id) {
+          try {
+            const profile = ProfileService.getOrCreate(user_id);
+            const memoryContext = MemoryService.buildMemoryContext(user_id);
+            if (memoryContext) {
+              systemPrompt = `${memoryContext}\n\n${TOOL_CALLING_PROMPT}`;
+            }
+          } catch {
+            // 记忆模块不可用时静默降级
+          }
         }
 
-        const threadId = thread_id || crypto.randomUUID();
-        const result = await chat(chatAgent, message, threadId, user_id);
+        const agent = await createToolAgent(systemPrompt);
+        const history = getHistory(threadId);
 
-        return { reply: result.reply, thread_id: result.threadId };
+        const result = await (agent as any).invoke({
+          input: message,
+          chat_history: history,
+        });
+
+        const reply_text =
+          typeof result.output === "string" ? result.output : "抱歉，我没有理解您的问题。";
+
+        appendMessage(threadId, new HumanMessage(message));
+        appendMessage(threadId, new AIMessage(reply_text));
+
+        return { reply: reply_text, thread_id: threadId };
       } catch (error: any) {
         console.error("Chat error:", error);
         if (error.message?.includes("API key")) {
