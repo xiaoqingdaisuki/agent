@@ -2,17 +2,19 @@
 External API v1 — 给前端 UI 使用
 """
 
+from datetime import datetime
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
-from typing import Optional
-from datetime import datetime
+
 from src.services import (
-    ConversationService,
     AgentService,
-    KnowledgeService,
-    Capabilities,
     BusinessError,
     BusinessErrorCode,
+    Capabilities,
+    ConversationService,
+    KnowledgeService,
     Message,
 )
 
@@ -28,7 +30,7 @@ class CreateConversationRequest(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str = Field(..., min_length=1)
-    user_id: Optional[str] = Field(None, description="用户标识，用于记忆和个人化")
+    user_id: str | None = Field(None, description="用户标识，用于记忆和个人化")
 
 
 class MessageResponse(BaseModel):
@@ -52,7 +54,7 @@ class DocumentResponse(BaseModel):
     size: int
     status: str
     chunks: int
-    category: Optional[str] = None
+    category: str | None = None
     created_at: str
 
 
@@ -177,6 +179,7 @@ async def upload_document(request: Request):
             )
 
         from fastapi import UploadFile
+
         from src.services import KnowledgeService
 
         if hasattr(file, "read"):
@@ -198,7 +201,7 @@ async def upload_document(request: Request):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"文档上传失败: {str(e)}"},
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"文档上传失败: {e!s}"},
         )
 
 
@@ -282,7 +285,7 @@ async def get_profile(user_id: str, name: str = ""):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"获取用户画像失败: {str(e)}"},
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"获取用户画像失败: {e!s}"},
         )
 
 
@@ -312,7 +315,7 @@ async def update_profile(user_id: str, update: ProfileUpdate):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"更新用户画像失败: {str(e)}"},
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"更新用户画像失败: {e!s}"},
         )
 
 
@@ -327,7 +330,7 @@ async def get_memories(user_id: str, category: str = None):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"获取记忆失败: {str(e)}"},
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"获取记忆失败: {e!s}"},
         )
 
 
@@ -346,7 +349,7 @@ async def create_memory(user_id: str, memory: MemoryCreate):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"添加记忆失败: {str(e)}"},
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"添加记忆失败: {e!s}"},
         )
 
 
@@ -366,7 +369,7 @@ async def delete_memory(user_id: str, memory_id: str):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"删除记忆失败: {str(e)}"},
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"删除记忆失败: {e!s}"},
         )
 
 
@@ -379,5 +382,5 @@ async def get_history(user_id: str, conversation_id: str = None, limit: int = 50
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"获取历史记录失败: {str(e)}"},
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"获取历史记录失败: {e!s}"},
         )

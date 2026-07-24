@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ToolCallContext",
+  "description": "每次工具调用的上下文，由服务端注入，禁止 LLM 自行填写",
+  "type": "object",
+  "required": [
+    "request_id", "trace_id", "conversation_id",
+    "tenant_id", "user_id", "actor_type"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "description": "本次请求唯一 ID"
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "分布式追踪 ID"
+    },
+    "conversation_id": {
+      "type": "string",
+      "description": "会话 ID"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "租户 ID（多租户隔离）"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "当前用户 ID"
+    },
+    "actor_type": {
+      "type": "string",
+      "enum": ["user", "agent", "service"],
+      "description": "调用者类型"
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "Agent ID"
+    },
+    "locale": {
+      "type": "string",
+      "default": "zh-CN",
+      "description": "语言区域"
+    },
+    "deadline": {
+      "type": "string",
+      "format": "date-time",
+      "description": "任务截止时间（可选）"
+    }
+  }
+}

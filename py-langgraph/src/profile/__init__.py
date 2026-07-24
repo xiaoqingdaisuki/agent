@@ -1,23 +1,23 @@
 from .models import (
-    UserProfile,
     Memory,
-    QARecord,
     ProfileStore,
+    QARecord,
+    UserProfile,
     store,
 )
 from .service import (
-    ProfileService,
-    MemoryService,
     HistoryService,
+    MemoryService,
+    ProfileService,
 )
 
 __all__ = [
-    "UserProfile",
-    "Memory",
-    "QARecord",
-    "ProfileStore",
-    "store",
-    "ProfileService",
-    "MemoryService",
     "HistoryService",
+    "Memory",
+    "MemoryService",
+    "ProfileService",
+    "ProfileStore",
+    "QARecord",
+    "UserProfile",
+    "store",
 ]

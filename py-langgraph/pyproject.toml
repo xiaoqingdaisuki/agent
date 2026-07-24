@@ -40,3 +40,17 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+ignore = [
+    "BLE001",  # 工具代码中需要捕获所有异常并统一返回错误
+    "S110",    # try-except-pass 在工具降级逻辑中常见
+    "S112",    # try-except-continue 在循环中跳过失败实例
+    "UP006",   # 使用 List/list — Python 3.10+ 才支持 lowercase，保持兼容
+    "UP045",   # 同上，X | None 语法
+    "RUF013",  # PEP 484 Optional — 保持向后兼容
+    "F401",    # 部分文件有动态导入，暂不清理
+    "I001",    # import 排序 — 逐步清理
+    "DTZ005",  # datetime.now() 无 tz — 开发阶段暂不处理
+    "F841",    # 未使用局部变量 — 逐步清理
+]

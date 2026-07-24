@@ -9,6 +9,7 @@ LangGraph 的 checkpointer 机制：
 """
 
 from typing import Optional
+
 from langgraph.checkpoint.memory import MemorySaver
 
 
@@ -22,6 +23,7 @@ def get_checkpointer(checkpoint_type: str = "memory"):
     if checkpoint_type == "postgres":
         try:
             from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
             from src.config.settings import settings
             return AsyncPostgresSaver.from_conn_string(
                 settings.postgres_uri,
@@ -35,7 +37,7 @@ def get_checkpointer(checkpoint_type: str = "memory"):
 
 
 # 默认使用内存 checkpointer（无需外部依赖）
-_default_checkpointer: Optional[MemorySaver] = None
+_default_checkpointer: MemorySaver | None = None
 
 
 def get_default_checkpointer():

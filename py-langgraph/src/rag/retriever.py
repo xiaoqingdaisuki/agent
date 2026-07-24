@@ -3,9 +3,8 @@ RAG 检索器
 封装向量搜索，对外提供统一接口
 """
 
-from typing import List, Optional
+
 from src.rag.vector_store import VectorStore
-from src.rag.embedder import Embedder
 
 
 class Retriever:
@@ -23,13 +22,13 @@ class Retriever:
         )
         self.top_k = top_k
 
-    async def retrieve(self, query: str) -> List[dict]:
+    async def retrieve(self, query: str) -> list[dict]:
         """检索相关文档"""
         return await self.vector_store.search(query, top_k=self.top_k)
 
     async def retrieve_with_context(
-        self, query: str, top_k: Optional[int] = None
-    ) -> List[dict]:
+        self, query: str, top_k: int | None = None
+    ) -> list[dict]:
         """检索并返回格式化的结果"""
         results = await self.retrieve(query)
 

@@ -1,8 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from .routes.v1 import router as v1_router
-from .routes import chat, images, stream, tools
+
 from src.services import BusinessError, BusinessErrorCode
+
+from .routes import chat, images, stream, tools
+from .routes.v1 import router as v1_router
 
 
 def create_app() -> FastAPI:

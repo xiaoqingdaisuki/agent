@@ -7,19 +7,21 @@ RAG Agent — Python 版（LangGraph 显式图）
 - 对比 TS 版：Agent 自主决定是否检索
 """
 
-from typing import TypedDict, Annotated, List, Dict, Any
 import operator
+from typing import Annotated, Any, TypedDict
+
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, START, END
-from src.rag.retriever import Retriever
+from langgraph.graph import END, START, StateGraph
+
 from src.config.settings import settings
+from src.rag.retriever import Retriever
 
 
 class RAGState(TypedDict):
     """RAG Agent 状态"""
-    messages: Annotated[List[BaseMessage], operator.add]
-    context: List[Dict[str, Any]]
+    messages: Annotated[list[BaseMessage], operator.add]
+    context: list[dict[str, Any]]
     should_retrieve: bool
 
 

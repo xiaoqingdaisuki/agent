@@ -1,8 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
-from src.agents.base import build_tool_agent
-from src.config.settings import settings
 
+from src.agents.base import build_tool_agent
 
 router = APIRouter()
 
@@ -43,7 +42,7 @@ async def stream(request: StreamRequest):
                 elif kind == "on_tool_start":
                     yield f"data: [tool:{event['name']}]\n\n"
         except Exception as e:
-            yield f"data: [error:{str(e)}]\n\n"
+            yield f"data: [error:{e!s}]\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

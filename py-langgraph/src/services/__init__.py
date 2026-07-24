@@ -8,10 +8,9 @@ Service Layer — 业务逻辑编排
 4. 与 API 层解耦，前端看不到内部实现
 """
 
+from datetime import datetime
 from enum import Enum
 from typing import Optional
-from datetime import datetime
-
 
 # ============ 错误码 ============
 
@@ -124,7 +123,7 @@ class ConversationService:
         return conv
 
     @staticmethod
-    def get(conv_id: str) -> Optional[Conversation]:
+    def get(conv_id: str) -> Conversation | None:
         return _conversations.get(conv_id)
 
     @staticmethod
@@ -161,10 +160,10 @@ class KnowledgeService:
     async def upload_document(buffer: bytes, filename: str, category: str = None) -> Document:
         """上传并索引文档"""
         try:
+            from src.rag.embedder import Embedder
             from src.rag.loader import Document
             from src.rag.splitter import TextSplitter
             from src.rag.vector_store import VectorStore
-            from src.rag.embedder import Embedder
 
             # 加载文档
             doc = Document.from_bytes(buffer, filename)
@@ -202,7 +201,7 @@ class KnowledgeService:
         except Exception as e:
             raise BusinessError(
                 BusinessErrorCode.INTERNAL_ERROR,
-                f"文档上传失败: {str(e)}",
+                f"文档上传失败: {e!s}",
                 500,
             )
 
@@ -215,7 +214,7 @@ class KnowledgeService:
         )
 
     @staticmethod
-    def get_document(doc_id: str) -> Optional[Document]:
+    def get_document(doc_id: str) -> Document | None:
         return _documents.get(doc_id)
 
     @staticmethod
@@ -247,7 +246,7 @@ class KnowledgeService:
 
             results = await retriever.retrieve(query)
             return results
-        except Exception as e:
+        except Exception:
             raise BusinessError(
                 BusinessErrorCode.SERVICE_UNAVAILABLE,
                 "知识库检索失败，请稍后重试",
@@ -263,7 +262,7 @@ class AgentService:
     async def chat(conversation_id: str, content: str, user_id: str = None) -> Message:
         try:
             from src.agents.base import build_tool_agent
-            from src.profile.service import MemoryService, ProfileService, HistoryService
+            from src.profile.service import HistoryService, MemoryService, ProfileService
 
             # 构建记忆上下文
             system_prompt = None
@@ -325,7 +324,7 @@ class AgentService:
     async def chat_stream(conversation_id: str, content: str, user_id: str = None):
         try:
             from src.agents.base import build_tool_agent
-            from src.profile.service import MemoryService, ProfileService, HistoryService
+            from src.profile.service import HistoryService, MemoryService, ProfileService
 
             system_prompt = None
             if user_id:
@@ -380,13 +379,13 @@ class AgentService:
 
 
 __all__ = [
+    "AgentService",
     "BusinessError",
     "BusinessErrorCode",
-    "ConversationService",
-    "AgentService",
-    "KnowledgeService",
     "Capabilities",
     "Conversation",
-    "Message",
+    "ConversationService",
     "Document",
+    "KnowledgeService",
+    "Message",
 ]

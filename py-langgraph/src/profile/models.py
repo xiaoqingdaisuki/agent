@@ -8,8 +8,6 @@ User Profile + Memory + History 数据模型
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
-
 
 # ============ User Profile ============
 

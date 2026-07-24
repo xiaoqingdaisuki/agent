@@ -2,9 +2,10 @@
 RAG 向量存储 — Qdrant
 """
 
-from typing import List, Optional
+
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import Distance, PointStruct, VectorParams
+
 from src.rag.embedder import Embedder
 
 
@@ -14,7 +15,7 @@ class VectorStore:
     def __init__(
         self,
         url: str = "http://localhost:6333",
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         collection_name: str = "documents",
     ):
         self.client = QdrantClient(url=url, api_key=api_key)
@@ -32,7 +33,7 @@ class VectorStore:
                 vectors_config=VectorParams(size=dimensions, distance=Distance.COSINE),
             )
 
-    async def add_documents(self, chunks: List[dict], content_field: str = "content") -> None:
+    async def add_documents(self, chunks: list[dict], content_field: str = "content") -> None:
         """添加文档到向量库"""
         await self.ensure_collection()
 
@@ -58,7 +59,7 @@ class VectorStore:
         self,
         query: str,
         top_k: int = 5,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """向量搜索"""
         query_embedding = await self.embedder.embed(query)
 

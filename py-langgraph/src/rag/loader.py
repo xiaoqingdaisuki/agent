@@ -4,7 +4,6 @@ RAG 文档加载器
 """
 
 import os
-from typing import Optional
 from dataclasses import dataclass, field
 
 

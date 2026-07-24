@@ -3,7 +3,6 @@ RAG 文本切分器
 递归字符切分，保持段落完整性
 """
 
-from typing import List
 from dataclasses import dataclass
 
 
@@ -25,7 +24,7 @@ class TextSplitter:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
-    def split(self, content: str, filename: str, source: str) -> List[TextChunk]:
+    def split(self, content: str, filename: str, source: str) -> list[TextChunk]:
         """切分文档内容"""
         chunks = self._recursive_split(content)
 
@@ -43,7 +42,7 @@ class TextSplitter:
             for i, chunk in enumerate(chunks)
         ]
 
-    def _recursive_split(self, text: str) -> List[str]:
+    def _recursive_split(self, text: str) -> list[str]:
         """递归切分"""
         if len(text) <= self.chunk_size:
             return [text]

@@ -11,7 +11,8 @@ Profile Service — 用户画像 + 长期记忆 + 问答历史
 
 import re
 from datetime import datetime
-from src.profile.models import ProfileStore, UserProfile, Memory, QARecord
+
+from src.profile.models import Memory, ProfileStore, QARecord, UserProfile
 
 store = ProfileStore()
 

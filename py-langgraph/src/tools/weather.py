@@ -1,34 +1,57 @@
-from langchain_core.tools import tool
-from pydantic import BaseModel, Field
+"""
+get_weather — 查询指定城市的实时天气信息
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
 import httpx
 
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+
+from src.tools.contracts import (
+    ToolCategory,
+    ToolDescriptor,
+    ToolResultEnvelope,
+    ToolResultMeta,
+    SideEffect,
+)
+
+# ============ WMO Weather Codes ============
+
 WEATHER_CODES = {
-    0: "晴朗",
-    1: "大部晴朗",
-    2: "多云",
-    3: "阴天",
-    45: "雾",
-    48: "雾凇",
-    51: "小毛毛雨",
-    53: "中毛毛雨",
-    55: "大毛毛雨",
-    61: "小雨",
-    63: "中雨",
-    65: "大雨",
-    71: "小雪",
-    73: "中雪",
-    75: "大雪",
-    77: "雪粒",
-    80: "小阵雨",
-    81: "中阵雨",
-    82: "大阵雨",
-    85: "小阵雪",
-    86: "大阵雪",
-    95: "雷暴",
-    96: "雷暴伴小冰雹",
-    99: "雷暴伴大冰雹",
+    0: "晴朗", 1: "大部晴朗", 2: "多云", 3: "阴天",
+    45: "雾", 48: "雾凇",
+    51: "小毛毛雨", 53: "中毛毛雨", 55: "大毛毛雨",
+    61: "小雨", 63: "中雨", 65: "大雨",
+    71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
+    80: "小阵雨", 81: "中阵雨", 82: "大阵雨",
+    85: "小阵雪", 86: "大阵雪",
+    95: "雷暴", 96: "雷暴伴小冰雹", 99: "雷暴伴大冰雹",
 }
 
+
+# ============ Tool Descriptor ============
+
+_DESCRIPTOR = ToolDescriptor(
+    name="weather.current",
+    version="1.0.0",
+    title="天气查询",
+    description="查询指定城市的实时天气信息（温度、天气状况、风速等）。当用户问天气、气温、下雨、下雪等情况时使用。",
+    category="READ",
+    risk_level="R1",
+    side_effect="read",
+    timeout_ms=10000,
+    required_permissions=["weather.read"],
+    data_classification=["internal"],
+    owner="tools",
+    tags=["weather", "location"],
+)
+
+
+# ============ LangChain Tool ============
 
 class WeatherInput(BaseModel):
     city: str = Field(description="城市名称，如 '北京'、'上海'、'New York'")
@@ -64,7 +87,7 @@ def get_weather(city: str) -> str:
             wdata = weather_res.json()
 
             c = wdata["current_weather"]
-            desc = WEATHER_CODES.get(c["weathercode"], f"未知")
+            desc = WEATHER_CODES.get(c["weathercode"], "未知")
             return f"🌤 {r['name']}（{r.get('country', '')}）当前天气：\n🌡 温度：{c['temperature']}°C\n🌦 天气：{desc}\n💨 风速：{c['windspeed']} km/h"
     except Exception:
         pass
