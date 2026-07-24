@@ -1,7 +1,11 @@
+import json
+import logging
+from uuid import uuid4
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from src.agents.base import build_tool_agent
+from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
 
 router = APIRouter()
 
@@ -18,14 +22,24 @@ async def stream(request: StreamRequest):
     from fastapi.responses import StreamingResponse
 
     agent = build_tool_agent()
-    thread_id = request.thread_id or "default"
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 20}
+    thread_id = request.thread_id or str(uuid4())
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": AGENT_RECURSION_LIMIT,
+    }
     if request.user_id:
         config["configurable"]["user_id"] = request.user_id
+        try:
+            from src.profile.service import ProfileService
 
-    input_data = {"messages": [{"role": "user", "content": request.message}]}
-    if request.user_id:
-        input_data["user_id"] = request.user_id
+            ProfileService.get_or_create(request.user_id)
+        except Exception:
+            pass
+
+    input_data = {
+        "messages": [{"role": "user", "content": request.message}],
+        "user_id": request.user_id,
+    }
 
     async def event_generator():
         try:
@@ -37,12 +51,13 @@ async def stream(request: StreamRequest):
                 kind = event.get("event")
                 if kind == "on_chat_model_stream":
                     chunk = event["data"]["chunk"]
-                    if chunk.content:
-                        yield f"data: {chunk.content}\n\n"
-                elif kind == "on_tool_start":
-                    yield f"data: [tool:{event['name']}]\n\n"
-        except Exception as e:
-            yield f"data: [error:{e!s}]\n\n"
+                    if isinstance(chunk.content, str) and chunk.content:
+                        payload = json.dumps({"text": chunk.content}, ensure_ascii=False)
+                        yield f"data: {payload}\n\n"
+        except Exception:
+            logging.getLogger("agent.stream").exception("Stream failed")
+            payload = json.dumps({"error": "Internal server error"}, ensure_ascii=False)
+            yield f"data: {payload}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

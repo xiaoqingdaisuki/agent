@@ -2,8 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { createToolAgent } from "../../agents/tool-agent.js";
 import { getHistory, appendMessage } from "../../memory/conversation.js";
 import { MemoryService, ProfileService } from "../../profile/service.js";
-import { HumanMessage, AIMessage } from "@langchain/core/messages";
-import { TOOL_CALLING_PROMPT } from "../../prompts/system.js";
+import { HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 
 export async function registerChatRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
@@ -18,25 +17,26 @@ export async function registerChatRoutes(app: FastifyInstance) {
         const threadId = thread_id || crypto.randomUUID();
 
         // 注入用户记忆（与 v1 API 保持一致）
-        let systemPrompt: string | undefined;
+        const memoryContext: SystemMessage[] = [];
         if (user_id) {
           try {
-            const profile = ProfileService.getOrCreate(user_id);
-            const memoryContext = MemoryService.buildMemoryContext(user_id);
-            if (memoryContext) {
-              systemPrompt = `${memoryContext}\n\n${TOOL_CALLING_PROMPT}`;
+            ProfileService.getOrCreate(user_id);
+            const context = MemoryService.buildMemoryContext(user_id);
+            if (context) {
+              memoryContext.push(new SystemMessage(context));
             }
           } catch {
             // 记忆模块不可用时静默降级
           }
         }
 
-        const agent = await createToolAgent(systemPrompt);
+        const agent = await createToolAgent();
         const history = getHistory(threadId);
 
         const result = await (agent as any).invoke({
           input: message,
           chat_history: history,
+          memory_context: memoryContext,
         });
 
         const reply_text =

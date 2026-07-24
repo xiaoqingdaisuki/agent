@@ -18,8 +18,8 @@ class Embedder:
     ):
         self.embeddings = OpenAIEmbeddings(
             model=model,
-            openai_api_key=api_key,
-            openai_base_url=base_url,
+            api_key=api_key,
+            base_url=base_url,
         )
         self.model = model
 
@@ -30,11 +30,7 @@ class Embedder:
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """批量向量化"""
-        results = []
-        for text in texts:
-            embedding = await self.embed(text)
-            results.append(embedding)
-        return results
+        return await self.embeddings.aembed_documents(texts)
 
     def embed_sync(self, text: str) -> list[float]:
         """同步向量化"""

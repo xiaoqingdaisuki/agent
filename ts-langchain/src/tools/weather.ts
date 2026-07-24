@@ -63,10 +63,12 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
     days: z.number().int().min(1).max(7).default(7).describe("预报天数，默认 7 天"),
   }),
   func: async ({ city, days = 7 }) => {
+    const signal = AbortSignal.timeout(10000);
     // 尝试 Open-Meteo
     try {
       const geoRes = await fetch(
-        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh&format=json`
+        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh&format=json`,
+        { signal },
       );
       if (!geoRes.ok) throw new Error(`Geocoding HTTP ${geoRes.status}`);
       const geoData = (await geoRes.json()) as { results?: Array<{ latitude: number; longitude: number; name: string; country?: string }> };
@@ -75,7 +77,8 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
       const { latitude, longitude, name, country } = geoData.results[0];
 
       const weatherRes = await fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=auto&forecast_days=${days}`
+        `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=auto&forecast_days=${days}`,
+        { signal },
       );
       if (!weatherRes.ok) throw new Error(`Weather HTTP ${weatherRes.status}`);
       const weatherData = (await weatherRes.json()) as {
@@ -117,7 +120,7 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
       try {
         const wttrRes = await fetch(`https://wttr.in/${encodeURIComponent(city)}?format=j1&lang=zh`, {
           headers: { "User-Agent": "curl/7.68" },
-          signal: AbortSignal.timeout(8000),
+          signal,
         });
         if (wttrRes.ok) {
           const wData = (await wttrRes.json()) as {

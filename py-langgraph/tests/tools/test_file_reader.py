@@ -16,13 +16,14 @@ from src.tools.file_reader import (
 
 
 @pytest.fixture
-def tmp_workspace(tmp_path):
+def tmp_workspace(tmp_path, monkeypatch):
     """创建临时工作区，包含测试文件"""
     # 创建测试文件
     (tmp_path / "README.md").write_text("# Test Project\n\nThis is a test.")
     (tmp_path / "config.json").write_text('{"key": "value"}')
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "main.py").write_text("print('hello')\n" * 100)
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
     return str(tmp_path)
 
 
@@ -54,9 +55,10 @@ class TestResolveSafePath:
         assert path is not None
         assert err is None
 
-    def test_absolute_path_stripped(self):
+    def test_absolute_path_rejected(self):
         path, err = _resolve_safe_path("/README.md", "/workspace")
-        assert path is not None
+        assert path is None
+        assert "相对于工作区" in err
 
     def test_empty_path(self):
         path, err = _resolve_safe_path("", "/workspace")
@@ -114,7 +116,6 @@ class TestFileReadTool:
     async def test_read_markdown(self, tmp_workspace):
         result = await file_read.ainvoke({
             "filepath": "README.md",
-            "root_dir": tmp_workspace,
         })
         assert "Test Project" in result
         assert "📄" in result
@@ -123,7 +124,6 @@ class TestFileReadTool:
     async def test_read_json(self, tmp_workspace):
         result = await file_read.ainvoke({
             "filepath": "config.json",
-            "root_dir": tmp_workspace,
         })
         assert "key" in result
 
@@ -133,7 +133,6 @@ class TestFileReadTool:
             "filepath": "src/main.py",
             "offset": 0,
             "limit": 10,
-            "root_dir": tmp_workspace,
         })
         assert "hello" in result
 
@@ -141,7 +140,6 @@ class TestFileReadTool:
     async def test_nonexistent_file(self, tmp_workspace):
         result = await file_read.ainvoke({
             "filepath": "nonexistent.txt",
-            "root_dir": tmp_workspace,
         })
         assert "不存在" in result
 
@@ -153,6 +151,5 @@ class TestFileReadTool:
             f.write("SECRET=value")
         result = await file_read.ainvoke({
             "filepath": ".env",
-            "root_dir": tmp_workspace,
         })
         assert "不支持" in result

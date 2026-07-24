@@ -59,7 +59,14 @@ _SENSITIVE_PATTERNS = [
     (re.compile(r"(api[_-]?key|apikey)\s*[:=]\s*['\"]?([A-Za-z0-9_\-]{16,})['\"]?", re.IGNORECASE), "***REDACTED***"),
     (re.compile(r"(password|passwd|pwd)\s*[:=]\s*['\"]?([^'\"\s]{4,})['\"]?", re.IGNORECASE), "***REDACTED***"),
     (re.compile(r"(token|secret)\s*[:=]\s*['\"]?([A-Za-z0-9_\-\.]{16,})['\"]?", re.IGNORECASE), "***REDACTED***"),
-    (re.compile(r"-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----"), "***REDACTED***"),
+    (
+        re.compile(
+            r"-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?"
+            r"-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----",
+            re.IGNORECASE,
+        ),
+        "***REDACTED***",
+    ),
 ]
 
 
@@ -90,11 +97,15 @@ def _resolve_safe_path(filepath: str, root_dir: str) -> tuple[Path | None, str |
     返回 (resolved_path, error_message)
     """
     # 规范化路径
-    clean_path = filepath.strip().lstrip("/\\")
+    clean_path = filepath.strip()
 
     # 拒绝空路径
     if not clean_path:
         return None, "文件路径不能为空"
+
+    candidate = Path(clean_path)
+    if candidate.is_absolute() or candidate.drive or candidate.root:
+        return None, "文件路径必须相对于工作区"
 
     # 检查是否包含路径穿越序列
     if ".." in clean_path.split("/") or ".." in clean_path.split("\\"):
@@ -166,13 +177,13 @@ class FileReadInput(BaseModel):
     filepath: str = Field(description="要读取的文件路径（相对于工作区），如 'README.md' 或 'src/main.py'")
     offset: int = Field(default=0, description="起始行号（从 0 开始），用于分段读取大文件", ge=0)
     limit: int = Field(default=100, description="最多读取行数，默认 100，最大 500", ge=1, le=500)
-    root_dir: str = Field(default=".", description="工作区根目录路径（服务端配置，前端无需填写）")
 
 
 @tool(args_schema=FileReadInput)
-def file_read(filepath: str, offset: int = 0, limit: int = 100, root_dir: str = ".") -> str:
+def file_read(filepath: str, offset: int = 0, limit: int = 100) -> str:
     """安全读取工作区内的指定文件内容。自动进行路径安全检查，防止访问工作区外的文件。"""
     # 1. 路径安全检查
+    root_dir = os.environ.get("AGENT_WORKSPACE_ROOT", ".")
     safe_path, error = _resolve_safe_path(filepath, root_dir)
     if not safe_path:
         return f"❌ 路径安全拒绝：{error}"

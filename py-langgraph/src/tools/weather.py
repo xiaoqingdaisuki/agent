@@ -63,7 +63,7 @@ def get_weather(city: str, days: int = 7) -> str:
     """查询指定城市的实时天气及未来 7 天天气预报。当用户问天气、气温、下雨、下雪等情况时使用。优先通过 Open-Meteo 获取，如果失败再用 web_search 搜索。"""
     # 尝试 Open-Meteo
     try:
-        with httpx.Client(timeout=10) as client:
+        with httpx.Client(timeout=5) as client:
             geo_res = client.get(
                 "https://geocoding-api.open-meteo.com/v1/search",
                 params={"name": city, "count": 1, "language": "zh", "format": "json"},
@@ -107,7 +107,7 @@ def get_weather(city: str, days: int = 7) -> str:
                     min_t = daily["temperature_2m_min"][i]
                     wcode = daily["weathercode"][i]
                     wdesc = WEATHER_CODES.get(wcode, "未知")
-                    weekday = "今天" if i == 0 else ("明天" if i == 1 else f"周{'日一二三四五六'[__import__('datetime').datetime.strptime(date, '%Y-%m-%d').weekday()]}")
+                    weekday = "今天" if i == 0 else ("明天" if i == 1 else f"周{'一二三四五六日'[__import__('datetime').datetime.strptime(date, '%Y-%m-%d').weekday()]}")
                     lines.append(f"  {weekday}({date[5:]}) {wdesc} {min_t}°C ~ {max_t}°C")
 
             return "\n".join(lines)
@@ -116,7 +116,7 @@ def get_weather(city: str, days: int = 7) -> str:
 
     # 备用：wttr.in
     try:
-        with httpx.Client(timeout=10) as client:
+        with httpx.Client(timeout=5) as client:
             wttr_res = client.get(
                 f"https://wttr.in/{city}",
                 params={"format": "j1", "lang": "zh"},

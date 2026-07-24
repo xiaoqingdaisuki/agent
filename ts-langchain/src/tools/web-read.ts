@@ -11,6 +11,8 @@
 
 import { DynamicStructuredTool } from "langchain/tools";
 import { z } from "zod";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 
 import type { ToolDescriptor } from "./contracts.js";
 
@@ -22,7 +24,7 @@ const BLOCKED_HOSTS = new Set([
   "metadata.google.internal", // GCP metadata
 ]);
 
-function isSafeUrl(url: string): { safe: boolean; reason?: string } {
+export function isSafeUrl(url: string): { safe: boolean; reason?: string } {
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -36,16 +38,24 @@ function isSafeUrl(url: string): { safe: boolean; reason?: string } {
       return { safe: false, reason: `目标主机在黑名单中: ${hostname}` };
     }
 
+    if (parsed.username || parsed.password) {
+      return { safe: false, reason: "URL 不允许包含用户名或密码" };
+    }
+
     // 检查是否为私有 IP
     const parts = hostname.split(".").map(Number);
     if (parts.length === 4 && parts.every((p) => !Number.isNaN(p))) {
       const [a, b] = parts;
-      // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8
+      // Private, loopback, link-local, carrier-grade NAT, multicast/reserved.
       if (
+        a === 0 ||
         a === 10 ||
+        (a === 100 && b >= 64 && b <= 127) ||
         (a === 172 && b >= 16 && b <= 31) ||
         (a === 192 && b === 168) ||
-        a === 127
+        a === 127 ||
+        (a === 169 && b === 254) ||
+        a >= 224
       ) {
         return { safe: false, reason: `目标 IP 是内网/私有地址: ${hostname}` };
       }
@@ -55,6 +65,79 @@ function isSafeUrl(url: string): { safe: boolean; reason?: string } {
   } catch {
     return { safe: false, reason: "URL 格式无效" };
   }
+}
+
+function isBlockedIp(address: string): boolean {
+  if (isIP(address) === 4) {
+    return !isSafeUrl(`http://${address}`).safe;
+  }
+  if (isIP(address) === 6) {
+    const normalized = address.toLowerCase();
+    return (
+      normalized === "::" ||
+      normalized === "::1" ||
+      normalized.startsWith("fc") ||
+      normalized.startsWith("fd") ||
+      /^fe[89ab]/.test(normalized) ||
+      normalized.startsWith("ff")
+    );
+  }
+  return true;
+}
+
+async function validateNetworkUrl(url: string): Promise<{ safe: boolean; reason?: string }> {
+  const syntaxCheck = isSafeUrl(url);
+  if (!syntaxCheck.safe) return syntaxCheck;
+
+  const parsed = new URL(url);
+  if (isIP(parsed.hostname)) return syntaxCheck;
+
+  try {
+    const addresses = await lookup(parsed.hostname, { all: true });
+    const blocked = addresses.find(({ address }) => isBlockedIp(address));
+    if (blocked) {
+      return {
+        safe: false,
+        reason: `目标域名解析到内网/保留地址: ${blocked.address}`,
+      };
+    }
+  } catch {
+    return { safe: false, reason: `无法解析目标主机: ${parsed.hostname}` };
+  }
+  return { safe: true };
+}
+
+async function readTextWithLimit(
+  response: Response,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean }> {
+  if (!response.body) return { text: "", truncated: false };
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let truncated = false;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const remaining = maxBytes - total;
+    if (value.byteLength > remaining) {
+      chunks.push(Buffer.from(value.subarray(0, remaining)));
+      truncated = true;
+      await reader.cancel();
+      break;
+    }
+    chunks.push(Buffer.from(value));
+    total += value.byteLength;
+    if (total >= maxBytes) {
+      truncated = true;
+      await reader.cancel();
+      break;
+    }
+  }
+
+  return { text: Buffer.concat(chunks).toString("utf8"), truncated };
 }
 
 // ============ 正文清洗 ============
@@ -129,53 +212,59 @@ export const webReadTool: DynamicStructuredTool = new DynamicStructuredTool({
     url: z.string().url().describe("要读取的网页 URL，必须是完整的 URL（https:// 或 http://）"),
   }),
   func: async ({ url }) => {
-    // 1. URL 安全检查
-    const { safe, reason } = isSafeUrl(url);
+    // 1. URL 和 DNS 安全检查
+    const { safe, reason } = await validateNetworkUrl(url);
     if (!safe) {
       return `URL 安全拒绝：${reason}`;
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      let currentUrl = url;
+      let res: Response | undefined;
+      for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
+        const targetCheck = await validateNetworkUrl(currentUrl);
+        if (!targetCheck.safe) {
+          return `重定向目标 URL 安全拒绝：${targetCheck.reason}`;
+        }
 
-      const res = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (compatible; AI-Agent/1.0)",
-          Accept: "text/html,application/xhtml+xml,application/xml,text/plain,*/*",
-        },
-        signal: controller.signal,
-        redirect: "follow",
-      });
+        res = await fetch(currentUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible; AI-Agent/1.0)",
+            Accept: "text/html,application/xhtml+xml,application/xml,text/plain,*/*",
+          },
+          signal: controller.signal,
+          redirect: "manual",
+        });
 
-      clearTimeout(timeoutId);
+        if (![301, 302, 303, 307, 308].includes(res.status)) break;
+        const location = res.headers.get("location");
+        await res.body?.cancel();
+        if (!location) return "无法获取网页：重定向响应缺少 Location";
+        if (redirectCount === 3) return "无法获取网页：重定向次数超过 3 次";
+        currentUrl = new URL(location, currentUrl).toString();
+        res = undefined;
+      }
+
+      if (!res) return "无法获取网页：无有效响应";
 
       if (!res.ok) {
         return `无法获取网页：HTTP ${res.status} ${res.statusText}`;
       }
 
-      // 2. 重定向复检
-      if (res.redirected) {
-        const finalUrl = res.url;
-        const check = isSafeUrl(finalUrl);
-        if (!check.safe) {
-          return `重定向目标 URL 安全拒绝：${check.reason}`;
-        }
-      }
-
-      // 3. 内容类型检查
+      // 2. 内容类型检查
       const contentType = res.headers.get("content-type") || "";
       if (!isTextContent(contentType)) {
         return `不支持的内容类型：${contentType.split(";")[0]}（仅支持文本类内容）`;
       }
 
-      // 4. 大小限制（200KB）
-      const html = await res.text();
+      // 3. 流式读取并限制响应体（200KB）
       const maxBytes = 200 * 1024;
-      if (new TextEncoder().encode(html).length > maxBytes) {
-        // 截断
-        const truncated = html.slice(0, maxBytes / 2);
-        const text = cleanHtml(truncated) + "\n\n[内容过长，已截断]";
+      const body = await readTextWithLimit(res, maxBytes);
+      const html = body.text;
+      if (body.truncated) {
+        const text = cleanHtml(html) + "\n\n[内容过长，已截断]";
         return `📄 网页内容（${url}）\n大小：${text.length} 字符\n${"─".repeat(40)}\n\n${text}`;
       }
 
@@ -195,6 +284,8 @@ export const webReadTool: DynamicStructuredTool = new DynamicStructuredTool({
         return `获取网页超时（10秒）：${url}`;
       }
       return `获取网页出错：${error instanceof Error ? error.message : "未知错误"}`;
+    } finally {
+      clearTimeout(timeoutId);
     }
   },
 });

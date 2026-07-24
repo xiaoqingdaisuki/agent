@@ -57,3 +57,7 @@ def test_multiple_xml_calls():
     msg = AIMessage(content=xml)
     result = _convert_xml_tool_calls(msg)
     assert len(result.tool_calls) == 2
+    assert [call["id"] for call in result.tool_calls] == [
+        "call_get_weather_1",
+        "call_get_weather_2",
+    ]

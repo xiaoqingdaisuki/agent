@@ -128,7 +128,7 @@ async function searchSearx(query: string): Promise<SearchResultItem[] | null> {
         `${instance}/search?q=${encodeURIComponent(query)}&format=json&engines=google,bing,duckduckgo&pageno=1`,
         {
           headers: { Accept: "application/json", "User-Agent": "curl/7.68" },
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(3500),
         },
       );
 
@@ -214,20 +214,25 @@ async function multiSourceSearch(query: string): Promise<SearchResultItem[]> {
     ["duckduckgo", searchDuckDuckGo],
   ];
 
-  for (const [providerName, searchFn] of sources) {
-    try {
-      const results = await searchFn(query);
-      if (results) {
-        for (const r of results) {
-          if (r.url && !seenUrls.has(r.url)) {
-            seenUrls.add(r.url);
-            r.provider = providerName;
-            allResults.push(r);
-          }
+  const sourceResults = await Promise.all(
+    sources.map(async ([providerName, searchFn]) => {
+      try {
+        return [providerName, await searchFn(query)] as const;
+      } catch {
+        return [providerName, null] as const;
+      }
+    }),
+  );
+
+  for (const [providerName, results] of sourceResults) {
+    if (results) {
+      for (const r of results) {
+        if (r.url && !seenUrls.has(r.url)) {
+          seenUrls.add(r.url);
+          r.provider = providerName;
+          allResults.push(r);
         }
       }
-    } catch {
-      continue;
     }
   }
 

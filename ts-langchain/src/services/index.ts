@@ -9,12 +9,12 @@
  */
 
 import { createToolAgent } from "../agents/tool-agent.js";
-import { getHistory, clearHistory } from "../memory/conversation.js";
+import { getHistory, clearHistory, appendMessage } from "../memory/conversation.js";
 import { RAGAgent } from "../rag/rag-agent.js";
 import { DocumentLoader } from "../rag/loader.js";
 import { TextSplitter } from "../rag/splitter.js";
 import { MemoryService, ProfileService, HistoryService } from "../profile/service.js";
-import { TOOL_CALLING_PROMPT } from "../prompts/system.js";
+import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 
 // ============ 类型定义 ============
 
@@ -148,36 +148,27 @@ export class ConversationService {
 // ============ Agent Service ============
 
 export class AgentService {
-  private static toolAgent: Awaited<ReturnType<typeof createToolAgent>> | null = null;
-
-  private static async getToolAgent() {
-    if (!this.toolAgent) this.toolAgent = await createToolAgent();
-    return this.toolAgent;
-  }
-
   static async chat(conversationId: string, content: string, userId?: string): Promise<Message> {
     try {
       const history = getHistory(conversationId);
-      let systemPrompt = TOOL_CALLING_PROMPT;
+      const memoryContext: SystemMessage[] = [];
 
       // 注入用户记忆
       if (userId) {
         try {
-          const profile = ProfileService.getOrCreate(userId);
-          const memoryContext = MemoryService.buildMemoryContext(userId);
-          if (memoryContext) {
-            systemPrompt = `${memoryContext}\n\n${TOOL_CALLING_PROMPT}`;
-          }
+          ProfileService.getOrCreate(userId);
+          const context = MemoryService.buildMemoryContext(userId);
+          if (context) memoryContext.push(new SystemMessage(context));
         } catch {
           // 记忆模块不可用时静默降级
         }
       }
 
-      // 每次请求重建 agent 以注入动态 system prompt
-      const agent = await createToolAgent(systemPrompt);
+      const agent = await createToolAgent();
       const result = await (agent as any).invoke({
         input: content,
         chat_history: history,
+        memory_context: memoryContext,
       });
 
       const reply: Message = {
@@ -186,6 +177,9 @@ export class AgentService {
         content: (result.output as string) || "抱歉，我没有理解您的问题。",
         createdAt: new Date().toISOString(),
       };
+
+      appendMessage(conversationId, new HumanMessage(content));
+      appendMessage(conversationId, new AIMessage(reply.content));
 
       // 记录问答历史 + 提取新记忆
       if (userId) {
@@ -228,22 +222,24 @@ export class AgentService {
     userId?: string
   ): AsyncGenerator<string, void, unknown> {
     try {
-      let systemPrompt = TOOL_CALLING_PROMPT;
+      const history = getHistory(conversationId);
+      const memoryContext: SystemMessage[] = [];
 
       if (userId) {
         try {
-          const profile = ProfileService.getOrCreate(userId);
-          const memoryContext = MemoryService.buildMemoryContext(userId);
-          if (memoryContext) {
-            systemPrompt = `${memoryContext}\n\n${TOOL_CALLING_PROMPT}`;
-          }
+          ProfileService.getOrCreate(userId);
+          const context = MemoryService.buildMemoryContext(userId);
+          if (context) memoryContext.push(new SystemMessage(context));
         } catch {
           // memory module unavailable
         }
       }
 
-      const agent = await createToolAgent(systemPrompt);
-      const stream = await (agent as any).stream({ input: content, chat_history: [] }, { tags: ["stream"] });
+      const agent = await createToolAgent();
+      const stream = await (agent as any).stream(
+        { input: content, chat_history: history, memory_context: memoryContext },
+        { tags: ["stream"] },
+      );
 
       let fullAnswer = "";
       for await (const chunk of stream) {
@@ -251,6 +247,11 @@ export class AgentService {
           fullAnswer += chunk.output;
           yield chunk.output;
         }
+      }
+
+      if (fullAnswer) {
+        appendMessage(conversationId, new HumanMessage(content));
+        appendMessage(conversationId, new AIMessage(fullAnswer));
       }
 
       // Record Q&A + extract memories

@@ -261,23 +261,20 @@ class AgentService:
     @staticmethod
     async def chat(conversation_id: str, content: str, user_id: str = None) -> Message:
         try:
-            from src.agents.base import build_tool_agent
+            from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
             from src.profile.service import HistoryService, MemoryService, ProfileService
 
-            # 构建记忆上下文
-            system_prompt = None
             if user_id:
                 try:
                     ProfileService.get_or_create(user_id)
-                    memory_context = MemoryService.build_memory_context(user_id)
-                    if memory_context:
-                        from src.prompts.system import TOOL_CALLING_PROMPT
-                        system_prompt = f"{memory_context}\n\n{TOOL_CALLING_PROMPT}"
                 except Exception:
                     pass
 
-            agent = build_tool_agent(system_prompt_override=system_prompt)
-            config = {"configurable": {"thread_id": conversation_id}, "recursion_limit": 20}
+            agent = build_tool_agent()
+            config = {
+                "configurable": {"thread_id": conversation_id},
+                "recursion_limit": AGENT_RECURSION_LIMIT,
+            }
             if user_id:
                 config["configurable"]["user_id"] = user_id
 
@@ -323,22 +320,20 @@ class AgentService:
     @staticmethod
     async def chat_stream(conversation_id: str, content: str, user_id: str = None):
         try:
-            from src.agents.base import build_tool_agent
+            from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
             from src.profile.service import HistoryService, MemoryService, ProfileService
 
-            system_prompt = None
             if user_id:
                 try:
                     ProfileService.get_or_create(user_id)
-                    memory_context = MemoryService.build_memory_context(user_id)
-                    if memory_context:
-                        from src.prompts.system import TOOL_CALLING_PROMPT
-                        system_prompt = f"{memory_context}\n\n{TOOL_CALLING_PROMPT}"
                 except Exception:
                     pass
 
-            agent = build_tool_agent(system_prompt_override=system_prompt)
-            config = {"configurable": {"thread_id": conversation_id}, "recursion_limit": 20}
+            agent = build_tool_agent()
+            config = {
+                "configurable": {"thread_id": conversation_id},
+                "recursion_limit": AGENT_RECURSION_LIMIT,
+            }
             if user_id:
                 config["configurable"]["user_id"] = user_id
 

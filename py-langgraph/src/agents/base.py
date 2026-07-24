@@ -1,18 +1,43 @@
+import logging
 import re
-from typing import Literal
+from functools import lru_cache
+from typing import Annotated, Literal
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, RemoveMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from typing_extensions import TypedDict
 
 
-class AgentState(TypedDict):
+MAX_TOOL_CALLS = 8
+AGENT_RECURSION_LIMIT = MAX_TOOL_CALLS * 2 + 4
+MAX_HISTORY_MESSAGES = 50
+
+
+class AgentState(TypedDict, total=False):
     """LangGraph Agent 状态 — 显式定义，与 TS 版隐式状态形成对比"""
-    messages: list[BaseMessage]
-    tool_call_count: int  # 工具调用计数器，防止无限循环
+    messages: Annotated[list[BaseMessage], add_messages]
+    user_id: str | None
+
+
+def trim_history(state: AgentState) -> dict[str, list[RemoveMessage]]:
+    """Bound checkpoint growth while keeping a complete user turn boundary."""
+    messages = state["messages"]
+    if len(messages) <= MAX_HISTORY_MESSAGES:
+        return {}
+
+    keep_from = len(messages) - MAX_HISTORY_MESSAGES
+    while keep_from < len(messages) and messages[keep_from].type != "human":
+        keep_from += 1
+    removals = [
+        RemoveMessage(id=message.id)
+        for message in messages[:keep_from]
+        if message.id is not None
+    ]
+    return {"messages": removals} if removals else {}
 
 
 def get_llm(provider: str = "openai"):
@@ -39,7 +64,7 @@ def build_chat_agent(checkpointer=None):
 
     llm = get_llm()
 
-    def agent_node(state: AgentState):
+    async def agent_node(state: AgentState):
         system_prompt = SYSTEM_PROMPT
         user_id = state.get("user_id")
         if user_id:
@@ -48,15 +73,19 @@ def build_chat_agent(checkpointer=None):
                 memory_context = MemoryService.build_memory_context(user_id)
                 if memory_context:
                     system_prompt = f"{memory_context}\n\n{SYSTEM_PROMPT}"
-            except ImportError:
+            except Exception:
                 pass
 
-        response = llm.invoke([SystemMessage(content=system_prompt), *state["messages"]])
+        response = await llm.ainvoke(
+            [SystemMessage(content=system_prompt), *state["messages"]]
+        )
         return {"messages": [response]}
 
     builder = StateGraph(AgentState)
+    builder.add_node("trim_history", trim_history)
     builder.add_node("agent", agent_node)
-    builder.add_edge(START, "agent")
+    builder.add_edge(START, "trim_history")
+    builder.add_edge("trim_history", "agent")
     builder.add_edge("agent", END)
 
     cp = checkpointer or _get_default_checkpointer()
@@ -93,16 +122,23 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
     param_open = "<parameter=(\\w+)>"
     param_close = "</parameter>"
 
-    for func_match in re.finditer(tag_open + "(.*?)" + tag_close, content, re.DOTALL):
+    for index, func_match in enumerate(
+        re.finditer(tag_open + "(.*?)" + tag_close, content, re.DOTALL),
+        start=1,
+    ):
         func_name = func_match.group(1)
         params_text = func_match.group(2)
         args: dict[str, str] = {}
-        for param_match in re.finditer(param_open + "(.*?)" + param_close, params_text, re.DOTALL):
+        for param_match in re.finditer(
+            param_open + "(.*?)" + param_close,
+            params_text,
+            re.DOTALL,
+        ):
             args[param_match.group(1)] = param_match.group(2).strip()
         tool_calls.append({
             "name": func_name,
             "args": args,
-            "id": f"call_{func_name}_001",
+            "id": f"call_{func_name}_{index}",
         })
 
     if not tool_calls:
@@ -111,23 +147,39 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
     # Strip XML tool calls from content using non-capturing patterns
     strip_open = "<function=\\w+>"
     strip_close = "</function>"
-    clean_content = re.sub(strip_open + ".*?" + strip_close + "\\s*", "", content, flags=re.DOTALL).strip()
+    clean_content = re.sub(
+        strip_open + ".*?" + strip_close + "\\s*",
+        "",
+        content,
+        flags=re.DOTALL,
+    ).strip()
     return AIMessage(
         content=clean_content,
         tool_calls=tool_calls,
+        id=message.id,
+        response_metadata=message.response_metadata,
     )
 
 
-def should_continue(state: AgentState) -> Literal["tools", END]:
-    """判断是否需要调用工具"""
-    # 工具调用次数上限（与 TS 版 maxIterations 对齐，每轮 = agent→tools 一次）
-    MAX_TOOL_CALLS = 5
-    call_count = state.get("tool_call_count", 0)
-    if call_count >= MAX_TOOL_CALLS:
-        return END
+def _current_turn_tool_call_count(messages: list[BaseMessage]) -> int:
+    """Count requested tools since the most recent user message."""
+    count = 0
+    for message in reversed(messages):
+        if message.type == "human":
+            break
+        tool_calls = getattr(message, "tool_calls", None)
+        if tool_calls:
+            count += len(tool_calls)
+    return count
 
+
+def should_continue(state: AgentState) -> Literal["tools", "limit", END]:
+    """判断是否需要调用工具"""
     last_message = state["messages"][-1]
-    if last_message.tool_calls:
+    tool_calls = getattr(last_message, "tool_calls", None)
+    if tool_calls:
+        if _current_turn_tool_call_count(state["messages"]) > MAX_TOOL_CALLS:
+            return "limit"
         return "tools"
     # Also check for XML-format tool calls (e.g. StepFun models)
     content = last_message.content if hasattr(last_message, "content") else ""
@@ -136,7 +188,7 @@ def should_continue(state: AgentState) -> Literal["tools", END]:
     return END
 
 
-def build_tool_agent(checkpointer=None, system_prompt_override=None):
+def _compile_tool_agent(checkpointer, base_prompt: str):
     """
     工具调用 Agent — 带条件路由的 StateGraph
 
@@ -147,16 +199,12 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
       agent → conditional_edges(should_continue) → tools 或 END
       tools → agent
     """
-    from src.prompts.system import TOOL_CALLING_PROMPT
     from src.tools import tools
 
     llm = get_llm()
-    base_prompt = system_prompt_override or TOOL_CALLING_PROMPT
+    llm_with_tools = llm.bind_tools(tools)
 
-    # 过滤工具列表，只保留 LLM 实际需要的（移除 observability 等非 LLM 工具）
-    llm_tools = [t for t in tools if callable(t)]
-
-    def agent_node(state: AgentState):
+    async def agent_node(state: AgentState):
         system_prompt = base_prompt
         user_id = state.get("user_id")
         if user_id:
@@ -165,39 +213,92 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
                 memory_context = MemoryService.build_memory_context(user_id)
                 if memory_context:
                     system_prompt = f"{memory_context}\n\n{base_prompt}"
-            except ImportError:
+            except Exception:
                 pass
 
-        response = llm.invoke([SystemMessage(content=system_prompt), *state["messages"]])
+        response = await llm_with_tools.ainvoke(
+            [SystemMessage(content=system_prompt), *state["messages"]]
+        )
 
         # Handle XML-format tool calls (e.g. StepFun step-3.7-flash)
         response = _convert_xml_tool_calls(response)
 
-        # 工具调用计数：如果模型返回了 tool_calls，递增计数器
-        current_count = state.get("tool_call_count", 0)
         if hasattr(response, "tool_calls") and response.tool_calls:
-            current_count += 1
-            tool_names = [tc.get("function", {}).get("name", tc.get("name", "?")) for tc in response.tool_calls]
-            import logging
-            logging.getLogger("agent").info(f"[tool_call #{current_count}] tools: {tool_names} | content: {(response.content or '')[:80]}")
-            current_count += 1
+            tool_names = [
+                tc.get("function", {}).get("name", tc.get("name", "?"))
+                for tc in response.tool_calls
+            ]
+            call_count = _current_turn_tool_call_count([*state["messages"], response])
+            logging.getLogger("agent").info(
+                "[tool_call #%s] tools: %s | content: %s",
+                call_count,
+                tool_names,
+                (response.content or "")[:80],
+            )
 
-        return {"messages": [response], "tool_call_count": current_count}
+        return {"messages": [response]}
+
+    async def limit_node(state: AgentState):
+        # Drop the unexecuted tool-call message so providers do not reject a
+        # dangling assistant tool request without matching ToolMessages.
+        messages = state["messages"]
+        if getattr(messages[-1], "tool_calls", None):
+            messages = messages[:-1]
+        response = await llm.ainvoke([
+            SystemMessage(content=base_prompt),
+            *messages,
+            SystemMessage(
+                content=(
+                    "The tool-call safety limit has been reached. Give the best final "
+                    "answer using results already available; do not request another tool."
+                )
+            ),
+        ])
+        pending_message = state["messages"][-1]
+        return {
+            "messages": [RemoveMessage(id=pending_message.id), response],
+        }
 
     builder = StateGraph(AgentState)
+    builder.add_node("trim_history", trim_history)
     builder.add_node("agent", agent_node)
-    builder.add_node("tools", ToolNode(llm_tools))
+    builder.add_node("tools", ToolNode(tools))
+    builder.add_node("limit", limit_node)
 
     # 显式定义图的边
-    builder.add_edge(START, "agent")
+    builder.add_edge(START, "trim_history")
+    builder.add_edge("trim_history", "agent")
     # 条件路由：这是 LangGraph 的核心特色 — 你自己定义路由逻辑
-    builder.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
+    builder.add_conditional_edges(
+        "agent",
+        should_continue,
+        {"tools": "tools", "limit": "limit", END: END},
+    )
     builder.add_edge("tools", "agent")
+    builder.add_edge("limit", END)
 
     # 编译时附加 checkpointer
     # 递归限制在调用时通过 config={"recursion_limit": N} 传入
-    cp = checkpointer or _get_default_checkpointer()
     return builder.compile(
-        checkpointer=cp,
+        checkpointer=checkpointer,
         # interrupt_before=["tools"],  # 关闭：生产环境不需要每次工具调用都人工确认
     )
+
+
+@lru_cache(maxsize=10)
+def _build_cached_tool_agent(base_prompt: str):
+    return _compile_tool_agent(_get_default_checkpointer(), base_prompt)
+
+
+def build_tool_agent(checkpointer=None, system_prompt_override=None):
+    """Build a tool agent, reusing compiled graphs for the common checkpointer."""
+    from src.prompts.system import TOOL_CALLING_PROMPT
+
+    base_prompt = system_prompt_override or TOOL_CALLING_PROMPT
+    if checkpointer is None:
+        return _build_cached_tool_agent(base_prompt)
+    return _compile_tool_agent(checkpointer, base_prompt)
+
+
+def invalidate_tool_agent_cache() -> None:
+    _build_cached_tool_agent.cache_clear()

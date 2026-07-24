@@ -13,6 +13,8 @@
 
 import { DynamicStructuredTool } from "langchain/tools";
 import { z } from "zod";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 import type { ToolDescriptor } from "./contracts.js";
 
@@ -31,19 +33,23 @@ const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1MB
 const MAX_READ_CHARS = 50_000;
 
 const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
-  { pattern: /(api[_-]?key|apikey)\s*[:=]\s*['"]?([A-Za-z0-9_\-]{16,})['"]?/i, replacement: "***REDACTED***" },
-  { pattern: /(password|passwd|pwd)\s*[:=]\s*['"]?([^'\"\s]{4,})['"]?/i, replacement: "***REDACTED***" },
-  { pattern: /(token|secret)\s*[:=]\s*['"]?([A-Za-z0-9_\-\.]{16,})['"]?/i, replacement: "***REDACTED***" },
-  { pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----/, replacement: "***REDACTED***" },
+  { pattern: /(api[_-]?key|apikey)\s*[:=]\s*['"]?([A-Za-z0-9_\-]{16,})['"]?/gi, replacement: "***REDACTED***" },
+  { pattern: /(password|passwd|pwd)\s*[:=]\s*['"]?([^'\"\s]{4,})['"]?/gi, replacement: "***REDACTED***" },
+  { pattern: /(token|secret)\s*[:=]\s*['"]?([A-Za-z0-9_\-\.]{16,})['"]?/gi, replacement: "***REDACTED***" },
+  { pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----/gi, replacement: "***REDACTED***" },
 ];
 
 // ============ 安全路径解析 ============
 
-function resolveSafePath(filepath: string, rootDir: string): { path: string | null; error?: string } {
-  const cleanPath = filepath.trim().replace(/^[/\\]+/, "");
+export function resolveSafePath(filepath: string, rootDir: string): { path: string | null; error?: string } {
+  const cleanPath = filepath.trim();
 
   if (!cleanPath) {
     return { path: null, error: "文件路径不能为空" };
+  }
+
+  if (path.isAbsolute(cleanPath)) {
+    return { path: null, error: "文件路径必须相对于工作区" };
   }
 
   // 拒绝路径穿越
@@ -53,20 +59,17 @@ function resolveSafePath(filepath: string, rootDir: string): { path: string | nu
   }
 
   // 构建绝对路径并验证在根目录内
-  const root = rootDir || ".";
-  const fullPath = `${root}/${cleanPath}`;
-
-  // 简单检查：确保不包含 .. 的规范化路径
-  const normalized = fullPath.replace(/\\/g, "/");
-  const partsAfter = normalized.split("/");
-  if (partsAfter.includes("..")) {
-    return { path: null, error: "路径包含非法穿越序列" };
+  const root = path.resolve(rootDir || ".");
+  const fullPath = path.resolve(root, cleanPath);
+  const relative = path.relative(root, fullPath);
+  if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+    return { path: null, error: "文件路径超出工作区范围" };
   }
 
   return { path: fullPath };
 }
 
-function maskSensitive(content: string): string {
+export function maskSensitive(content: string): string {
   let masked = content;
   for (const { pattern, replacement } of SENSITIVE_PATTERNS) {
     masked = masked.replace(pattern, replacement);
@@ -126,17 +129,22 @@ export const fileReadTool: DynamicStructuredTool = new DynamicStructuredTool({
   }),
   func: async ({ filepath, offset, limit }) => {
     // 1. 路径安全检查
-    const { path: safePath, error } = resolveSafePath(filepath, ".");
+    const workspaceRoot = path.resolve(process.env.AGENT_WORKSPACE_ROOT || process.cwd());
+    const { path: safePath, error } = resolveSafePath(filepath, workspaceRoot);
     if (!safePath) {
       return `❌ 路径安全拒绝：${error}`;
     }
 
     // 2. 检查文件是否存在（Node.js fs）
     try {
-      const fs = await import("fs/promises");
-      const path = await import("path");
+      const realRoot = await fs.realpath(workspaceRoot);
+      const realPath = await fs.realpath(safePath);
+      const relative = path.relative(realRoot, realPath);
+      if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+        return `❌ 符号链接安全拒绝：${filepath}`;
+      }
 
-      const stat = await fs.stat(safePath).catch(async () => fs.stat(path.normalize(safePath)));
+      const stat = await fs.stat(realPath);
       if (!stat) {
         return `❌ 文件不存在：${filepath}`;
       }
@@ -151,13 +159,13 @@ export const fileReadTool: DynamicStructuredTool = new DynamicStructuredTool({
       }
 
       // 4. 检查扩展名
-      const ext = path.extname(safePath).toLowerCase();
+      const ext = path.extname(realPath).toLowerCase();
       if (!ALLOWED_EXTENSIONS.has(ext)) {
         return `❌ 不支持的文件类型：${ext}`;
       }
 
       // 5. 读取文件
-      const content = await fs.readFile(safePath, "utf-8");
+      const content = await fs.readFile(realPath, "utf-8");
 
       // 6. 敏感内容脱敏
       const masked = maskSensitive(content);

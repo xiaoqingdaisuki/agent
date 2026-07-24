@@ -3,15 +3,19 @@ import { createOpenAIToolsAgent } from "langchain/agents";
 import { AgentExecutor } from "langchain/agents";
 import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
 import { AIMessage, BaseMessage } from "@langchain/core/messages";
+import type { AgentStep } from "@langchain/core/agents";
 import { TOOL_CALLING_PROMPT } from "../prompts/system.js";
 import { tools } from "../tools/index.js";
 
-function convertXmlToolCalls(message: BaseMessage): BaseMessage {
+// Eight tool rounds plus one final planning round, aligned with Python.
+export const MAX_AGENT_ITERATIONS = 9;
+
+export function convertXmlToolCalls(message: BaseMessage): BaseMessage {
   const content = typeof message.content === "string" ? message.content : "";
   const F_O = "<func" + "tion=";
   const F_C = "</func" + "tion>";
   const P_O = "<para" + "meter=";
-  const P_C = "</para" + "meter=";
+  const P_C = "</para" + "meter>";
   if (!content.includes(F_O)) return message;
   const toolCalls: any[] = [];
   let pos = 0;
@@ -40,16 +44,17 @@ function convertXmlToolCalls(message: BaseMessage): BaseMessage {
       pp = vee + P_C.length;
     }
     toolCalls.push({
-      id: "call_" + fn + "_001",
-      type: "function",
-      function: { name: fn, arguments: JSON.stringify(args) },
+      id: `call_${fn}_${toolCalls.length + 1}`,
+      type: "tool_call",
+      name: fn,
+      args,
     });
     pos = fe + F_C.length;
   }
   if (toolCalls.length === 0) return message;
   let clean = content;
   for (const tc of toolCalls) {
-    const fnName = (tc as any).function?.name ?? tc.name;
+    const fnName = tc.name;
     const sm = F_O + fnName + ">";
     const em = F_C;
     const si = clean.indexOf(sm);
@@ -115,6 +120,7 @@ async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecu
   const systemPrompt = systemPromptOverride || TOOL_CALLING_PROMPT;
   const dynamicPrompt = ChatPromptTemplate.fromMessages([
     ["system", systemPrompt],
+    new MessagesPlaceholder({ variableName: "memory_context", optional: true }),
     new MessagesPlaceholder("chat_history"),
     ["human", "{input}"],
     new MessagesPlaceholder("agent_scratchpad"),
@@ -123,12 +129,38 @@ async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecu
     llm: model as any,
     tools: tools as any,
     prompt: dynamicPrompt,
+    // XML compatibility is applied in the bound model's invoke path. Keeping
+    // planning non-streaming also avoids assembling partial XML fragments.
+    streamRunnable: false,
   });
-  return new AgentExecutor({
+
+  // Runnable agents only support LangChain's default "force" stop, whose
+  // output leaks the internal "Agent stopped due to max iterations." text to
+  // users. Return the most recent tool observation instead when a pathological
+  // loop reaches the safety limit.
+  const executor = new AgentExecutor({
     agent: agent as any,
     tools: tools as any,
     verbose: false,
     handleParsingErrors: true,
-    maxIterations: 3,  // 3 轮 = 1 次工具调用 + 最终回答，或 2 次工具调用 + 最终回答
+    maxIterations: MAX_AGENT_ITERATIONS,
   });
+
+  (executor.agent as any).returnStoppedResponse = async (
+    _method: string,
+    steps: AgentStep[],
+  ) => {
+    const lastObservation = steps.at(-1)?.observation;
+    const detail = typeof lastObservation === "string" && lastObservation.trim()
+      ? ` Last tool result: ${lastObservation.slice(0, 2_000)}`
+      : "";
+    return {
+      returnValues: {
+        output: `I could not complete more tool calls within the safety limit.${detail}`,
+      },
+      log: "",
+    };
+  };
+
+  return executor;
 }

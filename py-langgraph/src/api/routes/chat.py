@@ -1,8 +1,9 @@
+from uuid import uuid4
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from src.agents.base import build_tool_agent
-from src.prompts.system import TOOL_CALLING_PROMPT
+from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
 
 router = APIRouter()
 
@@ -26,23 +27,22 @@ async def chat(request: ChatRequest):
     避免出现无工具绑定的"哑巴" agent。
     """
     try:
-        # 注入用户记忆（与 v1 API / AgentService 保持一致）
-        system_prompt: str | None = None
         if request.user_id:
             try:
-                from src.profile.service import MemoryService, ProfileService
-                profile = ProfileService.get_or_create(request.user_id)
-                memory_context = MemoryService.build_memory_context(request.user_id)
-                if memory_context:
-                    system_prompt = f"{memory_context}\n\n{TOOL_CALLING_PROMPT}"
+                from src.profile.service import ProfileService
+
+                ProfileService.get_or_create(request.user_id)
             except Exception:
-                # 记忆模块不可用时静默降级，使用默认 prompt
+                # Profile storage is optional; the agent loads memory when available.
                 pass
 
-        agent = build_tool_agent(system_prompt_override=system_prompt)
+        agent = build_tool_agent()
 
-        thread_id = request.thread_id or "default"
-        config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 20}
+        thread_id = request.thread_id or str(uuid4())
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": AGENT_RECURSION_LIMIT,
+        }
         if request.user_id:
             config["configurable"]["user_id"] = request.user_id
 

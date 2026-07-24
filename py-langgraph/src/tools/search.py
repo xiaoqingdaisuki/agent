@@ -10,8 +10,8 @@ web.search — 多来源互联网搜索，返回结构化结果
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import re
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -132,7 +132,7 @@ def _search_searx(query: str) -> list[SearchResultItem] | None:
 
     for instance in instances:
         try:
-            with httpx.Client(timeout=5, follow_redirects=True) as client:
+            with httpx.Client(timeout=3.5, follow_redirects=True) as client:
                 res = client.get(
                     f"{instance}/search",
                     params={"q": query, "format": "json", "engines": "google,bing,duckduckgo", "pageno": "1"},
@@ -211,17 +211,18 @@ def multi_source_search(query: str) -> list[SearchResultItem]:
         ("duckduckgo", _search_duckduckgo),
     ]
 
-    for provider_name, search_fn in sources:
-        try:
-            results = search_fn(query)
-            if results:
-                for r in results:
-                    if r.url and r.url not in seen_urls:
-                        seen_urls.add(r.url)
-                        r.provider = provider_name
-                        all_results.append(r)
-        except Exception:
-            continue
+    with ThreadPoolExecutor(max_workers=len(sources)) as executor:
+        source_results = list(
+            executor.map(lambda source: source[1](query), sources)
+        )
+
+    for (provider_name, _), results in zip(sources, source_results):
+        if results:
+            for result in results:
+                if result.url and result.url not in seen_urls:
+                    seen_urls.add(result.url)
+                    result.provider = provider_name
+                    all_results.append(result)
 
     # 重新编号 rank
     for i, r in enumerate(all_results):

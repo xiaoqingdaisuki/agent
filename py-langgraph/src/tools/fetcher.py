@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import socket
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from html import unescape
@@ -56,12 +57,32 @@ def _is_safe_url(url: str) -> tuple[bool, str | None]:
     if hostname.lower() in _BLOCKED_HOSTS:
         return False, f"目标主机在黑名单中: {hostname}"
 
+    if parsed.username or parsed.password:
+        return False, "URL 不允许包含用户名或密码"
+
     try:
         addr = ipaddress.ip_address(hostname)
         if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
             return False, f"目标 IP 是内网/私有地址: {hostname}"
     except ValueError:
-        pass  # 域名，DNS 解析在 httpx 层处理
+        try:
+            addresses = {
+                item[4][0]
+                for item in socket.getaddrinfo(hostname, parsed.port, type=socket.SOCK_STREAM)
+            }
+        except (OSError, ValueError):
+            return False, f"无法解析目标主机: {hostname}"
+        for raw_address in addresses:
+            address = ipaddress.ip_address(raw_address)
+            if (
+                address.is_private
+                or address.is_loopback
+                or address.is_link_local
+                or address.is_reserved
+                or address.is_multicast
+                or address.is_unspecified
+            ):
+                return False, f"目标域名解析到内网/保留地址: {raw_address}"
 
     return True, None
 
@@ -126,35 +147,56 @@ def web_read(url: str) -> str:
 
     # 2. 发起请求
     try:
-        with httpx.Client(
-            timeout=10,
-            follow_redirects=True,
-            limits=httpx.Limits(max_redirects=3),
-        ) as client:
+        with httpx.Client(timeout=10, follow_redirects=False) as client:
             headers = {
                 "User-Agent": "Mozilla/5.0 (compatible; AI-Agent/1.0)",
                 "Accept": "text/html,application/xhtml+xml,application/xml,text/plain,*/*",
             }
-            resp = client.get(url, headers=headers)
-
-            # 3. 重定向复检
-            if resp.history:
-                final_url = str(resp.url)
-                safe, reason = _is_safe_url(final_url)
+            current_url = url
+            for _ in range(4):
+                safe, reason = _is_safe_url(current_url)
                 if not safe:
                     return f"重定向目标 URL 安全拒绝：{reason}"
 
-            # 4. 内容类型检查
-            content_type = resp.headers.get("content-type", "")
-            if not _is_text_content(content_type):
-                return f"不支持的内容类型：{content_type}（仅支持文本类内容）"
+                with client.stream("GET", current_url, headers=headers) as resp:
+                    if resp.status_code in {301, 302, 303, 307, 308}:
+                        location = resp.headers.get("location")
+                        if not location:
+                            return "无法获取网页：重定向响应缺少 Location"
+                        current_url = urljoin(current_url, location)
+                        continue
 
-            # 5. 大小限制（200KB）
-            content = resp.text
-            max_bytes = 200 * 1024
-            if len(content.encode("utf-8")) > max_bytes:
-                content = content[: max_bytes // 2]
-                content += "\n\n[内容过长，已截断]"
+                    if resp.status_code >= 400:
+                        return f"无法获取网页：HTTP {resp.status_code}"
+
+                    # 4. 内容类型检查
+                    content_type = resp.headers.get("content-type", "")
+                    if not _is_text_content(content_type):
+                        return f"不支持的内容类型：{content_type}（仅支持文本类内容）"
+
+                    # 5. 流式读取并限制响应体（200KB）
+                    max_bytes = 200 * 1024
+                    chunks: list[bytes] = []
+                    total = 0
+                    truncated = False
+                    for chunk in resp.iter_bytes():
+                        remaining = max_bytes - total
+                        if len(chunk) > remaining:
+                            chunks.append(chunk[:remaining])
+                            truncated = True
+                            break
+                        chunks.append(chunk)
+                        total += len(chunk)
+                        if total >= max_bytes:
+                            truncated = True
+                            break
+                    encoding = resp.encoding or "utf-8"
+                    content = b"".join(chunks).decode(encoding, errors="replace")
+                    if truncated:
+                        content += "\n\n[内容过长，已截断]"
+                    break
+            else:
+                return "无法获取网页：重定向次数超过 3 次"
 
             # 6. 正文提取
             text = _clean_html(content)
