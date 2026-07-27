@@ -161,10 +161,11 @@ def memory_user_save(user_id: str, content: str, category: str = "fact", importa
     """保存一条关于用户的重要信息到长期记忆。只有用户明确表达或有长期价值的信息才应该保存。"""
     store = get_user_memory_store()
 
-    # 检查是否已有相似记忆（简单去重）
-    existing = store.search(user_id, content[:20], max_results=5)
+    # 检查是否已有相似记忆（用完整内容精确匹配）
+    existing = store.search(user_id, "", max_results=100)
+    content_lower = content.strip().lower()
     for m in existing:
-        if content.strip().lower() in m["content"].lower():
+        if content_lower == m["content"].lower().strip():
             return f"🧠 记忆已存在（ID: {m['id']}），未重复保存。"
 
     memory = store.add(user_id, content, category, importance)

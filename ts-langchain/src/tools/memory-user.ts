@@ -170,10 +170,11 @@ export const memoryUserSaveTool: DynamicStructuredTool = new DynamicStructuredTo
     importance: z.number().int().min(1).max(5).default(3).describe("重要性 1-5"),
   }),
   func: async ({ user_id, content, category, importance }) => {
-    // 去重检查
-    const existing = userMemoryStore.search(user_id, content.slice(0, 20), "", 5);
+    // 去重检查：用完整内容搜索所有记忆，精确匹配已存在的
+    const existing = userMemoryStore.search(user_id, "", "", 100);
+    const contentLower = content.toLowerCase().trim();
     for (const m of existing) {
-      if (content.toLowerCase().trim() === m.content.toLowerCase().trim()) {
+      if (contentLower === m.content.toLowerCase().trim()) {
         return `🧠 记忆已存在（ID: ${m.id}），未重复保存。`;
       }
     }

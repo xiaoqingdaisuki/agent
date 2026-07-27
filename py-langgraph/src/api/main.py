@@ -1,3 +1,7 @@
+import asyncio
+import logging
+from functools import wraps
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -6,9 +10,43 @@ from src.services import BusinessError, BusinessErrorCode
 from .routes import chat, images, stream, tools
 from .routes.v1 import router as v1_router
 
+logger = logging.getLogger(__name__)
+
+# 默认请求超时（秒）
+DEFAULT_REQUEST_TIMEOUT = 60
+
+# 流式路由禁用超时
+STREAM_ROUTE_PATTERNS = ("/stream", "/api/v1/conversations")
+
+
+async def _timeout_middleware(request: Request, call_next):
+    """请求级超时中间件：非流式路由默认 60s 超时。"""
+    path = request.url.path
+    is_stream = any(path.startswith(p) for p in STREAM_ROUTE_PATTERNS)
+
+    if is_stream:
+        return await call_next(request)
+
+    try:
+        return await asyncio.wait_for(call_next(request), timeout=DEFAULT_REQUEST_TIMEOUT)
+    except TimeoutError:
+        logger.warning("Request timeout: %s %s (%.1fs)", request.method, path, DEFAULT_REQUEST_TIMEOUT)
+        return JSONResponse(
+            status_code=504,
+            content={
+                "error": {
+                    "code": BusinessErrorCode.SERVICE_UNAVAILABLE.value,
+                    "message": "请求超时，请稍后重试",
+                }
+            },
+        )
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="py-langgraph-agent", version="0.2.0")
+
+    # 请求级超时中间件
+    app.middleware("http")(_timeout_middleware)
 
     @app.exception_handler(BusinessError)
     async def business_error_handler(request: Request, exc: BusinessError):

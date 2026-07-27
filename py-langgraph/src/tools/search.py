@@ -92,7 +92,9 @@ def _search_bing(query: str) -> list[SearchResultItem] | None:
 
         for match in re.finditer(r'<li class="b_algo"[^>]*>(.*?)</li>', html, re.DOTALL):
             item = match.group(1)
-            title_match = re.search(r'<h2><a href="([^"]+)"[^>]*>(.*?)</a></h2>', item, re.DOTALL)
+
+            # 允许 <h2> 带额外属性（class 等）
+            title_match = re.search(r'<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)</a></h2>', item, re.DOTALL)
             if not title_match:
                 continue
 
@@ -102,8 +104,14 @@ def _search_bing(query: str) -> list[SearchResultItem] | None:
                 continue
             seen.add(url)
 
-            snippet_match = re.search(r"<p[^>]*>(.*?)</p>", item, re.DOTALL)
-            snippet = _clean_html(snippet_match.group(1)) if snippet_match else "无摘要"
+            # 优先使用 b_lineclamp 类摘要，回退到第一个 <p>
+            snippet = "无摘要"
+            lineclamp_match = re.search(r'<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>(.*?)</p>', item, re.DOTALL)
+            if lineclamp_match:
+                snippet = _clean_html(lineclamp_match.group(1))[:300]
+            else:
+                snippet_match = re.search(r"<p[^>]*>(.*?)</p>", item, re.DOTALL)
+                snippet = _clean_html(snippet_match.group(1))[:300] if snippet_match else snippet
 
             results.append(SearchResultItem(
                 title=title,

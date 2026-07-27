@@ -17,6 +17,8 @@ import {
   createMemory,
   createQARecord,
 } from "./index.js";
+import { ChatOpenAI } from "@langchain/openai";
+import { config } from "../config/index.js";
 
 // ============ Profile Service ============
 
@@ -78,11 +80,28 @@ export class MemoryService {
     return lines.join("\n");
   }
 
-  static extractMemoriesFromConversation(userId: string, question: string, _answer: string): Memory[] {
+  static extractMemoriesFromConversation(userId: string, question: string, answer: string): Memory[] {
+    // 同步调用正则提取（立即返回），LLM 提取在后台异步执行
+    const regexMemories = MemoryService._extractWithRegex(userId, question);
+    for (const mem of regexMemories) {
+      profileStore.addMemory(mem);
+    }
+
+    // 异步 LLM 提取（不阻塞主流程）
+    MemoryService._extractWithLLM(userId, question, answer).catch(() => {
+      // LLM 提取失败不影响主流程
+    });
+
+    return regexMemories;
+  }
+
+  /**
+   * 正则规则提取 — 匹配明显的偏好/个人信息句式
+   */
+  private static _extractWithRegex(userId: string, question: string): Memory[] {
     const newMemories: Memory[] = [];
     const q = question.toLowerCase();
 
-    // 偏好提取规则（matchAll 需要 /g flag）
     const preferencePatterns: Array<[RegExp, string]> = [
       [/我喜欢(.+?)[。！\n]/g, "preference"],
       [/我爱(.+?)[。！\n]/g, "preference"],
@@ -101,7 +120,6 @@ export class MemoryService {
       }
     }
 
-    // 个人信息提取规则（matchAll 需要 /g flag）
     const infoPatterns: Array<[RegExp, string]> = [
       [/我在(.+?)[。！\n]/g, "fact"],
       [/我叫(.+?)[。！\n]/g, "fact"],
@@ -118,11 +136,60 @@ export class MemoryService {
       }
     }
 
-    for (const mem of newMemories) {
-      profileStore.addMemory(mem);
-    }
-
     return newMemories;
+  }
+
+  /**
+   * LLM-based 记忆提取 — 处理正则覆盖不到的复杂表达
+   *
+   * 通过 LLM 分析用户问题，提取值得长期记忆的事实。
+   * 只提取有明确长期价值的信息（偏好、个人信息、决定），不提取临时性内容。
+   */
+  private static async _extractWithLLM(userId: string, question: string, answer: string): Promise<void> {
+    if (!config.OPENAI_API_KEY) return;
+
+    const llm = new ChatOpenAI({
+      modelName: config.OPENAI_MODEL,
+      configuration: {
+        baseURL: config.OPENAI_BASE_URL,
+        apiKey: config.OPENAI_API_KEY,
+      },
+    });
+
+    const prompt = `你是一个记忆提取助手。分析以下对话，判断是否有值得长期记住的用户信息。
+
+规则：
+1. 只提取有长期价值的信息：偏好、习惯、个人信息（职业/所在地/家庭）、重要决定
+2. 不提取：临时性内容、闲聊、问候、已经知道的重复信息
+3. 每条记忆控制在 30 字以内，简洁明确
+4. 如果没有任何值得记住的信息，返回空数组
+5. 返回 JSON 数组，每项包含 category（preference/fact/decision/context）和 content 字段
+
+用户问题：${question}
+助手回答：${answer}
+
+JSON 输出（无其他内容）：`;
+
+    try {
+      const response = await llm.invoke([
+        { role: "system", content: "你只输出 JSON 数组，不输出其他内容。" },
+        { role: "user", content: prompt },
+      ] as any);
+      const text = typeof response.content === "string" ? response.content : "";
+
+      // 解析 JSON 数组
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) return;
+
+      const extracted = JSON.parse(jsonMatch[0]) as Array<{ category: string; content: string }>;
+      for (const item of extracted) {
+        if (!item.content || item.content.length > 50) continue;
+        const memory = createMemory(userId, item.content, item.category || "fact", 3);
+        profileStore.addMemory(memory);
+      }
+    } catch {
+      // LLM 提取失败静默降级
+    }
   }
 }
 

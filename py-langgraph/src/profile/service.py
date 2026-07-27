@@ -9,10 +9,16 @@ Profile Service — 用户画像 + 长期记忆 + 问答历史
 5. build_context_prompt: 将记忆注入 System Prompt
 """
 
+import json
 import re
+import threading
 from datetime import datetime
 
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+
 from src.profile.models import Memory, ProfileStore, QARecord, UserProfile
+from src.config.settings import settings
 
 store = ProfileStore()
 
@@ -88,11 +94,28 @@ class MemoryService:
 
     @staticmethod
     def extract_memories_from_conversation(user_id: str, question: str, answer: str) -> list[Memory]:
-        """从对话中提取值得记忆的事实（简单规则版，后续可接 LLM 提取）"""
+        """从对话中提取值得记忆的事实（正则 + LLM 双层提取）"""
+        # 第一层：正则规则立即提取
+        regex_memories = MemoryService._extract_with_regex(user_id, question)
+        for mem in regex_memories:
+            store.add_memory(mem)
+
+        # 第二层：LLM 异步提取（不阻塞主流程）
+        thread = threading.Thread(
+            target=MemoryService._extract_with_llm,
+            args=(user_id, question, answer),
+            daemon=True,
+        )
+        thread.start()
+
+        return regex_memories
+
+    @staticmethod
+    def _extract_with_regex(user_id: str, question: str) -> list[Memory]:
+        """正则规则提取 — 匹配明显的偏好/个人信息句式"""
         new_memories = []
         q = question.lower()
 
-        # 规则1: 用户提到偏好
         preference_patterns = [
             (r"我喜欢(.+?)[。！\n]", "preference"),
             (r"我爱(.+?)[。！\n]", "preference"),
@@ -115,7 +138,6 @@ class MemoryService:
                         importance=4,
                     ))
 
-        # 规则2: 用户提到个人信息
         info_patterns = [
             (r"我在(.+?)[。！\n]", "fact"),
             (r"我叫(.+?)[。！\n]", "fact"),
@@ -135,10 +157,61 @@ class MemoryService:
                         importance=5,
                     ))
 
-        for mem in new_memories:
-            store.add_memory(mem)
-
         return new_memories
+
+    @staticmethod
+    def _extract_with_llm(user_id: str, question: str, answer: str) -> None:
+        """LLM-based 记忆提取 — 处理正则覆盖不到的复杂表达"""
+        if not settings.openai_api_key:
+            return
+
+        llm = ChatOpenAI(
+            model=settings.openai_model,
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+        )
+
+        prompt = (
+            "你是一个记忆提取助手。分析以下对话，判断是否有值得长期记住的用户信息。\n\n"
+            "规则：\n"
+            "1. 只提取有长期价值的信息：偏好、习惯、个人信息（职业/所在地/家庭）、重要决定\n"
+            "2. 不提取：临时性内容、闲聊、问候、已经知道的重复信息\n"
+            "3. 每条记忆控制在 30 字以内，简洁明确\n"
+            "4. 如果没有任何值得记住的信息，返回空数组\n"
+            "5. 返回 JSON 数组，每项包含 category（preference/fact/decision/context）和 content 字段\n\n"
+            f"用户问题：{question}\n"
+            f"助手回答：{answer}\n\n"
+            "JSON 输出（无其他内容）："
+        )
+
+        try:
+            response = llm.invoke([
+                SystemMessage(content="你只输出 JSON 数组，不输出其他内容。"),
+                HumanMessage(content=prompt),
+            ])
+            text = response.content if isinstance(response.content, str) else ""
+
+            import json
+            json_match = re.search(r'\[[\s\S]*\]', text)
+            if not json_match:
+                return
+
+            extracted = json.loads(json_match.group(0))
+            for item in extracted:
+                content = item.get("content", "").strip()
+                if not content or len(content) > 50:
+                    continue
+                memory = Memory(
+                    id=f"mem_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+                    user_id=user_id,
+                    content=content,
+                    category=item.get("category", "fact"),
+                    importance=3,
+                )
+                store.add_memory(memory)
+        except Exception:
+            # LLM 提取失败静默降级
+            pass
 
 
 class HistoryService:

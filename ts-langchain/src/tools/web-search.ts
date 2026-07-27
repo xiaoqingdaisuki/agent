@@ -88,7 +88,9 @@ async function searchBing(query: string): Promise<SearchResultItem[] | null> {
 
     while ((match = itemRegex.exec(html)) && results.length < 5) {
       const item = match[1];
-      const titleMatch = item.match(/<h2><a href="([^"]+)"[^>]*>([\s\S]*?)<\/a><\/h2>/);
+
+      // 允许 <h2> 带额外属性（class 等）
+      const titleMatch = item.match(/]<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a><\/h2>/);
       if (!titleMatch) continue;
 
       const url = titleMatch[1];
@@ -96,8 +98,15 @@ async function searchBing(query: string): Promise<SearchResultItem[] | null> {
       if (!title || seen.has(url)) continue;
       seen.add(url);
 
-      const snippetMatch = item.match(/<p[^>]*>([\s\S]*?)<\/p>/);
-      const snippet = snippetMatch ? cleanHtml(snippetMatch[1]).slice(0, 300) : "无摘要";
+      // 优先使用 b_lineclamp 类摘要，回退到第一个 <p>
+      let snippet = "无摘要";
+      const lineclampMatch = item.match(/<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/);
+      if (lineclampMatch) {
+        snippet = cleanHtml(lineclampMatch[1]).slice(0, 300);
+      } else {
+        const snippetMatch = item.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+        snippet = snippetMatch ? cleanHtml(snippetMatch[1]).slice(0, 300) : snippet;
+      }
 
       results.push({
         title,
