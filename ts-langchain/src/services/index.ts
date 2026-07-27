@@ -15,6 +15,7 @@ import { DocumentLoader } from "../rag/loader.js";
 import { TextSplitter } from "../rag/splitter.js";
 import { MemoryService, ProfileService, HistoryService } from "../profile/service.js";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { setToolCallContext, clearToolCallContext } from "../tools/runtime/executor.js";
 
 // ============ 类型定义 ============
 
@@ -140,7 +141,12 @@ export class ConversationService {
       content,
       createdAt: new Date().toISOString(),
     };
+
     conv.messageCount++;
+
+    // 同时写入 LangChain conversation memory，确保消息出现在 agent 上下文
+    appendMessage(conversationId, new HumanMessage(content));
+
     return msg;
   }
 }
@@ -165,11 +171,27 @@ export class AgentService {
       }
 
       const agent = await createToolAgent();
-      const result = await (agent as any).invoke({
-        input: content,
-        chat_history: history,
-        memory_context: memoryContext,
+
+      // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
+      setToolCallContext({
+        request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        trace_id: `trace_${Date.now()}`,
+        conversation_id: conversationId,
+        tenant_id: "",
+        user_id: userId || "anonymous",
+        actor_type: "user",
       });
+
+      let result;
+      try {
+        result = await (agent as any).invoke({
+          input: content,
+          chat_history: history,
+          memory_context: memoryContext,
+        });
+      } finally {
+        clearToolCallContext();
+      }
 
       const reply: Message = {
         id: crypto.randomUUID(),
@@ -236,17 +258,31 @@ export class AgentService {
       }
 
       const agent = await createToolAgent();
-      const stream = await (agent as any).stream(
-        { input: content, chat_history: history, memory_context: memoryContext },
-        { tags: ["stream"] },
-      );
+
+      setToolCallContext({
+        request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        trace_id: `trace_${Date.now()}`,
+        conversation_id: conversationId,
+        tenant_id: "",
+        user_id: userId || "anonymous",
+        actor_type: "user",
+      });
 
       let fullAnswer = "";
-      for await (const chunk of stream) {
-        if (chunk?.output) {
-          fullAnswer += chunk.output;
-          yield chunk.output;
+      try {
+        const stream = await (agent as any).stream(
+          { input: content, chat_history: history, memory_context: memoryContext },
+          { tags: ["stream"] },
+        );
+
+        for await (const chunk of stream) {
+          if (chunk?.output) {
+            fullAnswer += chunk.output;
+            yield chunk.output;
+          }
         }
+      } finally {
+        clearToolCallContext();
       }
 
       if (fullAnswer) {

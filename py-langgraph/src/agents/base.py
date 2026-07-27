@@ -285,9 +285,23 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
     )
 
 
+def _get_cache_key(base_prompt: str, checkpointer) -> tuple:
+    """生成缓存键，确保不同 checkpointer 实例不共享同一个编译图。"""
+    if checkpointer is None:
+        return (base_prompt, None)
+    return (base_prompt, id(checkpointer))
+
+
 @lru_cache(maxsize=10)
-def _build_cached_tool_agent(base_prompt: str):
-    return _compile_tool_agent(_get_default_checkpointer(), base_prompt)
+def _build_cached_tool_agent(base_prompt: str, checkpointer_id: int | None):
+    """使用 checkpointer 的 id 作为缓存键的一部分。"""
+    cp = None if checkpointer_id is None else _resolve_checkpointer(checkpointer_id)
+    return _compile_tool_agent(cp, base_prompt)
+
+
+def _resolve_checkpointer(checkpointer_id: int):
+    """根据 id 从当前默认 checkpointer 获取实例（用于缓存重建）。"""
+    return _get_default_checkpointer()
 
 
 def build_tool_agent(checkpointer=None, system_prompt_override=None):
@@ -296,7 +310,7 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
 
     base_prompt = system_prompt_override or TOOL_CALLING_PROMPT
     if checkpointer is None:
-        return _build_cached_tool_agent(base_prompt)
+        return _build_cached_tool_agent(base_prompt, None)
     return _compile_tool_agent(checkpointer, base_prompt)
 
 

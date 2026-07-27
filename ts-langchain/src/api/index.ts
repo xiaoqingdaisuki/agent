@@ -5,11 +5,14 @@ import { registerStreamRoutes } from "./routes/stream.js";
 import { registerToolRoutes } from "./routes/tools.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerErrorMiddleware } from "./middleware/error.js";
+import { config } from "../config/index.js";
 
 export async function buildApp() {
   const app = fastify({ logger: { level: "info" } });
 
-  await app.register(import("@fastify/cors"), { origin: "*" });
+  await app.register(import("@fastify/cors"), {
+    origin: config.CORS_ORIGIN.length > 0 ? config.CORS_ORIGIN : false,
+  });
 
   // External API v1（前端 UI 使用）— 带 /api/v1 前缀
   await app.register(async (fastify) => {

@@ -1,3 +1,6 @@
+import asyncio
+import random
+
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -15,31 +18,52 @@ class ImageGenerationResponse(BaseModel):
     image_data_url: str
 
 
+MAX_IMAGE_REQUEST_ATTEMPTS = 3
+
+
+async def _request_with_retry(
+    url: str, api_key: str, prompt: str
+) -> httpx.Response:
+    """带重试的图片生成请求，退避时间带随机抖动避免惊群。"""
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_IMAGE_REQUEST_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                return await client.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": settings.image_model,
+                        "prompt": prompt,
+                        "response_format": "b64_json",
+                        "cfg_scale": 1.0,
+                        "steps": 8,
+                        "text_mode": True,
+                    },
+                )
+        except httpx.HTTPError as exc:
+            last_error = exc
+            if attempt < MAX_IMAGE_REQUEST_ATTEMPTS:
+                # 退避 1s, 2s + 随机抖动
+                await asyncio.sleep(attempt + random.uniform(0, 1))
+
+    raise last_error or RuntimeError("Image generation failed after retries")
+
+
 @router.post("/generations", response_model=ImageGenerationResponse)
 async def generate_image(request: ImageGenerationRequest):
     if not settings.openai_api_key or not settings.openai_base_url:
         raise HTTPException(status_code=503, detail="Image model is not configured")
 
     image_url = f"{settings.openai_base_url.rstrip('/')}/images/generations"
+
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                image_url,
-                headers={
-                    "Authorization": f"Bearer {settings.openai_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.image_model,
-                    "prompt": request.prompt,
-                    "response_format": "b64_json",
-                    "cfg_scale": 1.0,
-                    "steps": 8,
-                    "text_mode": True,
-                },
-            )
-    except httpx.HTTPError as error:
-        raise HTTPException(status_code=502, detail="Unable to reach the image service") from error
+        response = await _request_with_retry(image_url, settings.openai_api_key, request.prompt)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Unable to reach the image service")
 
     payload = response.json() if response.content else {}
     if response.is_error:

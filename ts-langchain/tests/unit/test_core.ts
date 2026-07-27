@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
+import { safeCalculate } from "../../src/tools/calculator.js";
 
 // ============ Config Validation Tests ============
 
@@ -59,26 +60,40 @@ describe("Tool schemas", () => {
 // ============ Calculator Logic Tests ============
 
 describe("Calculator logic", () => {
-  const sanitize = (expression: string): string => {
-    return expression.replace(/[^0-9+\-*/().%\s]/g, "");
-  };
-
-  it("should sanitize unsafe characters", () => {
-    expect(sanitize("2 + 2")).toBe("2 + 2");
-    expect(sanitize("import os")).toBe(" ");   // space is preserved (in \s)
-    expect(sanitize("10 * 5")).toBe("10 * 5");
-  });
-
   it("should evaluate simple expressions", () => {
-    const sanitized = sanitize("2 + 2");
-    const result = Function(`"use strict"; return (${sanitized})`)();
-    expect(result).toBe(4);
+    expect(safeCalculate("2 + 2")).toBe(4);
   });
 
   it("should evaluate multiplication", () => {
-    const sanitized = sanitize("10 * 5");
-    const result = Function(`"use strict"; return (${sanitized})`)();
-    expect(result).toBe(50);
+    expect(safeCalculate("10 * 5")).toBe(50);
+  });
+
+  it("should handle subtraction", () => {
+    expect(safeCalculate("10 - 3")).toBe(7);
+  });
+
+  it("should handle division", () => {
+    expect(safeCalculate("10 / 4")).toBe(2.5);
+  });
+
+  it("should handle modulo", () => {
+    expect(safeCalculate("10 % 3")).toBe(1);
+  });
+
+  it("should reject expression with letters", () => {
+    expect(() => safeCalculate("import os")).toThrow();
+  });
+
+  it("should reject empty expression", () => {
+    expect(() => safeCalculate("")).toThrow();
+  });
+
+  it("should handle parentheses", () => {
+    expect(safeCalculate("(2 + 3) * 4")).toBe(20);
+  });
+
+  it("should handle power operator", () => {
+    expect(safeCalculate("2 ** 10")).toBe(1024);
   });
 });
 

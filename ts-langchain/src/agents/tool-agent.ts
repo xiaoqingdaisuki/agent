@@ -5,7 +5,8 @@ import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts
 import { AIMessage, BaseMessage } from "@langchain/core/messages";
 import type { AgentStep } from "@langchain/core/agents";
 import { TOOL_CALLING_PROMPT } from "../prompts/system.js";
-import { tools } from "../tools/index.js";
+import { tools, toolDescriptors, toolSchemas } from "../tools/index.js";
+import { wrapToolWithRuntime } from "../tools/runtime/executor.js";
 
 // Eight tool rounds plus one final planning round, aligned with Python.
 export const MAX_AGENT_ITERATIONS = 9;
@@ -125,9 +126,20 @@ async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecu
     ["human", "{input}"],
     new MessagesPlaceholder("agent_scratchpad"),
   ]);
+
+  // 将每个工具包装为走 invokeTool 管线的版本，确保审计/预算/权限生效
+  const wrappedTools = tools.map((tool) => {
+    const descriptor = toolDescriptors[tool.name];
+    const schema = toolSchemas[tool.name];
+    if (descriptor) {
+      return wrapToolWithRuntime(tool, descriptor, schema as any);
+    }
+    return tool;
+  });
+
   const agent = await createOpenAIToolsAgent({
     llm: model as any,
-    tools: tools as any,
+    tools: wrappedTools as any,
     prompt: dynamicPrompt,
     // XML compatibility is applied in the bound model's invoke path. Keeping
     // planning non-streaming also avoids assembling partial XML fragments.
@@ -140,7 +152,7 @@ async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecu
   // loop reaches the safety limit.
   const executor = new AgentExecutor({
     agent: agent as any,
-    tools: tools as any,
+    tools: wrappedTools as any,
     verbose: false,
     handleParsingErrors: true,
     maxIterations: MAX_AGENT_ITERATIONS,

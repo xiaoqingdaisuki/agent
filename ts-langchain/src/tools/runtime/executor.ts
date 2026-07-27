@@ -432,3 +432,81 @@ export async function invokeTool<TInput, TOutput>(
     },
   };
 }
+
+// ============ Per-Request 上下文管理 ============
+
+/** 当前工具调用的运行时上下文（API 层在 agent.invoke 前设置） */
+let currentToolCallContext: ToolCallContext | null = null;
+
+/**
+ * 设置当前请求的工具调用上下文。
+ * 在 agent.invoke() 之前调用，确保工具执行时能获取到 user_id 等信息。
+ */
+export function setToolCallContext(context: ToolCallContext): void {
+  currentToolCallContext = context;
+}
+
+/**
+ * 获取当前工具调用上下文，未设置时返回 undefined。
+ */
+export function getToolCallContext(): ToolCallContext | undefined {
+  return currentToolCallContext ?? undefined;
+}
+
+/**
+ * 清除当前工具调用上下文（invoke 完成后必须调用）。
+ */
+export function clearToolCallContext(): void {
+  currentToolCallContext = null;
+}
+
+// ============ 工具 Runtime 包装 ============
+
+import { DynamicStructuredTool } from "langchain/tools";
+
+/**
+ * 将 LangChain DynamicStructuredTool 包装为走 invokeTool 管线的版本。
+ *
+ * 替换原始 tool.func，使其在 AgentExecutor 调用时自动经过：
+ *   预算守卫 → 参数校验 → 权限检查 → 执行(超时) → 脱敏 → 审计 → 指标
+ *
+ * @param tool 原始 LangChain 工具
+ * @param descriptor 工具描述符（ToolDescriptor）
+ * @param schema Zod schema（用于参数校验，可选）
+ * @returns 新的 DynamicStructuredTool，func 已包装
+ */
+export function wrapToolWithRuntime(
+  tool: DynamicStructuredTool,
+  descriptor: ToolDescriptor,
+  schema?: { parse: (input: unknown) => unknown },
+): DynamicStructuredTool {
+  const wrappedFunc = async (rawInput: unknown): Promise<string> => {
+    const context = getToolCallContext();
+    if (!context) {
+      // 未设置上下文时降级为直接调用原始 func（保底）
+      return await tool.func(rawInput as any);
+    }
+
+    const executor: ToolExecutor<unknown, string> = {
+      descriptor,
+      schema,
+      execute: async (input: unknown) => tool.func(input as any),
+    };
+
+    const result = await invokeTool(executor, rawInput, context);
+
+    if (!result.ok) {
+      throw new Error(result.error?.message ?? "Tool execution failed");
+    }
+
+    return (result.data as string) ?? "";
+  };
+
+  return new DynamicStructuredTool({
+    name: tool.name,
+    description: tool.description,
+    schema: tool.schema,
+    func: wrappedFunc as any,
+    returnDirect: tool.returnDirect,
+  });
+}

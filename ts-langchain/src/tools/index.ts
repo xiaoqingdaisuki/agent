@@ -42,3 +42,33 @@ export const tools = [
   memoryUserSearchTool,
   memoryUserSaveTool,
 ];
+
+/**
+ * 工具名称 → ToolDescriptor 映射，用于 invokeTool 管线的权限/审计检查。
+ */
+export const toolDescriptors: Record<string, import("./contracts.js").ToolDescriptor> = {
+  [weatherDescriptor.name]: weatherDescriptor,
+  [webSearchDescriptor.name]: webSearchDescriptor,
+  [webReadDescriptor.name]: webReadDescriptor,
+  [calculatorDescriptor.name]: calculatorDescriptor,
+  [knowledgeSearchDescriptor.name]: knowledgeSearchDescriptor,
+  [fileReadDescriptor.name]: fileReadDescriptor,
+  [sessionMemoryDescriptor.name]: sessionMemoryDescriptor,
+  [userMemorySearchDescriptor.name]: userMemorySearchDescriptor,
+  [userMemorySaveDescriptor.name]: userMemorySaveDescriptor,
+};
+
+/**
+ * 工具名称 → Zod schema 映射，用于 invokeTool 管线的参数校验。
+ */
+export const toolSchemas: Record<string, { parse: (input: unknown) => unknown }> = {
+  [weatherTool.name]: weatherTool.schema as any,
+  [webSearchTool.name]: webSearchTool.schema as any,
+  [webReadTool.name]: webReadTool.schema as any,
+  [calculatorTool.name]: calculatorTool.schema as any,
+  [knowledgeSearchTool.name]: knowledgeSearchTool.schema as any,
+  [fileReadTool.name]: fileReadTool.schema as any,
+  [memorySessionSearchTool.name]: memorySessionSearchTool.schema as any,
+  [memoryUserSearchTool.name]: memoryUserSearchTool.schema as any,
+  [memoryUserSaveTool.name]: memoryUserSaveTool.schema as any,
+};

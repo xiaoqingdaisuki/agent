@@ -50,14 +50,12 @@ def build_rag_agent(
         response = llm.invoke(state["messages"])
         return {"messages": [response]}
 
-    def retrieve_node(state: RAGState):
+    async def retrieve_node(state: RAGState):
         """检索节点：从向量库获取相关文档"""
         last_message = state["messages"][-1]
         query = last_message.content
 
-        # 异步检索需要在外部处理，这里用同步简化
-        import asyncio
-        results = asyncio.run(retriever.retrieve(query))
+        results = await retriever.retrieve(query)
 
         context = [r["content"] for r in results]
         return {"context": context}
