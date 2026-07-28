@@ -3,10 +3,6 @@ FROM python:3.11-slim AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY pyproject.toml ./
 COPY src ./src
 RUN pip wheel --no-cache-dir --wheel-dir /wheels .
