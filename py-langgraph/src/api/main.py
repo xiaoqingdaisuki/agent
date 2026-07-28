@@ -94,3 +94,15 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+def run() -> None:
+    """Start the development API server through the ``agent`` console command."""
+    import uvicorn
+
+    uvicorn.run(
+        "src.api.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=True,
+    )

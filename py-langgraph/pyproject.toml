@@ -28,7 +28,7 @@ dev = [
 ]
 
 [project.scripts]
-agent = "uvicorn src.api.main:app --reload"
+agent = "src.api.main:run"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
