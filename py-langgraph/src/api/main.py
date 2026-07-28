@@ -3,8 +3,10 @@ import logging
 from functools import wraps
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.config.settings import settings
 from src.services import BusinessError, BusinessErrorCode
 
 from .routes import chat, images, stream, tools
@@ -44,6 +46,18 @@ async def _timeout_middleware(request: Request, call_next):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="py-langgraph-agent", version="0.2.0")
+
+    allowed_origins = [
+        origin.strip() for origin in settings.cors_origin.split(",") if origin.strip()
+    ]
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials="*" not in allowed_origins,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # 请求级超时中间件
     app.middleware("http")(_timeout_middleware)

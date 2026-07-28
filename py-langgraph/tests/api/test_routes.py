@@ -2,7 +2,8 @@
 
 import pytest
 from httpx import AsyncClient, ASGITransport
-from src.api.main import app
+from src.api.main import app, create_app
+from src.config.settings import settings
 
 
 @pytest.fixture
@@ -28,6 +29,26 @@ class TestHealthEndpoint:
         response = await client.get("/api/v1/health")
         data = response.json()
         assert "version" in data
+
+
+class TestCors:
+    @pytest.mark.asyncio
+    async def test_configured_frontend_origin_is_allowed(self, monkeypatch):
+        monkeypatch.setattr(settings, "cors_origin", "https://app.example.com")
+        cors_app = create_app()
+        transport = ASGITransport(app=cors_app)
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.options(
+                "/api/v1/health",
+                headers={
+                    "Origin": "https://app.example.com",
+                    "Access-Control-Request-Method": "GET",
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == "https://app.example.com"
 
 
 class TestChatEndpoint:

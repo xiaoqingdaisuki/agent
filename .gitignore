@@ -7,6 +7,7 @@ dist/
 # Environment
 .env
 .env.local
+.env.ecs
 
 # IDE
 .idea/
@@ -21,3 +22,4 @@ Thumbs.db
 
 .claude
 *.md
+!ECS_DEPLOYMENT.md

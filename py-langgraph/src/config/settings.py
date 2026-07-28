@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-3-5-haiku-20241022"
     host: str = "0.0.0.0"
     port: int = 6002
+    cors_origin: str = ""
     postgres_uri: str = "postgresql://agent:agent@localhost:5432/agent"
     qdrant_url: str = "http://localhost:6333"
 

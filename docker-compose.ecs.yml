@@ -1,0 +1,114 @@
+name: agent-ecs
+
+x-agent-common: &agent-common
+  restart: unless-stopped
+  networks:
+    - agent-internal
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-agent-environment: &agent-environment
+  OPENAI_API_KEY: ${OPENAI_API_KEY}
+  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+  IMAGE_MODEL: ${IMAGE_MODEL:-step-image-edit-2}
+  CORS_ORIGIN: ${CORS_ORIGIN:-}
+
+services:
+  ts-agent:
+    <<: *agent-common
+    profiles: ["typescript"]
+    build:
+      context: ./ts-langchain
+      dockerfile: Dockerfile
+    environment:
+      <<: *agent-environment
+      PORT: "6001"
+      QDRANT_URL: http://qdrant:6333
+    ports:
+      - "${TS_PUBLIC_PORT:-6001}:6001"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:6001/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  py-agent:
+    <<: *agent-common
+    profiles: ["python"]
+    build:
+      context: ./py-langgraph
+      dockerfile: Dockerfile
+    environment:
+      <<: *agent-environment
+      HOST: 0.0.0.0
+      PORT: "6002"
+      POSTGRES_URI: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agent}
+      QDRANT_URL: http://qdrant:6333
+    ports:
+      - "${PY_PUBLIC_PORT:-6002}:6002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:6002/api/v1/health', timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["python"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agent}
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - agent-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.1
+    profiles: ["typescript", "python"]
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - agent-internal
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+networks:
+  agent-internal:
+    driver: bridge
+
+volumes:
+  pgdata:
+  qdrant_data:
