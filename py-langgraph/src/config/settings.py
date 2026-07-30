@@ -8,6 +8,12 @@ class Settings(BaseSettings):
     image_model: str = "step-image-edit-2"
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-3-5-haiku-20241022"
+    tavily_api_key: str = ""
+    tavily_search_depth: str = "basic"
+    search_timeout_ms: int = 4500
+    search_max_results: int = 8
+    search_cache_ttl_seconds: int = 30
+    search_stale_ttl_seconds: int = 600
     host: str = "0.0.0.0"
     port: int = 6002
     cors_origin: str = ""

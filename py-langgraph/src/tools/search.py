@@ -1,251 +1,347 @@
-"""
-web.search — 多来源互联网搜索，返回结构化结果
-
-特性:
-- 多来源降级: Bing → Searx → DuckDuckGo
-- 结构化返回: title, url, snippet, provider, rank
-- 结果去重: 基于 URL
-- 超时控制: 各源独立超时
-"""
+"""Tavily-backed real-time search with retry, circuit breaking and cache fallback."""
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-import re
 from dataclasses import dataclass, field
-from typing import Any
+from datetime import UTC, datetime
+from html import unescape
+import json
+import os
+import re
+from threading import Event, Lock
+import time
+from urllib.parse import urlparse, urlunparse
 
 import httpx
-from html import unescape
-
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-from src.tools.contracts import (
-    ToolCategory,
-    ToolDescriptor,
-    ToolResultEnvelope,
-    ToolResultMeta,
-    SideEffect,
-)
-
-
-# ============ 搜索结果模型 ============
+from src.config.settings import settings as app_settings
+from src.tools.contracts import ToolDescriptor
 
 
 @dataclass
 class SearchResultItem:
-    """单个搜索结果"""
     title: str
     url: str
     snippet: str
-    provider: str
+    provider: str = "tavily"
     rank: int = 0
     published_at: str = ""
-    retrieved_at: str = field(default_factory=lambda: __import__("datetime").datetime.now().isoformat())
+    retrieved_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
-def search_results_to_text(results: list[SearchResultItem], query: str) -> str:
-    """将结构化结果转换为展示文本"""
-    if not results:
-        return f'联网搜索未返回结果。你可以基于你的知识直接回答用户关于"{query}"的问题，同时说明这是基于训练数据而非实时搜索。'
+@dataclass
+class SearchOutcome:
+    results: list[SearchResultItem]
+    providers: list[str]
+    failed_providers: list[str]
+    cached: bool = False
+    stale: bool = False
 
-    lines = [f"🔍 搜索结果（{query}） — 共 {len(results)} 条：\n"]
-    for i, r in enumerate(results, 1):
-        lines.append(f"[{i}] {r.title}")
-        lines.append(f"    {r.url}")
-        lines.append(f"    {r.snippet[:150]}")
-        if r.published_at:
-            lines.append(f"    发布时间：{r.published_at}")
+
+@dataclass(frozen=True)
+class SearchSettings:
+    api_key: str
+    timeout_seconds: float
+    max_results: int
+    cache_ttl_seconds: int
+    stale_ttl_seconds: int
+    search_depth: str
+
+
+@dataclass
+class CacheEntry:
+    outcome: SearchOutcome
+    fresh_until: float
+    stale_until: float
+
+
+@dataclass
+class CircuitState:
+    failures: int = 0
+    open_until: float = 0
+
+
+@dataclass
+class InFlightSearch:
+    event: Event = field(default_factory=Event)
+    result: SearchOutcome | None = None
+
+
+_cache: dict[str, CacheEntry] = {}
+_in_flight: dict[str, InFlightSearch] = {}
+_circuit = CircuitState()
+_state_lock = Lock()
+_CIRCUIT_FAILURE_THRESHOLD = 3
+_CIRCUIT_COOLDOWN_SECONDS = 30
+_RETRYABLE_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+
+
+class _NonRetryableSearchError(RuntimeError):
+    pass
+
+
+def _bounded_integer(raw: str | None, fallback: int, minimum: int, maximum: int) -> int:
+    try:
+        return min(maximum, max(minimum, int(raw or "")))
+    except ValueError:
+        return fallback
+
+
+def _get_settings() -> SearchSettings:
+    return SearchSettings(
+        api_key=os.getenv("TAVILY_API_KEY", "").strip() or app_settings.tavily_api_key,
+        timeout_seconds=_bounded_integer(
+            os.getenv("SEARCH_TIMEOUT_MS"), app_settings.search_timeout_ms, 1000, 15000
+        )
+        / 1000,
+        max_results=_bounded_integer(
+            os.getenv("SEARCH_MAX_RESULTS"), app_settings.search_max_results, 1, 20
+        ),
+        cache_ttl_seconds=_bounded_integer(
+            os.getenv("SEARCH_CACHE_TTL_SECONDS"),
+            app_settings.search_cache_ttl_seconds,
+            0,
+            3600,
+        ),
+        stale_ttl_seconds=_bounded_integer(
+            os.getenv("SEARCH_STALE_TTL_SECONDS"),
+            app_settings.search_stale_ttl_seconds,
+            0,
+            86400,
+        ),
+        search_depth=(
+            "advanced"
+            if (os.getenv("TAVILY_SEARCH_DEPTH") or app_settings.tavily_search_depth)
+            == "advanced"
+            else "basic"
+        ),
+    )
+
+
+def _clean_html(text: str) -> str:
+    text = re.sub(r"<script[^>]*>[\s\S]*?</script>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<style[^>]*>[\s\S]*?</style>", "", text, flags=re.IGNORECASE)
+    text = unescape(re.sub(r"<[^>]+>", " ", text))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalize_url(raw_url: str) -> str | None:
+    try:
+        parsed = urlparse(raw_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return None
+        query = [
+            part
+            for part in parsed.query.split("&")
+            if part and not re.match(r"^(utm_|fbclid=|gclid=)", part, re.IGNORECASE)
+        ]
+        return urlunparse(parsed._replace(query="&".join(query), fragment=""))
+    except ValueError:
+        return None
+
+
+def _request_tavily(settings: SearchSettings, query: str) -> httpx.Response:
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            with httpx.Client(timeout=settings.timeout_seconds, follow_redirects=True) as client:
+                response = client.post(
+                    "https://api.tavily.com/search",
+                    headers={
+                        "Accept": "application/json",
+                        "Authorization": f"Bearer {settings.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "query": query,
+                        "topic": "general",
+                        "search_depth": settings.search_depth,
+                        "max_results": settings.max_results,
+                        "include_answer": False,
+                        "include_raw_content": False,
+                    },
+                )
+            if response.is_success:
+                return response
+            error = RuntimeError(f"Tavily HTTP {response.status_code}")
+            if response.status_code not in _RETRYABLE_STATUSES:
+                raise _NonRetryableSearchError(str(error))
+            last_error = error
+        except _NonRetryableSearchError:
+            raise
+        except (httpx.HTTPError, RuntimeError) as error:
+            last_error = error
+        if attempt == 0:
+            time.sleep(0.12)
+    raise last_error or RuntimeError("Tavily request failed")
+
+
+def _search_tavily(query: str, settings: SearchSettings) -> list[SearchResultItem]:
+    data = _request_tavily(settings, query).json()
+    results: list[SearchResultItem] = []
+    seen: set[str] = set()
+    for item in data.get("results", []):
+        url = _normalize_url(item.get("url", ""))
+        title = _clean_html(item.get("title", ""))
+        if not url or not title or url in seen:
+            continue
+        seen.add(url)
+        results.append(
+            SearchResultItem(
+                title=title,
+                url=url,
+                snippet=_clean_html(item.get("content", ""))[:500],
+                rank=len(results) + 1,
+                published_at=item.get("published_date", ""),
+            )
+        )
+    return results
+
+
+def _execute_search(
+    query: str, cache_key: str, settings: SearchSettings, cached: CacheEntry | None
+) -> SearchOutcome:
+    now = time.monotonic()
+    if not settings.api_key:
+        return SearchOutcome([], [], ["tavily:not_configured"])
+    with _state_lock:
+        circuit_open = _circuit.open_until > now
+    if circuit_open:
+        if cached and cached.stale_until > now:
+            return SearchOutcome(
+                cached.outcome.results,
+                cached.outcome.providers,
+                cached.outcome.failed_providers,
+                cached=True,
+                stale=True,
+            )
+        return SearchOutcome([], [], ["tavily:circuit_open"])
+
+    started_at = time.monotonic()
+    try:
+        results = _search_tavily(query, settings)
+        if not results:
+            raise RuntimeError("Tavily returned an empty result set")
+        outcome = SearchOutcome(results[: settings.max_results], ["tavily"], [])
+        with _state_lock:
+            _circuit.failures = 0
+            _circuit.open_until = 0
+            _cache[cache_key] = CacheEntry(
+                outcome=outcome,
+                fresh_until=now + settings.cache_ttl_seconds,
+                stale_until=now + settings.cache_ttl_seconds + settings.stale_ttl_seconds,
+            )
+        print(
+            json.dumps(
+                {
+                    "event": "web_search_succeeded",
+                    "provider": "tavily",
+                    "duration_ms": round((time.monotonic() - started_at) * 1000),
+                    "result_count": len(outcome.results),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return outcome
+    except Exception as error:
+        with _state_lock:
+            _circuit.failures += 1
+            if _circuit.failures >= _CIRCUIT_FAILURE_THRESHOLD:
+                _circuit.open_until = time.monotonic() + _CIRCUIT_COOLDOWN_SECONDS
+            failures = _circuit.failures
+        print(
+            json.dumps(
+                {
+                    "event": "web_search_failed",
+                    "provider": "tavily",
+                    "duration_ms": round((time.monotonic() - started_at) * 1000),
+                    "reason": str(error),
+                    "consecutive_failures": failures,
+                },
+                ensure_ascii=False,
+            )
+        )
+        if cached and cached.stale_until > now:
+            return SearchOutcome(
+                cached.outcome.results,
+                cached.outcome.providers,
+                cached.outcome.failed_providers,
+                cached=True,
+                stale=True,
+            )
+        return SearchOutcome([], [], [f"tavily:{error}"])
+
+
+def multi_source_search(query: str) -> SearchOutcome:
+    normalized_query = re.sub(r"\s+", " ", query.strip())
+    cache_key = normalized_query.casefold()
+    settings = _get_settings()
+    now = time.monotonic()
+    with _state_lock:
+        cached = _cache.get(cache_key)
+        if cached and cached.fresh_until > now:
+            return SearchOutcome(
+                cached.outcome.results,
+                cached.outcome.providers,
+                cached.outcome.failed_providers,
+                cached=True,
+            )
+        running = _in_flight.get(cache_key)
+        if running is None:
+            running = InFlightSearch()
+            _in_flight[cache_key] = running
+            owner = True
+        else:
+            owner = False
+
+    if not owner:
+        running.event.wait(timeout=settings.timeout_seconds * 2 + 1)
+        return running.result or SearchOutcome([], [], ["tavily:in_flight_timeout"])
+
+    try:
+        result = _execute_search(normalized_query, cache_key, settings, cached)
+        running.result = result
+        return result
+    finally:
+        running.event.set()
+        with _state_lock:
+            _in_flight.pop(cache_key, None)
+
+
+def search_results_to_text(outcome: SearchOutcome, query: str) -> str:
+    if not outcome.results:
+        reason = ", ".join(outcome.failed_providers)
+        return (
+            f"Tavily 实时搜索暂时不可用（{reason}）。"
+            "不要把训练数据描述为实时结果；请告知用户稍后重试。"
+        )
+    freshness = "⚠️ Tavily 暂时不可用，以下为降级缓存结果" if outcome.stale else "Tavily 实时搜索结果"
+    lines = [f"🔍 {freshness}（{query}）— 共 {len(outcome.results)} 条：\n"]
+    for index, result in enumerate(outcome.results, 1):
+        lines.append(f"[{index}] {result.title}")
+        lines.append(f"    {result.url}")
+        lines.append(f"    {result.snippet[:300]}")
+        if result.published_at:
+            lines.append(f"    发布时间：{result.published_at}")
         lines.append("")
-
     return "\n".join(lines)
 
 
-# ============ 搜索实现 ============
+def reset_search_state_for_tests() -> None:
+    with _state_lock:
+        _cache.clear()
+        _in_flight.clear()
+        _circuit.failures = 0
+        _circuit.open_until = 0
 
-def _clean_html(text: str) -> str:
-    text = unescape(text)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def _search_bing(query: str) -> list[SearchResultItem] | None:
-    """Bing HTML 搜索"""
-    try:
-        with httpx.Client(timeout=6, follow_redirects=True) as client:
-            res = client.get(
-                "https://www.bing.com/search",
-                params={"q": query, "setmkt": "zh-CN"},
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                },
-            )
-            if not res.is_success:
-                return None
-
-        html = res.text
-        results: list[SearchResultItem] = []
-        seen = set()
-
-        for match in re.finditer(r'<li class="b_algo"[^>]*>(.*?)</li>', html, re.DOTALL):
-            item = match.group(1)
-
-            # 允许 <h2> 带额外属性（class 等）
-            title_match = re.search(r'<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)</a></h2>', item, re.DOTALL)
-            if not title_match:
-                continue
-
-            url = title_match.group(1)
-            title = _clean_html(title_match.group(2))
-            if not title or url in seen:
-                continue
-            seen.add(url)
-
-            # 优先使用 b_lineclamp 类摘要，回退到第一个 <p>
-            snippet = "无摘要"
-            lineclamp_match = re.search(r'<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>(.*?)</p>', item, re.DOTALL)
-            if lineclamp_match:
-                snippet = _clean_html(lineclamp_match.group(1))[:300]
-            else:
-                snippet_match = re.search(r"<p[^>]*>(.*?)</p>", item, re.DOTALL)
-                snippet = _clean_html(snippet_match.group(1))[:300] if snippet_match else snippet
-
-            results.append(SearchResultItem(
-                title=title,
-                url=url,
-                snippet=snippet[:300],
-                provider="bing",
-                rank=len(results) + 1,
-            ))
-
-            if len(results) >= 5:
-                break
-
-        return results if results else None
-
-    except Exception:
-        return None
-
-
-def _search_searx(query: str) -> list[SearchResultItem] | None:
-    """Searx 实例搜索"""
-    instances = [
-        "https://search.sapti.me",
-        "https://searx.be",
-        "https://search.bus-hit.me",
-    ]
-
-    for instance in instances:
-        try:
-            with httpx.Client(timeout=3.5, follow_redirects=True) as client:
-                res = client.get(
-                    f"{instance}/search",
-                    params={"q": query, "format": "json", "engines": "google,bing,duckduckgo", "pageno": "1"},
-                    headers={"Accept": "application/json", "User-Agent": "curl/7.68"},
-                )
-                if not res.is_success:
-                    continue
-                data = res.json()
-
-                if data.get("results"):
-                    return [
-                        SearchResultItem(
-                            title=r.get("title", ""),
-                            url=r.get("url", ""),
-                            snippet=(r.get("content") or "")[:300],
-                            provider="searx",
-                            rank=i + 1,
-                            published_at=r.get("publishedDate", ""),
-                        )
-                        for i, r in enumerate(data["results"][:5])
-                    ]
-        except Exception:
-            continue
-
-    return None
-
-
-def _search_duckduckgo(query: str) -> list[SearchResultItem] | None:
-    """DuckDuckGo API 搜索"""
-    try:
-        with httpx.Client(timeout=5, follow_redirects=True) as client:
-            res = client.get(
-                "https://api.duckduckgo.com/",
-                params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
-            )
-            if not res.is_success:
-                return None
-
-        data = res.json()
-        results: list[SearchResultItem] = []
-
-        if data.get("Abstract"):
-            results.append(SearchResultItem(
-                title="摘要",
-                url=data.get("AbstractURL", ""),
-                snippet=data["Abstract"][:300],
-                provider="duckduckgo",
-                rank=1,
-            ))
-
-        if data.get("RelatedTopics"):
-            for i, topic in enumerate(data["RelatedTopics"][:5], 1):
-                if topic.get("Text") and "search for" not in topic["Text"].lower():
-                    results.append(SearchResultItem(
-                        title=topic["Text"][:100],
-                        url=topic.get("FirstURL", ""),
-                        snippet=topic.get("Text", "")[:300],
-                        provider="duckduckgo",
-                        rank=i + 1,
-                    ))
-
-        return results if results else None
-
-    except Exception:
-        return None
-
-
-def multi_source_search(query: str) -> list[SearchResultItem]:
-    """多来源搜索，按优先级尝试各源，去重后合并"""
-    all_results: list[SearchResultItem] = []
-    seen_urls: set[str] = set()
-
-    sources = [
-        ("bing", _search_bing),
-        ("searx", _search_searx),
-        ("duckduckgo", _search_duckduckgo),
-    ]
-
-    with ThreadPoolExecutor(max_workers=len(sources)) as executor:
-        source_results = list(
-            executor.map(lambda source: source[1](query), sources)
-        )
-
-    for (provider_name, _), results in zip(sources, source_results):
-        if results:
-            for result in results:
-                if result.url and result.url not in seen_urls:
-                    seen_urls.add(result.url)
-                    result.provider = provider_name
-                    all_results.append(result)
-
-    # 重新编号 rank
-    for i, r in enumerate(all_results):
-        r.rank = i + 1
-
-    return all_results
-
-
-# ============ Tool Descriptor ============
 
 _DESCRIPTOR = ToolDescriptor(
     name="web.search",
-    version="1.0.0",
+    version="2.0.0",
     title="互联网搜索",
-    description="在互联网上搜索最新信息。当用户问及可能需要事实核查的内容时使用：历史事件、时事新闻、政策法规、具体数据、人物动态、公司信息、体育赛事、学术研究、百科知识等。如果搜索结果不理想，可以基于你的知识直接回答。",
+    description="通过 Tavily 搜索实时互联网信息，返回可核查的标题、链接、摘要与发布时间。",
     category="SEARCH",
     risk_level="R1",
     side_effect="read",
@@ -253,18 +349,15 @@ _DESCRIPTOR = ToolDescriptor(
     required_permissions=["web.search"],
     data_classification=["internal"],
     owner="tools",
-    tags=["web", "search", "internet"],
+    tags=["web", "search", "internet", "realtime", "tavily"],
 )
 
 
-# ============ LangChain Tool ============
-
 class SearchInput(BaseModel):
-    query: str = Field(description="搜索关键词，尽量简洁明确，如'深圳8月28日活动'")
+    query: str = Field(min_length=1, max_length=400, description="简洁明确的搜索关键词")
 
 
 @tool(args_schema=SearchInput)
 def web_search(query: str) -> str:
-    """在互联网上搜索最新信息并返回结果。如果搜索结果不理想，可以基于已有知识回答。"""
-    results = multi_source_search(query)
-    return search_results_to_text(results, query)
+    """使用 Tavily 搜索实时互联网信息并返回来源链接。"""
+    return search_results_to_text(multi_source_search(query), query)

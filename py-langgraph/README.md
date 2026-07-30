@@ -101,6 +101,9 @@ POSTGRES_URI=postgresql://agent:agent@localhost:5432/agent
 
 # Qdrant 向量数据库（RAG 功能需要）
 QDRANT_URL=http://localhost:6333
+
+# 实时搜索（统一使用 Tavily）
+TAVILY_API_KEY=your-tavily-key
 ```
 
 ### 3. 启动服务
@@ -226,6 +229,14 @@ POST /api/internal/agent/chat/stream    流式对话
 | `PORT` | 服务端口 | `6002` | 否 |
 | `POSTGRES_URI` | PostgreSQL 连接字符串 | `postgresql://agent:agent@localhost:5432/agent` | 否 |
 | `QDRANT_URL` | Qdrant 地址 | `http://localhost:6333` | 否 |
+| `TAVILY_API_KEY` | Tavily API 密钥 | - | 是（搜索功能） |
+| `TAVILY_SEARCH_DEPTH` | 搜索深度：`basic` 或 `advanced` | `basic` | 否 |
+| `SEARCH_TIMEOUT_MS` | 单个搜索源超时 | `4500` | 否 |
+| `SEARCH_MAX_RESULTS` | 最终合并结果数 | `8` | 否 |
+| `SEARCH_CACHE_TTL_SECONDS` | 实时结果短缓存时间 | `30` | 否 |
+| `SEARCH_STALE_TTL_SECONDS` | 全部实时源失败时可用的旧缓存窗口 | `600` | 否 |
+
+搜索底层只调用 Tavily。服务会对临时网络错误和限流进行一次重试，连续失败时短暂熔断，并在实时调用失败时返回标记清楚的旧缓存；不会回退到其他搜索网站或把模型训练数据伪装成实时结果。
 
 ## 故障排查
 
