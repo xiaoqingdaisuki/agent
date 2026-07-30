@@ -136,10 +136,12 @@ agent/
 
 ## 快速开始
 
-### 基础设施
+### 一键部署命令
 
 ```bash
-docker-compose up -d
+bash deploy-ecs.sh typescript
+bash deploy-ecs.sh python
+bash deploy-ecs.sh all
 ```
 
 ### TypeScript 版本
