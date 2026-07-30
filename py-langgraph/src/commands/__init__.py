@@ -4,9 +4,9 @@ from typing import NamedTuple
 
 from src.prompts.system import DARK_MODE_PROMPT
 
-DARK_MODE_COMMAND = "切换黑暗模式"
-DARK_MODE_ENABLED_REPLY = "已切换至黑暗模式。"
-DARK_MODE_DISABLED_REPLY = "已关闭黑暗模式。"
+DARK_MODE_COMMAND = "切换大公鸡模式"
+DARK_MODE_ENABLED_REPLY = "已切换至大公鸡模式。"
+DARK_MODE_DISABLED_REPLY = "已关闭大公鸡模式。"
 
 
 class AgentCommandResult(NamedTuple):

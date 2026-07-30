@@ -63,7 +63,7 @@ describe("agent commands", () => {
 
     const disabledRequest = [
       nextRequest,
-      `assistant: 黑暗模式回答`,
+      `assistant: 大公鸡模式回答`,
       `user: ${DARK_MODE_COMMAND}`,
     ].join("\n\n");
     expect(executeAgentCommand(disabledRequest, "another-random-thread")?.reply)

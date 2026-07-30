@@ -50,7 +50,7 @@ def test_vibe_formatted_conversation_restores_mode_without_stable_thread_id():
 
     disabled_request = "\n\n".join([
         next_request,
-        "assistant: 黑暗模式回答",
+        "assistant: 大公鸡模式回答",
         f"user: {DARK_MODE_COMMAND}",
     ])
     result = execute_agent_command(disabled_request, "random-thread-3")
