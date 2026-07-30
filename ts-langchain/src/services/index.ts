@@ -16,6 +16,11 @@ import { TextSplitter } from "../rag/splitter.js";
 import { MemoryService, ProfileService, HistoryService } from "../profile/service.js";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { createToolCallScope, runWithToolCallContext } from "../tools/runtime/executor.js";
+import {
+  clearAgentCommandState,
+  executeAgentCommand,
+  getAgentPromptOverride,
+} from "../commands/index.js";
 
 // ============ 类型定义 ============
 
@@ -130,6 +135,7 @@ export class ConversationService {
 
   static delete(id: string): boolean {
     clearHistory(id);
+    clearAgentCommandState(id);
     conversationMessages.delete(id);
     return conversations.delete(id);
   }
@@ -165,6 +171,7 @@ export class ConversationService {
     const conversation = conversations.get(conversationId);
     if (conversation) conversation.messageCount = 0;
     clearHistory(conversationId);
+    clearAgentCommandState(conversationId);
   }
 }
 
@@ -173,6 +180,18 @@ export class ConversationService {
 export class AgentService {
   static async chat(conversationId: string, content: string, userId?: string): Promise<Message> {
     try {
+      const command = executeAgentCommand(content, conversationId);
+      if (command) {
+        const reply: Message = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: command.reply,
+          createdAt: new Date().toISOString(),
+        };
+        ConversationService.appendAssistantMessage(conversationId, reply);
+        return reply;
+      }
+
       const history = getHistory(conversationId);
       const memoryContext: SystemMessage[] = [];
 
@@ -188,7 +207,9 @@ export class AgentService {
       }
 
       const conversation = ConversationService.get(conversationId);
-      const agent = conversation?.mode === "knowledge" ? null : await createToolAgent();
+      const agent = conversation?.mode === "knowledge"
+        ? null
+        : await createToolAgent(getAgentPromptOverride(conversationId));
 
       // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
       const toolContext = {
@@ -260,6 +281,12 @@ export class AgentService {
     userId?: string
   ): AsyncGenerator<string, void, unknown> {
     try {
+      const command = executeAgentCommand(content, conversationId);
+      if (command) {
+        yield command.reply;
+        return;
+      }
+
       const history = getHistory(conversationId);
       const memoryContext: SystemMessage[] = [];
 
@@ -273,7 +300,7 @@ export class AgentService {
         }
       }
 
-      const agent = await createToolAgent();
+      const agent = await createToolAgent(getAgentPromptOverride(conversationId));
 
       const toolContext = {
         request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,

@@ -4,6 +4,7 @@ import { appendMessage, getHistory } from "../../memory/conversation.js";
 import { MemoryService, ProfileService } from "../../profile/service.js";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { createToolCallScope } from "../../tools/runtime/executor.js";
+import { executeAgentCommand, getAgentPromptOverride } from "../../commands/index.js";
 
 export async function registerStreamRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
@@ -15,6 +16,17 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       }
 
       const threadId = thread_id || crypto.randomUUID();
+
+      const command = executeAgentCommand(message, threadId);
+      if (command) {
+        reply.raw.setHeader("Content-Type", "text/event-stream");
+        reply.raw.setHeader("Cache-Control", "no-cache");
+        reply.raw.setHeader("Connection", "keep-alive");
+        reply.raw.write(`data: ${JSON.stringify({ text: command.reply })}\n\n`);
+        reply.raw.write("data: [DONE]\n\n");
+        reply.raw.end();
+        return;
+      }
       const memoryContext: SystemMessage[] = [];
       if (user_id) {
         try {
@@ -26,7 +38,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         }
       }
 
-      const toolAgent = await createToolAgent();
+      const toolAgent = await createToolAgent(getAgentPromptOverride(threadId));
       const history = getHistory(threadId);
 
       const toolContext = {

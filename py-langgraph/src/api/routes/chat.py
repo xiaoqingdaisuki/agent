@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
+from src.commands import execute_agent_command, get_agent_prompt_override
 
 router = APIRouter()
 
@@ -27,6 +28,11 @@ async def chat(request: ChatRequest):
     避免出现无工具绑定的"哑巴" agent。
     """
     try:
+        thread_id = request.thread_id or str(uuid4())
+        command = execute_agent_command(request.message, thread_id)
+        if command:
+            return ChatResponse(reply=command.reply, thread_id=thread_id)
+
         if request.user_id:
             try:
                 from src.profile.service import ProfileService
@@ -36,9 +42,10 @@ async def chat(request: ChatRequest):
                 # Profile storage is optional; the agent loads memory when available.
                 pass
 
-        agent = build_tool_agent()
+        agent = build_tool_agent(
+            system_prompt_override=get_agent_prompt_override(thread_id)
+        )
 
-        thread_id = request.thread_id or str(uuid4())
         config = {
             "configurable": {"thread_id": thread_id},
             "recursion_limit": AGENT_RECURSION_LIMIT,

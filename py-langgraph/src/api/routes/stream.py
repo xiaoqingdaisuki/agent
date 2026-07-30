@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
+from src.commands import execute_agent_command, get_agent_prompt_override
 
 router = APIRouter()
 
@@ -21,8 +22,20 @@ async def stream(request: StreamRequest):
     """流式对话 — 使用 Server-Sent Events"""
     from fastapi.responses import StreamingResponse
 
-    agent = build_tool_agent()
     thread_id = request.thread_id or str(uuid4())
+    command = execute_agent_command(request.message, thread_id)
+
+    if command:
+        async def command_event_generator():
+            payload = json.dumps({"text": command.reply}, ensure_ascii=False)
+            yield f"data: {payload}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(command_event_generator(), media_type="text/event-stream")
+
+    agent = build_tool_agent(
+        system_prompt_override=get_agent_prompt_override(thread_id)
+    )
     config = {
         "configurable": {"thread_id": thread_id},
         "recursion_limit": AGENT_RECURSION_LIMIT,

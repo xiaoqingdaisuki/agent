@@ -140,6 +140,9 @@ class ConversationService:
     @staticmethod
     def delete(conv_id: str) -> bool:
         if conv_id in _conversations:
+            from src.commands import clear_agent_command_state
+
+            clear_agent_command_state(conv_id)
             del _conversations[conv_id]
             return True
         return False
@@ -169,6 +172,9 @@ class ConversationService:
     def clear_messages(conv_id: str) -> None:
         conv = _conversations.get(conv_id)
         if conv:
+            from src.commands import clear_agent_command_state
+
+            clear_agent_command_state(conv_id)
             conv.messages.clear()
             conv.message_count = 0
 
@@ -328,7 +334,14 @@ class AgentService:
     async def chat(conversation_id: str, content: str, user_id: str = None) -> Message:
         try:
             from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
+            from src.commands import execute_agent_command, get_agent_prompt_override
             from src.profile.service import HistoryService, MemoryService, ProfileService
+
+            command = execute_agent_command(content, conversation_id)
+            if command:
+                reply = Message("assistant", command.reply)
+                ConversationService.append_assistant_message(conversation_id, reply)
+                return reply
 
             if user_id:
                 try:
@@ -337,7 +350,13 @@ class AgentService:
                     pass
 
             conversation = ConversationService.get(conversation_id)
-            agent = build_tool_agent() if not conversation or conversation.mode != "knowledge" else None
+            agent = (
+                build_tool_agent(
+                    system_prompt_override=get_agent_prompt_override(conversation_id)
+                )
+                if not conversation or conversation.mode != "knowledge"
+                else None
+            )
             config = {
                 "configurable": {"thread_id": conversation_id},
                 "recursion_limit": AGENT_RECURSION_LIMIT,
@@ -399,7 +418,13 @@ class AgentService:
     async def chat_stream(conversation_id: str, content: str, user_id: str = None):
         try:
             from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
+            from src.commands import execute_agent_command, get_agent_prompt_override
             from src.profile.service import HistoryService, MemoryService, ProfileService
+
+            command = execute_agent_command(content, conversation_id)
+            if command:
+                yield command.reply
+                return
 
             if user_id:
                 try:
@@ -407,7 +432,9 @@ class AgentService:
                 except Exception:
                     pass
 
-            agent = build_tool_agent()
+            agent = build_tool_agent(
+                system_prompt_override=get_agent_prompt_override(conversation_id)
+            )
             config = {
                 "configurable": {"thread_id": conversation_id},
                 "recursion_limit": AGENT_RECURSION_LIMIT,

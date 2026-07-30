@@ -64,6 +64,30 @@ class TestChatEndpoint:
         response = await client.post("/chat", json={})
         assert response.status_code == 422  # Validation error
 
+    @pytest.mark.asyncio
+    async def test_chat_handles_dark_mode_command_without_calling_model(
+        self, client: AsyncClient
+    ):
+        from src.commands import (
+            DARK_MODE_COMMAND,
+            DARK_MODE_ENABLED_REPLY,
+            clear_agent_command_state,
+        )
+
+        thread_id = "api-command-thread"
+        clear_agent_command_state(thread_id)
+        response = await client.post(
+            "/chat",
+            json={"message": DARK_MODE_COMMAND, "thread_id": thread_id},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "reply": DARK_MODE_ENABLED_REPLY,
+            "thread_id": thread_id,
+        }
+        clear_agent_command_state(thread_id)
+
 
 class TestToolsEndpoint:
     @pytest.mark.asyncio

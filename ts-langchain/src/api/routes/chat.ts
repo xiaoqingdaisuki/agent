@@ -4,6 +4,7 @@ import { getHistory, appendMessage } from "../../memory/conversation.js";
 import { MemoryService, ProfileService } from "../../profile/service.js";
 import { HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 import { runWithToolCallContext } from "../../tools/runtime/executor.js";
+import { executeAgentCommand, getAgentPromptOverride } from "../../commands/index.js";
 
 export async function registerChatRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
@@ -16,6 +17,11 @@ export async function registerChatRoutes(app: FastifyInstance) {
         }
 
         const threadId = thread_id || crypto.randomUUID();
+
+        const command = executeAgentCommand(message, threadId);
+        if (command) {
+          return { reply: command.reply, thread_id: threadId };
+        }
 
         // 注入用户记忆（与 v1 API 保持一致）
         const memoryContext: SystemMessage[] = [];
@@ -31,7 +37,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
           }
         }
 
-        const agent = await createToolAgent();
+        const agent = await createToolAgent(getAgentPromptOverride(threadId));
         const history = getHistory(threadId);
 
         // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
