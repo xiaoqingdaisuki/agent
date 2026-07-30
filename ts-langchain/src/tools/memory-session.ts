@@ -29,6 +29,10 @@ class SessionMemoryStore {
     this.sessions.set(conversationId, messages);
   }
 
+  clear(conversationId: string): void {
+    this.sessions.delete(conversationId);
+  }
+
   search(conversationId: string, query: string, maxResults: number = 5): SessionMessage[] {
     const messages = this.sessions.get(conversationId) || [];
     if (!query) return messages.slice(-maxResults);
@@ -89,7 +93,7 @@ export const sessionMemoryDescriptor: ToolDescriptor = {
 // ============ LangChain Tool ============
 
 export const memorySessionSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
-  name: "memory.session.search",
+  name: "memory_session_search",
   description:
     "在当前会话中搜索之前的对话内容。当需要回顾用户之前说过的话或查找之前的回答时使用。",
   schema: z.object({

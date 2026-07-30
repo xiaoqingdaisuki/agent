@@ -81,7 +81,7 @@ export const knowledgeSearchDescriptor: ToolDescriptor = {
 // ============ LangChain Tool ============
 
 export const knowledgeSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
-  name: "knowledge.search",
+  name: "knowledge_search",
   description:
     "在企业知识库中搜索相关信息。适用于需要从公司文档、产品手册、技术文档等内部资料中查找答案的场景。返回带文档来源和页码的引用。",
   schema: z.object({

@@ -1,7 +1,13 @@
 import { describe, it, expect } from "vitest";
+import { tools } from "../../src/tools/index.js";
 import { registry, getToolsForUser, getToolMetadata } from "../../src/tools/registry.js";
 
 describe("Tool Registry", () => {
+  it("uses provider-safe names for bound tools", () => {
+    for (const tool of tools) {
+      expect(tool.name).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    }
+  });
   it("returns default tools", () => {
     const tools = registry.getAllTools();
     expect(tools.length).toBeGreaterThanOrEqual(4);

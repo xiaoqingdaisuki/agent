@@ -112,6 +112,9 @@ async def delete_conversation(conv_id: str):
             status_code=404,
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
+    from src.memory import get_default_checkpointer
+
+    await get_default_checkpointer().adelete_thread(conv_id)
     return {"success": True}
 
 
@@ -123,7 +126,7 @@ async def get_messages(conv_id: str):
             status_code=404,
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
-    return []
+    return ConversationService.get_messages(conv_id)
 
 
 @router.post("/conversations/{conv_id}/messages", response_model=MessageResponse)
@@ -159,6 +162,10 @@ async def clear_messages(conv_id: str):
             status_code=404,
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
+    ConversationService.clear_messages(conv_id)
+    from src.memory import get_default_checkpointer
+
+    await get_default_checkpointer().adelete_thread(conv_id)
     return {"success": True}
 
 
@@ -223,7 +230,7 @@ async def get_document(doc_id: str):
 
 @router.delete("/knowledge/documents/{doc_id}")
 async def delete_document(doc_id: str):
-    deleted = KnowledgeService.delete_document(doc_id)
+    deleted = await KnowledgeService.delete_document(doc_id)
     if not deleted:
         raise HTTPException(
             status_code=404,

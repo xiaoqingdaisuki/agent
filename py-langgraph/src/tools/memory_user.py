@@ -8,9 +8,10 @@ memory.user — 用户长期记忆管理
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field
 
 from src.tools.contracts import (
@@ -130,15 +131,24 @@ class UserSearchInput(BaseModel):
 
 
 @tool(args_schema=UserSearchInput)
-def memory_user_search(user_id: str, query: str = "", category: str = "", max_results: int = 10) -> str:
+def memory_user_search(
+    user_id: str,
+    query: str = "",
+    category: str = "",
+    max_results: int = 10,
+    state: Annotated[dict, InjectedState()] = None,
+) -> str:
     """搜索当前用户的长期记忆。当需要了解用户的偏好、习惯、个人信息等持久化记忆时使用。"""
+    scoped_user_id = state.get("user_id") if state is not None else user_id
+    if not scoped_user_id:
+        return "🧠 未提供已认证的用户上下文，无法读取长期记忆。"
     store = get_user_memory_store()
-    results = store.search(user_id, query, category, max_results)
+    results = store.search(scoped_user_id, query, category, max_results)
 
     if not results:
         return "🧠 未找到相关记忆。"
 
-    lines = [f"🧠 用户记忆（{user_id}）— {len(results)} 条：\n"]
+    lines = [f"🧠 用户记忆（{scoped_user_id}）— {len(results)} 条：\n"]
     for i, m in enumerate(results, 1):
         lines.append(f"[{i}] [{m['category']}] {m['content']}")
         lines.append(f"    重要性：{m['importance']} | 来源：{m.get('source', 'unknown')}")
@@ -157,18 +167,27 @@ class UserSaveInput(BaseModel):
 
 
 @tool(args_schema=UserSaveInput)
-def memory_user_save(user_id: str, content: str, category: str = "fact", importance: int = 3) -> str:
+def memory_user_save(
+    user_id: str,
+    content: str,
+    category: str = "fact",
+    importance: int = 3,
+    state: Annotated[dict, InjectedState()] = None,
+) -> str:
     """保存一条关于用户的重要信息到长期记忆。只有用户明确表达或有长期价值的信息才应该保存。"""
+    scoped_user_id = state.get("user_id") if state is not None else user_id
+    if not scoped_user_id:
+        return "🧠 未提供已认证的用户上下文，无法保存长期记忆。"
     store = get_user_memory_store()
 
     # 检查是否已有相似记忆（用完整内容精确匹配）
-    existing = store.search(user_id, "", max_results=100)
+    existing = store.search(scoped_user_id, "", max_results=100)
     content_lower = content.strip().lower()
     for m in existing:
         if content_lower == m["content"].lower().strip():
             return f"🧠 记忆已存在（ID: {m['id']}），未重复保存。"
 
-    memory = store.add(user_id, content, category, importance)
+    memory = store.add(scoped_user_id, content, category, importance)
     return f"🧠 已保存记忆（ID: {memory['id']}）：{content}"
 
 

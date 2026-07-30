@@ -129,7 +129,7 @@ export const userMemorySaveDescriptor: ToolDescriptor = {
 // ============ LangChain Tool: memory.user.search ============
 
 export const memoryUserSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
-  name: "memory.user.search",
+  name: "memory_user_search",
   description:
     "搜索当前用户的长期记忆。当需要了解用户的偏好、习惯、个人信息等持久化记忆时使用。",
   schema: z.object({
@@ -160,7 +160,7 @@ export const memoryUserSearchTool: DynamicStructuredTool = new DynamicStructured
 // ============ LangChain Tool: memory.user.save ============
 
 export const memoryUserSaveTool: DynamicStructuredTool = new DynamicStructuredTool({
-  name: "memory.user.save",
+  name: "memory_user_save",
   description:
     "保存一条关于用户的重要信息到长期记忆。只有用户明确表达或有长期价值的信息才应该保存。",
   schema: z.object({

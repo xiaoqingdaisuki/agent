@@ -15,7 +15,7 @@ import { DocumentLoader } from "../rag/loader.js";
 import { TextSplitter } from "../rag/splitter.js";
 import { MemoryService, ProfileService, HistoryService } from "../profile/service.js";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { setToolCallContext, clearToolCallContext } from "../tools/runtime/executor.js";
+import { createToolCallScope, runWithToolCallContext } from "../tools/runtime/executor.js";
 
 // ============ 类型定义 ============
 
@@ -101,6 +101,7 @@ export class BusinessError extends Error {
 // ============ Conversation Service ============
 
 const conversations = new Map<string, Conversation>();
+const conversationMessages = new Map<string, Message[]>();
 
 export class ConversationService {
   static create(title: string, mode: "chat" | "knowledge" | "mixed" = "chat"): Conversation {
@@ -113,6 +114,7 @@ export class ConversationService {
       messageCount: 0,
     };
     conversations.set(id, conversation);
+    conversationMessages.set(id, []);
     return conversation;
   }
 
@@ -128,6 +130,7 @@ export class ConversationService {
 
   static delete(id: string): boolean {
     clearHistory(id);
+    conversationMessages.delete(id);
     return conversations.delete(id);
   }
 
@@ -143,11 +146,25 @@ export class ConversationService {
     };
 
     conv.messageCount++;
-
-    // 同时写入 LangChain conversation memory，确保消息出现在 agent 上下文
-    appendMessage(conversationId, new HumanMessage(content));
+    conversationMessages.get(conversationId)!.push(msg);
 
     return msg;
+  }
+
+  static appendAssistantMessage(conversationId: string, message: Message): void {
+    const messages = conversationMessages.get(conversationId);
+    if (messages) messages.push(message);
+  }
+
+  static getMessages(conversationId: string): Message[] {
+    return [...(conversationMessages.get(conversationId) ?? [])];
+  }
+
+  static clearMessages(conversationId: string): void {
+    conversationMessages.set(conversationId, []);
+    const conversation = conversations.get(conversationId);
+    if (conversation) conversation.messageCount = 0;
+    clearHistory(conversationId);
   }
 }
 
@@ -170,28 +187,26 @@ export class AgentService {
         }
       }
 
-      const agent = await createToolAgent();
+      const conversation = ConversationService.get(conversationId);
+      const agent = conversation?.mode === "knowledge" ? null : await createToolAgent();
 
       // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
-      setToolCallContext({
+      const toolContext = {
         request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         trace_id: `trace_${Date.now()}`,
         conversation_id: conversationId,
         tenant_id: "",
         user_id: userId || "anonymous",
         actor_type: "user",
-      });
+      } as const;
 
-      let result;
-      try {
-        result = await (agent as any).invoke({
-          input: content,
-          chat_history: history,
-          memory_context: memoryContext,
-        });
-      } finally {
-        clearToolCallContext();
-      }
+      const result = conversation?.mode === "knowledge"
+        ? await KnowledgeService.chat(content, history)
+        : await runWithToolCallContext(toolContext, () => (agent as any).invoke({
+            input: content,
+            chat_history: history,
+            memory_context: memoryContext,
+          }));
 
       const reply: Message = {
         id: crypto.randomUUID(),
@@ -202,6 +217,7 @@ export class AgentService {
 
       appendMessage(conversationId, new HumanMessage(content));
       appendMessage(conversationId, new AIMessage(reply.content));
+      ConversationService.appendAssistantMessage(conversationId, reply);
 
       // 记录问答历史 + 提取新记忆
       if (userId) {
@@ -259,30 +275,30 @@ export class AgentService {
 
       const agent = await createToolAgent();
 
-      setToolCallContext({
+      const toolContext = {
         request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         trace_id: `trace_${Date.now()}`,
         conversation_id: conversationId,
         tenant_id: "",
         user_id: userId || "anonymous",
         actor_type: "user",
-      });
+      } as const;
 
       let fullAnswer = "";
-      try {
-        const stream = await (agent as any).stream(
-          { input: content, chat_history: history, memory_context: memoryContext },
-          { tags: ["stream"] },
-        );
+      const scope = createToolCallScope(toolContext);
+      const stream = await scope.run(() => (agent as any).stream(
+        { input: content, chat_history: history, memory_context: memoryContext },
+        { tags: ["stream"] },
+      ));
+      const iterator = stream[Symbol.asyncIterator]();
 
-        for await (const chunk of stream) {
-          if (chunk?.output) {
-            fullAnswer += chunk.output;
-            yield chunk.output;
-          }
+      while (true) {
+        const { value: chunk, done } = await scope.run(() => iterator.next());
+        if (done) break;
+        if (chunk?.output) {
+          fullAnswer += chunk.output;
+          yield chunk.output;
         }
-      } finally {
-        clearToolCallContext();
       }
 
       if (fullAnswer) {
@@ -320,6 +336,7 @@ export class AgentService {
 // ============ Knowledge Service ============
 
 const documents = new Map<string, Document>();
+const documentContents = new Map<string, { content: string; filename: string }>();
 
 export class KnowledgeService {
   private static ragAgent: RAGAgent | null = null;
@@ -335,6 +352,10 @@ export class KnowledgeService {
     return this.ragAgent;
   }
 
+  static async chat(content: string, history: any[] = []) {
+    return this.getRAGAgent().chat(content, history);
+  }
+
   /**
    * 上传文档
    */
@@ -348,7 +369,7 @@ export class KnowledgeService {
       const chunks = this.splitter.split(doc);
 
       // 索引到向量库
-      await this.getRAGAgent().indexDocument(doc.content, filename);
+      await this.getRAGAgent().indexDocument(doc.content, filename, doc.id);
 
       const document: Document = {
         id: doc.id,
@@ -361,6 +382,7 @@ export class KnowledgeService {
       };
 
       documents.set(document.id, document);
+      documentContents.set(document.id, { content: doc.content, filename });
       return document;
     } catch (error: any) {
       throw new BusinessError(
@@ -390,7 +412,10 @@ export class KnowledgeService {
   /**
    * 删除文档
    */
-  static deleteDocument(id: string): boolean {
+  static async deleteDocument(id: string): Promise<boolean> {
+    if (!documents.has(id)) return false;
+    await this.getRAGAgent().deleteDocument(id);
+    documentContents.delete(id);
     return documents.delete(id);
   }
 
@@ -403,8 +428,15 @@ export class KnowledgeService {
       throw new BusinessError(BusinessErrorCode.NOT_FOUND, "Document not found", 404);
     }
 
+    const source = documentContents.get(id);
+    if (!source) {
+      throw new BusinessError(BusinessErrorCode.NOT_FOUND, "Document content not found", 404);
+    }
+    doc.status = "indexing";
+    await this.getRAGAgent().deleteDocument(id);
+    const result = await this.getRAGAgent().indexDocument(source.content, source.filename, id);
     doc.status = "indexed";
-    doc.chunks = Math.floor(doc.size / 800); // 估算
+    doc.chunks = result.chunks;
     return doc;
   }
 
@@ -413,7 +445,7 @@ export class KnowledgeService {
    */
   static async search(query: string, topK: number = 5): Promise<SearchResult[]> {
     try {
-      const results = await this.getRAGAgent()["retriever"].retrieve(query);
+      const results = await this.getRAGAgent()["retriever"].retrieve(query, topK);
 
       return results.map((r) => ({
         document_id: r.metadata.source,

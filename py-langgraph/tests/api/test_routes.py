@@ -30,6 +30,12 @@ class TestHealthEndpoint:
         data = response.json()
         assert "version" in data
 
+    @pytest.mark.asyncio
+    async def test_legacy_health_route(self, client: AsyncClient):
+        response = await client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
 
 class TestCors:
     @pytest.mark.asyncio
@@ -118,3 +124,22 @@ class TestConversationEndpoints:
         """Should return 404 when deleting non-existent conversation"""
         response = await client.delete("/api/v1/conversations/nonexistent_id")
         assert response.status_code == 404
+
+
+class TestKnowledgeEndpoints:
+    @pytest.mark.asyncio
+    async def test_upload_accepts_multipart(self, client: AsyncClient, monkeypatch):
+        from src.services import Document, KnowledgeService
+
+        async def fake_upload(buffer: bytes, filename: str, category: str | None = None):
+            assert buffer == b"hello"
+            assert filename == "note.txt"
+            return Document(filename, len(buffer), chunks=1, category=category)
+
+        monkeypatch.setattr(KnowledgeService, "upload_document", fake_upload)
+        response = await client.post(
+            "/api/v1/knowledge/documents",
+            files={"file": ("note.txt", b"hello", "text/plain")},
+        )
+        assert response.status_code == 201
+        assert response.json()["name"] == "note.txt"

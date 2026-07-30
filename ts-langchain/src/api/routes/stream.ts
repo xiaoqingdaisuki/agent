@@ -3,7 +3,7 @@ import { createToolAgent } from "../../agents/tool-agent.js";
 import { appendMessage, getHistory } from "../../memory/conversation.js";
 import { MemoryService, ProfileService } from "../../profile/service.js";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { setToolCallContext, clearToolCallContext } from "../../tools/runtime/executor.js";
+import { createToolCallScope } from "../../tools/runtime/executor.js";
 
 export async function registerStreamRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
@@ -29,27 +29,31 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       const toolAgent = await createToolAgent();
       const history = getHistory(threadId);
 
-      setToolCallContext({
+      const toolContext = {
         request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         trace_id: `trace_${Date.now()}`,
         conversation_id: threadId,
         tenant_id: "",
         user_id: user_id || "anonymous",
         actor_type: "user",
-      });
+      } as const;
 
       reply.raw.setHeader("Content-Type", "text/event-stream");
       reply.raw.setHeader("Cache-Control", "no-cache");
       reply.raw.setHeader("Connection", "keep-alive");
 
       try {
-        const stream = await toolAgent.stream(
+        const scope = createToolCallScope(toolContext);
+        const stream = await scope.run(() => toolAgent.stream(
           { input: message, chat_history: history, memory_context: memoryContext },
           { tags: ["stream"] }
-        );
+        ));
+        const iterator = stream[Symbol.asyncIterator]();
 
         let fullAnswer = "";
-        for await (const chunk of stream) {
+        while (true) {
+          const { value: chunk, done } = await scope.run(() => iterator.next());
+          if (done) break;
           if (chunk?.output) {
             const text = String(chunk.output);
             fullAnswer += text;
@@ -69,8 +73,6 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         reply.raw.write(`data: ${JSON.stringify({ error: "Internal server error" })}\n\n`);
         reply.raw.write("data: [DONE]\n\n");
         reply.raw.end();
-      } finally {
-        clearToolCallContext();
       }
     }
   );

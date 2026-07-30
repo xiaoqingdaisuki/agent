@@ -7,6 +7,7 @@ import {
   clearHistory,
   getHistory,
 } from "../../src/memory/conversation.js";
+import { ConversationService } from "../../src/services/index.js";
 
 describe("conversation history", () => {
   const threadId = "bounded-history";
@@ -22,5 +23,25 @@ describe("conversation history", () => {
     const history = getHistory(threadId);
     expect(history.length).toBeLessThanOrEqual(MAX_HISTORY_MESSAGES);
     expect(history[0]._getType()).toBe("human");
+  });
+});
+
+describe("ConversationService message history", () => {
+  it("stores and clears API messages without duplicating agent history", () => {
+    const conversation = ConversationService.create("history");
+    ConversationService.appendUserMessage(conversation.id, "hello");
+    ConversationService.appendAssistantMessage(conversation.id, {
+      id: "assistant-1",
+      role: "assistant",
+      content: "hi",
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(ConversationService.getMessages(conversation.id).map((message) => message.content))
+      .toEqual(["hello", "hi"]);
+    expect(getHistory(conversation.id)).toHaveLength(0);
+    ConversationService.clearMessages(conversation.id);
+    expect(ConversationService.getMessages(conversation.id)).toEqual([]);
+    expect(ConversationService.get(conversation.id)?.messageCount).toBe(0);
   });
 });

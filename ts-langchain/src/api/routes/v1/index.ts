@@ -16,8 +16,39 @@ import {
   BusinessError,
   BusinessErrorCode,
 } from "../../../services/index.js";
-import { clearHistory } from "../../../memory/conversation.js";
 import { ProfileService, MemoryService, HistoryService } from "../../../profile/service.js";
+import type { Conversation, Document, Message } from "../../../services/index.js";
+
+function serializeConversation(conversation: Conversation) {
+  return {
+    id: conversation.id,
+    title: conversation.title,
+    mode: conversation.mode,
+    created_at: conversation.createdAt,
+    message_count: conversation.messageCount,
+  };
+}
+
+function serializeMessage(message: Message) {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    created_at: message.createdAt,
+  };
+}
+
+function serializeDocument(document: Document) {
+  return {
+    id: document.id,
+    name: document.name,
+    size: document.size,
+    status: document.status,
+    chunks: document.chunks,
+    category: document.category,
+    created_at: document.createdAt,
+  };
+}
 
 export async function registerV1Routes(app: FastifyInstance) {
   // ============ 健康检查 ============
@@ -41,7 +72,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       }
 
       const conv = ConversationService.create(title, mode);
-      return reply.status(201).send(conv);
+      return reply.status(201).send(serializeConversation(conv));
     } catch (error: any) {
       if (error instanceof BusinessError) {
         return reply.status(error.statusCode).send(error.toJSON());
@@ -53,7 +84,7 @@ export async function registerV1Routes(app: FastifyInstance) {
   });
 
   app.get("/conversations", async () => {
-    return ConversationService.list();
+    return ConversationService.list().map(serializeConversation);
   });
 
   app.get<{ Params: { id: string } }>("/conversations/:id", async (request, reply) => {
@@ -63,7 +94,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
       });
     }
-    return conv;
+    return serializeConversation(conv);
   });
 
   app.delete<{ Params: { id: string } }>("/conversations/:id", async (request, reply) => {
@@ -83,7 +114,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
       });
     }
-    return [];
+    return ConversationService.getMessages(request.params.id).map(serializeMessage);
   });
 
   app.post<{
@@ -108,7 +139,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       ConversationService.appendUserMessage(request.params.id, content);
       const assistantMessage = await AgentService.chat(request.params.id, content, request.body.user_id);
 
-      return reply.status(200).send({ message: assistantMessage });
+      return reply.status(200).send(serializeMessage(assistantMessage));
     } catch (error: any) {
       if (error instanceof BusinessError) {
         return reply.status(error.statusCode).send(error.toJSON());
@@ -128,7 +159,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
         });
       }
-      clearHistory(request.params.id);
+      ConversationService.clearMessages(request.params.id);
       return { success: true };
     }
   );
@@ -137,8 +168,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.post("/knowledge/documents", async (request, reply) => {
     try {
-      const body: any = request.body;
-      const file = body.file as { data?: Buffer; filename?: string } | undefined;
+      const file = await request.file();
 
       if (!file) {
         return reply.status(400).send({
@@ -146,12 +176,16 @@ export async function registerV1Routes(app: FastifyInstance) {
         });
       }
 
+      const buffer = await file.toBuffer();
+      const rawCategory = file.fields.category;
+      const categoryField = Array.isArray(rawCategory) ? rawCategory[0] : rawCategory;
       const doc = await KnowledgeService.uploadDocument(
-        Buffer.from(file.data || ""),
-        file.filename || "unknown"
+        buffer,
+        file.filename || "unknown",
+        categoryField?.type === "field" ? String(categoryField.value) : undefined,
       );
 
-      return reply.status(201).send(doc);
+      return reply.status(201).send(serializeDocument(doc));
     } catch (error: any) {
       if (error instanceof BusinessError) {
         return reply.status(error.statusCode).send(error.toJSON());
@@ -163,7 +197,7 @@ export async function registerV1Routes(app: FastifyInstance) {
   });
 
   app.get("/knowledge/documents", async () => {
-    return KnowledgeService.listDocuments();
+    return KnowledgeService.listDocuments().map(serializeDocument);
   });
 
   app.get<{ Params: { id: string } }>("/knowledge/documents/:id", async (request, reply) => {
@@ -173,11 +207,11 @@ export async function registerV1Routes(app: FastifyInstance) {
         error: { code: BusinessErrorCode.NOT_FOUND, message: "文档不存在" },
       });
     }
-    return doc;
+    return serializeDocument(doc);
   });
 
   app.delete<{ Params: { id: string } }>("/knowledge/documents/:id", async (request, reply) => {
-    const deleted = KnowledgeService.deleteDocument(request.params.id);
+    const deleted = await KnowledgeService.deleteDocument(request.params.id);
     if (!deleted) {
       return reply.status(404).send({
         error: { code: BusinessErrorCode.NOT_FOUND, message: "文档不存在" },
@@ -189,7 +223,7 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/knowledge/documents/:id/reindex", async (request, reply) => {
     try {
       const doc = await KnowledgeService.reindexDocument(request.params.id);
-      return doc;
+      return serializeDocument(doc);
     } catch (error: any) {
       if (error instanceof BusinessError) {
         return reply.status(error.statusCode).send(error.toJSON());

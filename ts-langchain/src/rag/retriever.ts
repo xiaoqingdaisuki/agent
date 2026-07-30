@@ -29,9 +29,9 @@ export class Retriever {
   /**
    * 检索相关文档
    */
-  async retrieve(query: string): Promise<SearchResult[]> {
+  async retrieve(query: string, topK: number = this.topK): Promise<SearchResult[]> {
     const queryEmbedding = await this.embedder.embed(query);
-    return this.vectorStore.search(queryEmbedding, this.topK);
+    return this.vectorStore.search(queryEmbedding, topK);
   }
 
   /**

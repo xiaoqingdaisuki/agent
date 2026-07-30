@@ -73,8 +73,8 @@ function createModelWithXmlFix(model: ChatOpenAI): ChatOpenAI {
     const bm = ob(tools);
     const oi = bm.invoke.bind(bm);
     (bm as any).invoke = async (msgs: BaseMessage[], opts?: any) => {
-      const r = await oi(msgs, opts);
-      return convertXmlToolCalls(r);
+      const r = await oi(msgs as any, opts);
+      return convertXmlToolCalls(r as unknown as BaseMessage);
     };
     return bm;
   };

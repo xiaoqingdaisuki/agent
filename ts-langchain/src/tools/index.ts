@@ -47,15 +47,15 @@ export const tools = [
  * 工具名称 → ToolDescriptor 映射，用于 invokeTool 管线的权限/审计检查。
  */
 export const toolDescriptors: Record<string, import("./contracts.js").ToolDescriptor> = {
-  [weatherDescriptor.name]: weatherDescriptor,
-  [webSearchDescriptor.name]: webSearchDescriptor,
-  [webReadDescriptor.name]: webReadDescriptor,
-  [calculatorDescriptor.name]: calculatorDescriptor,
-  [knowledgeSearchDescriptor.name]: knowledgeSearchDescriptor,
-  [fileReadDescriptor.name]: fileReadDescriptor,
-  [sessionMemoryDescriptor.name]: sessionMemoryDescriptor,
-  [userMemorySearchDescriptor.name]: userMemorySearchDescriptor,
-  [userMemorySaveDescriptor.name]: userMemorySaveDescriptor,
+  [weatherTool.name]: weatherDescriptor,
+  [webSearchTool.name]: webSearchDescriptor,
+  [webReadTool.name]: webReadDescriptor,
+  [calculatorTool.name]: calculatorDescriptor,
+  [knowledgeSearchTool.name]: knowledgeSearchDescriptor,
+  [fileReadTool.name]: fileReadDescriptor,
+  [memorySessionSearchTool.name]: sessionMemoryDescriptor,
+  [memoryUserSearchTool.name]: userMemorySearchDescriptor,
+  [memoryUserSaveTool.name]: userMemorySaveDescriptor,
 };
 
 /**

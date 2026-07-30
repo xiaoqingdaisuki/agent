@@ -6,6 +6,7 @@ from src.services import (
     BusinessErrorCode,
     ConversationService,
     Conversation,
+    KnowledgeService,
 )
 
 
@@ -90,3 +91,35 @@ class TestConversationService:
         with pytest.raises(BusinessError) as exc_info:
             ConversationService.append_user_message("nonexistent_id", "Hello")
         assert exc_info.value.code == BusinessErrorCode.NOT_FOUND
+
+    def test_message_history_can_be_read_and_cleared(self):
+        conv = ConversationService.create("History")
+        ConversationService.append_user_message(conv.id, "Hello")
+        from src.services import Message
+
+        ConversationService.append_assistant_message(conv.id, Message("assistant", "Hi"))
+        assert [message["content"] for message in ConversationService.get_messages(conv.id)] == [
+            "Hello",
+            "Hi",
+        ]
+        ConversationService.clear_messages(conv.id)
+        assert ConversationService.get_messages(conv.id) == []
+        assert conv.message_count == 0
+
+
+class TestKnowledgeService:
+    @pytest.mark.asyncio
+    async def test_upload_builds_business_document(self, monkeypatch):
+        from src.rag.vector_store import VectorStore
+
+        captured = []
+
+        async def fake_add_documents(self, chunks, content_field="content"):
+            captured.extend(chunks)
+
+        monkeypatch.setattr(VectorStore, "__init__", lambda self, **kwargs: None)
+        monkeypatch.setattr(VectorStore, "add_documents", fake_add_documents)
+        document = await KnowledgeService.upload_document(b"hello world", "note.txt")
+        assert document.name == "note.txt"
+        assert document.chunks == 1
+        assert captured[0]["metadata"]["document_id"] == document.id

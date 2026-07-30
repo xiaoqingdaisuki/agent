@@ -119,7 +119,7 @@ export const fileReadDescriptor: ToolDescriptor = {
 // ============ LangChain Tool ============
 
 export const fileReadTool: DynamicStructuredTool = new DynamicStructuredTool({
-  name: "file.read",
+  name: "file_read",
   description:
     "安全读取工作区内的指定文件内容。自动进行路径安全检查。大文件支持通过 offset/limit 分段读取。",
   schema: z.object({

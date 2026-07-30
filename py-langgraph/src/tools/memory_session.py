@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from langchain_core.tools import tool
+from langgraph.prebuilt.tool_node import ToolRuntime
 from pydantic import BaseModel, Field
 
 from src.tools.contracts import (
@@ -88,15 +89,44 @@ class SessionSearchInput(BaseModel):
 
 
 @tool(args_schema=SessionSearchInput)
-def memory_session_search(conversation_id: str, query: str = "", max_results: int = 5) -> str:
+def memory_session_search(
+    conversation_id: str,
+    query: str = "",
+    max_results: int = 5,
+    runtime: ToolRuntime = None,
+) -> str:
     """在当前会话中搜索之前的对话内容。当需要回顾用户之前说过的话或查找之前的回答时使用。"""
-    store = get_session_store()
-    results = store.search(conversation_id, query, max_results)
+    scoped_conversation_id = (
+        runtime.config.get("configurable", {}).get("thread_id")
+        if runtime is not None
+        else conversation_id
+    )
+    if not scoped_conversation_id:
+        return "📝 未提供当前会话上下文，无法读取会话记忆。"
+    if runtime is not None:
+        messages = runtime.state.get("messages", [])
+        normalized = [
+            {
+                "role": "user" if message.type == "human" else "assistant",
+                "content": message.content if isinstance(message.content, str) else str(message.content),
+            }
+            for message in messages
+            if message.type in {"human", "ai"}
+        ]
+        query_lower = query.lower()
+        results = [
+            message
+            for message in normalized
+            if not query or query_lower in message["content"].lower()
+        ][-max_results:]
+    else:
+        store = get_session_store()
+        results = store.search(scoped_conversation_id, query, max_results)
 
     if not results:
         return "📝 当前会话中未找到相关内容。"
 
-    lines = [f"📝 会话记忆（{conversation_id}）— 找到 {len(results)} 条：\n"]
+    lines = [f"📝 会话记忆（{scoped_conversation_id}）— 找到 {len(results)} 条：\n"]
     for i, msg in enumerate(results, 1):
         role = "用户" if msg["role"] == "user" else "助手"
         lines.append(f"[{i}] {role}：{msg['content'][:200]}")

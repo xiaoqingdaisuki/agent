@@ -3,7 +3,7 @@ import { createToolAgent } from "../../agents/tool-agent.js";
 import { getHistory, appendMessage } from "../../memory/conversation.js";
 import { MemoryService, ProfileService } from "../../profile/service.js";
 import { HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
-import { setToolCallContext, clearToolCallContext } from "../../tools/runtime/executor.js";
+import { runWithToolCallContext } from "../../tools/runtime/executor.js";
 
 export async function registerChatRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
@@ -35,21 +35,20 @@ export async function registerChatRoutes(app: FastifyInstance) {
         const history = getHistory(threadId);
 
         // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
-        setToolCallContext({
+        const toolContext = {
           request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           trace_id: `trace_${Date.now()}`,
           conversation_id: threadId,
           tenant_id: "",
           user_id: user_id || "anonymous",
           actor_type: "user",
-        });
+        } as const;
 
-        try {
-          const result = await (agent as any).invoke({
+        const result = await runWithToolCallContext(toolContext, () => (agent as any).invoke({
             input: message,
             chat_history: history,
             memory_context: memoryContext,
-          });
+          }));
 
           const reply_text =
             typeof result.output === "string" ? result.output : "抱歉，我没有理解您的问题。";
@@ -57,12 +56,8 @@ export async function registerChatRoutes(app: FastifyInstance) {
           appendMessage(threadId, new HumanMessage(message));
           appendMessage(threadId, new AIMessage(reply_text));
 
-          return { reply: reply_text, thread_id: threadId };
-        } finally {
-          clearToolCallContext();
-        }
+        return { reply: reply_text, thread_id: threadId };
       } catch (error: any) {
-        clearToolCallContext();
         console.error("Chat error:", error);
         if (error.message?.includes("API key")) {
           return reply.status(500).send({ error: "API key not configured. Set OPENAI_API_KEY in .env" });

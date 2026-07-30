@@ -284,7 +284,7 @@ export const webSearchDescriptor: ToolDescriptor = {
 // ============ LangChain Tool ============
 
 export const webSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
-  name: "web.search",
+  name: "web_search",
   description:
     "在互联网上搜索最新信息并返回结果。当用户问及可能需要事实核查的内容时使用：历史事件、时事新闻、政策法规、具体数据、人物动态、公司/产品信息、体育赛事、学术研究、百科知识等。如果搜索结果不理想，可以基于你的知识直接回答。",
   schema: z.object({

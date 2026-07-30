@@ -9,6 +9,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+from langgraph.prebuilt.tool_node import ToolCallRequest
 from typing_extensions import TypedDict
 
 
@@ -173,6 +174,22 @@ def _current_turn_tool_call_count(messages: list[BaseMessage]) -> int:
     return count
 
 
+def _scope_memory_tool_call(request: ToolCallRequest, execute):
+    """Replace model-supplied ownership IDs with server-side graph context."""
+    name = request.tool_call["name"]
+    args = dict(request.tool_call.get("args", {}))
+    if name in {"memory_user_search", "memory_user_save"}:
+        state = request.state if isinstance(request.state, dict) else {}
+        args["user_id"] = state.get("user_id") or ""
+    elif name == "memory_session_search":
+        args["conversation_id"] = (
+            request.runtime.config.get("configurable", {}).get("thread_id", "")
+        )
+
+    scoped_call = {**request.tool_call, "args": args}
+    return execute(request.override(tool_call=scoped_call))
+
+
 def should_continue(state: AgentState) -> Literal["tools", "limit", END]:
     """判断是否需要调用工具"""
     last_message = state["messages"][-1]
@@ -262,7 +279,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
     builder = StateGraph(AgentState)
     builder.add_node("trim_history", trim_history)
     builder.add_node("agent", agent_node)
-    builder.add_node("tools", ToolNode(tools))
+    builder.add_node("tools", ToolNode(tools, wrap_tool_call=_scope_memory_tool_call))
     builder.add_node("limit", limit_node)
 
     # 显式定义图的边

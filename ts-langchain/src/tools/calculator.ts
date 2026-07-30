@@ -202,7 +202,7 @@ export const calculatorDescriptor: ToolDescriptor = {
 };
 
 export const calculatorTool: DynamicStructuredTool = new DynamicStructuredTool({
-  name: "math.calculate",
+  name: "calculator",
   description:
     "安全计算数学表达式。支持四则运算、幂运算（**）、括号和取模（%）。当用户需要进行数学计算时使用此工具。",
   schema: z.object({

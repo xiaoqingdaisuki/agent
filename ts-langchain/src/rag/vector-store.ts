@@ -116,6 +116,25 @@ export class VectorStore {
     })) || [];
   }
 
+  async deleteDocuments(documentId: string): Promise<void> {
+    const url = `${this.baseUrl}/collections/${this.collectionName}/points/delete?wait=true`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(this.apiKey ? { "api-key": this.apiKey } : {}),
+      },
+      body: JSON.stringify({
+        filter: {
+          must: [{ key: "metadata.document_id", match: { value: documentId } }],
+        },
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to delete document vectors: ${response.statusText}`);
+    }
+  }
+
   /**
    * 删除 collection
    */

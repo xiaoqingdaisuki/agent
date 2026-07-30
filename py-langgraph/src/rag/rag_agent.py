@@ -45,11 +45,6 @@ def build_rag_agent(
         top_k=top_k,
     )
 
-    def agent_node(state: RAGState):
-        """Agent 节点：决定是否需要检索"""
-        response = llm.invoke(state["messages"])
-        return {"messages": [response]}
-
     async def retrieve_node(state: RAGState):
         """检索节点：从向量库获取相关文档"""
         last_message = state["messages"][-1]
@@ -72,7 +67,7 @@ def build_rag_agent(
         # 实际项目中可以用 LLM 判断相关性
         return {"should_retrieve": len(context) > 0}
 
-    def generate_node(state: RAGState):
+    async def generate_node(state: RAGState):
         """生成节点：基于检索结果生成回答"""
         context = state.get("context", [])
         last_message = state["messages"][-1]
@@ -90,40 +85,20 @@ Question: {last_message.content}
 
 Answer:"""
 
-        response = llm.invoke(prompt)
+        response = await llm.ainvoke(prompt)
         return {"messages": [response]}
-
-    def should_retrieve(state: RAGState) -> str:
-        """条件路由：判断是否需要检索"""
-        if state.get("should_retrieve"):
-            return "retrieve"
-        return "generate"
-
-    def should_generate(state: RAGState) -> str:
-        """条件路由：判断是否需要重新检索"""
-        if state.get("should_retrieve") and not state.get("context"):
-            return "retrieve"
-        return "generate"
 
     # 构建图
     builder = StateGraph(RAGState)
 
-    builder.add_node("agent", agent_node)
     builder.add_node("retrieve", retrieve_node)
     builder.add_node("grade", grade_node)
     builder.add_node("generate", generate_node)
 
     # 显式定义边
-    builder.add_edge(START, "agent")
-    builder.add_conditional_edges("agent", should_retrieve, {
-        "retrieve": "retrieve",
-        "generate": "generate",
-    })
+    builder.add_edge(START, "retrieve")
     builder.add_edge("retrieve", "grade")
-    builder.add_conditional_edges("grade", should_generate, {
-        "retrieve": "retrieve",
-        "generate": "generate",
-    })
+    builder.add_edge("grade", "generate")
     builder.add_edge("generate", END)
 
     return builder.compile()

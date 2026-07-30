@@ -11,19 +11,20 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "langchain": "^0.3",
+    "@fastify/cors": "^8.4",
+    "@fastify/multipart": "^8.0.0",
+    "@langchain/anthropic": "^0.1",
     "@langchain/core": "^0.3",
     "@langchain/openai": "^0.1",
-    "@langchain/anthropic": "^0.1",
-    "zod": "^3.23",
+    "dotenv": "^16.3",
     "fastify": "^4.26",
-    "@fastify/cors": "^8.4",
-    "dotenv": "^16.3"
+    "langchain": "^0.3",
+    "zod": "^3.23"
   },
   "devDependencies": {
-    "typescript": "^5.5",
+    "@types/node": "^22.0",
     "tsx": "^4.7",
-    "vitest": "^2.0",
-    "@types/node": "^22.0"
+    "typescript": "^5.5",
+    "vitest": "^2.0"
   }
 }

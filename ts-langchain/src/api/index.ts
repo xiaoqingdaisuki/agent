@@ -1,4 +1,5 @@
 import fastify from "fastify";
+import multipart from "@fastify/multipart";
 import { registerV1Routes } from "./routes/v1/index.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerStreamRoutes } from "./routes/stream.js";
@@ -20,6 +21,9 @@ export async function buildApp() {
 
   await app.register(import("@fastify/cors"), {
     origin: config.CORS_ORIGIN.length > 0 ? config.CORS_ORIGIN : false,
+  });
+  await app.register(multipart, {
+    limits: { files: 1, fileSize: 10 * 1024 * 1024 },
   });
 
   // External API v1（前端 UI 使用）— 带 /api/v1 前缀

@@ -3,6 +3,11 @@ Tests for memory.session and memory.user Tools
 """
 
 import pytest
+from langchain_core.messages import AIMessage
+from langgraph.graph import END, START, StateGraph
+from langgraph.prebuilt import ToolNode
+
+from src.agents.base import AgentState, _scope_memory_tool_call
 from src.tools.memory_session import (
     memory_session_search,
     _SESSION_DESCRIPTOR,
@@ -174,3 +179,31 @@ class TestMemoryTools:
         })
         assert "已保存" in r1
         assert "已存在" in r2
+
+    @pytest.mark.asyncio
+    async def test_agent_cannot_override_injected_user_id(self):
+        owner = "injected_owner"
+        victim = "model_supplied_victim"
+        builder = StateGraph(AgentState)
+        builder.add_node(
+            "tools",
+            ToolNode([memory_user_save], wrap_tool_call=_scope_memory_tool_call),
+        )
+        builder.add_edge(START, "tools")
+        builder.add_edge("tools", END)
+        graph = builder.compile()
+        await graph.ainvoke(
+            {
+                "user_id": owner,
+                "messages": [AIMessage(content="", tool_calls=[{
+                    "name": "memory_user_save",
+                    "args": {"user_id": victim, "content": "scoped secret"},
+                    "id": "call-scope-test",
+                    "type": "tool_call",
+                }])],
+            },
+            config={"configurable": {"thread_id": "scope-test"}},
+        )
+        store = get_user_memory_store()
+        assert store.search(victim, "scoped secret") == []
+        assert len(store.search(owner, "scoped secret")) == 1

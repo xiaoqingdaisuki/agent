@@ -84,6 +84,10 @@ def create_app() -> FastAPI:
     # External API v1（前端 UI 使用）
     app.include_router(v1_router, prefix="/api/v1", tags=["v1"])
 
+    @app.get("/health")
+    async def legacy_health():
+        return {"status": "ok", "version": "0.2.0"}
+
     # 旧路由（保留兼容）
     app.include_router(chat.router, prefix="/chat", tags=["chat"])
     app.include_router(stream.router, prefix="/stream", tags=["stream"])

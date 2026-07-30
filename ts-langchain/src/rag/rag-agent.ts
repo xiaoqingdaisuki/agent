@@ -15,6 +15,8 @@ import { Retriever } from "./retriever.js";
 import { TextSplitter } from "./splitter.js";
 import { DocumentLoader } from "./loader.js";
 import { DynamicStructuredTool } from "langchain/tools";
+import { Embedder } from "./embedder.js";
+import { VectorStore } from "./vector-store.js";
 
 export interface RAGOptions {
   qdrantUrl: string;
@@ -59,6 +61,8 @@ function createRetrieverTool(retriever: Retriever) {
 export class RAGAgent {
   private retriever: Retriever;
   private splitter: TextSplitter;
+  private embedder: Embedder;
+  private vectorStore: VectorStore;
   private agent: Promise<AgentExecutor>;
 
   constructor(options: RAGOptions) {
@@ -67,6 +71,11 @@ export class RAGAgent {
       collectionName: options.collectionName,
     });
     this.splitter = new TextSplitter();
+    this.embedder = new Embedder();
+    this.vectorStore = new VectorStore({
+      url: options.qdrantUrl,
+      collectionName: options.collectionName,
+    });
     this.agent = this.createAgent(options);
   }
 
@@ -119,14 +128,28 @@ Be concise and accurate in your responses.`,
   /**
    * 索引文档
    */
-  async indexDocument(content: string, filename: string): Promise<{ chunks: number }> {
+  async indexDocument(
+    content: string,
+    filename: string,
+    documentId?: string,
+  ): Promise<{ chunks: number }> {
     const doc = await DocumentLoader.loadFromBuffer(Buffer.from(content), filename);
     const chunks = this.splitter.split(doc);
 
-    // 向量化并存储
-    // TODO: 实际实现中需要 embed + upsert 到 Qdrant
+    const embeddings = await this.embedder.embedBatch(chunks.map((chunk) => chunk.text));
+    await this.vectorStore.addDocuments(
+      chunks.map((chunk) => ({
+        content: chunk.text,
+        metadata: { ...chunk.metadata, document_id: documentId ?? doc.id },
+      })),
+      embeddings,
+    );
 
     return { chunks: chunks.length };
+  }
+
+  async deleteDocument(documentId: string): Promise<void> {
+    await this.vectorStore.deleteDocuments(documentId);
   }
 
   /**

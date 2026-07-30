@@ -15,6 +15,7 @@
 
 import type { ToolDescriptor, ToolCallContext, ToolRuntimeResult, ToolResultEnvelope } from "../contracts.js";
 import { recordToolMetric } from "../observability.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 // ============ 审计记录 ============
 
@@ -158,18 +159,35 @@ interface BudgetState {
   maxTotal: number;
 }
 
-const budgetState: BudgetState = {
-  toolCallsThisRound: 0,
-  totalToolCalls: 0,
-  maxPerRound: 8,
-  maxTotal: 20,
-};
+interface ToolRuntimeContext {
+  context: ToolCallContext;
+  budget: BudgetState;
+}
+
+const runtimeStorage = new AsyncLocalStorage<ToolRuntimeContext>();
+
+function createBudgetState(): BudgetState {
+  return {
+    toolCallsThisRound: 0,
+    totalToolCalls: 0,
+    maxPerRound: 8,
+    maxTotal: 20,
+  };
+}
+
+// 仅供没有请求上下文的直接调用使用；Agent 请求使用 AsyncLocalStorage 隔离预算。
+const fallbackBudgetState = createBudgetState();
+
+function getBudgetState(): BudgetState {
+  return runtimeStorage.getStore()?.budget ?? fallbackBudgetState;
+}
 
 export function resetRoundBudget(): void {
-  budgetState.toolCallsThisRound = 0;
+  getBudgetState().toolCallsThisRound = 0;
 }
 
 export function budgetGuard(): ToolRuntimeResult<null> | null {
+  const budgetState = getBudgetState();
   if (budgetState.toolCallsThisRound >= budgetState.maxPerRound) {
     return {
       success: false,
@@ -276,7 +294,7 @@ export async function invokeTool<TInput, TOutput>(
     return {
       ok: false,
       data: null,
-      error: budgetResult.error,
+      error: budgetResult.error ?? null,
       meta: {
         tool_call_id: callId,
         tool_name: toolName,
@@ -306,7 +324,7 @@ export async function invokeTool<TInput, TOutput>(
       return {
         ok: false,
         data: null,
-        error: validation.error,
+        error: validation.error ?? null,
         meta: {
           tool_call_id: callId,
           tool_name: toolName,
@@ -369,7 +387,7 @@ export async function invokeTool<TInput, TOutput>(
     ]);
   } catch (error: unknown) {
     const isTimeout = error instanceof Error && error.message === "TIMEOUT";
-    const errorCode: ToolRuntimeResult["error"]["code"] = isTimeout ? "TIMEOUT" : "INTERNAL_ERROR";
+    const errorCode = isTimeout ? "TIMEOUT" : "INTERNAL_ERROR";
 
     recordAudit({
       tool_name: toolName,
@@ -435,29 +453,29 @@ export async function invokeTool<TInput, TOutput>(
 
 // ============ Per-Request 上下文管理 ============
 
-/** 当前工具调用的运行时上下文（API 层在 agent.invoke 前设置） */
-let currentToolCallContext: ToolCallContext | null = null;
-
-/**
- * 设置当前请求的工具调用上下文。
- * 在 agent.invoke() 之前调用，确保工具执行时能获取到 user_id 等信息。
- */
-export function setToolCallContext(context: ToolCallContext): void {
-  currentToolCallContext = context;
-}
-
-/**
- * 获取当前工具调用上下文，未设置时返回 undefined。
- */
 export function getToolCallContext(): ToolCallContext | undefined {
-  return currentToolCallContext ?? undefined;
+  return runtimeStorage.getStore()?.context;
 }
 
 /**
- * 清除当前工具调用上下文（invoke 完成后必须调用）。
+ * 在独立异步上下文中运行一次 Agent 请求，隔离用户身份与工具预算。
  */
-export function clearToolCallContext(): void {
-  currentToolCallContext = null;
+export function runWithToolCallContext<T>(
+  context: ToolCallContext,
+  callback: () => T,
+): T {
+  return createToolCallScope(context).run(callback);
+}
+
+export function createToolCallScope(context: ToolCallContext): {
+  run<T>(callback: () => T): T;
+} {
+  const store = { context, budget: createBudgetState() };
+  return {
+    run<T>(callback: () => T): T {
+      return runtimeStorage.run(store, callback);
+    },
+  };
 }
 
 // ============ 工具 Runtime 包装 ============
@@ -483,8 +501,18 @@ export function wrapToolWithRuntime(
   const wrappedFunc = async (rawInput: unknown): Promise<string> => {
     const context = getToolCallContext();
     if (!context) {
-      // 未设置上下文时降级为直接调用原始 func（保底）
-      return await tool.func(rawInput as any);
+      throw new Error("Tool runtime context is required");
+    }
+
+    // 用户/会话 ID 属于服务端上下文，禁止模型通过工具参数越权覆盖。
+    let scopedInput = rawInput;
+    if (rawInput && typeof rawInput === "object") {
+      const input = { ...(rawInput as Record<string, unknown>) };
+      if (descriptor.name.startsWith("memory.user.")) input.user_id = context.user_id;
+      if (descriptor.name === "memory.session.search") {
+        input.conversation_id = context.conversation_id;
+      }
+      scopedInput = input;
     }
 
     const executor: ToolExecutor<unknown, string> = {
@@ -493,7 +521,7 @@ export function wrapToolWithRuntime(
       execute: async (input: unknown) => tool.func(input as any),
     };
 
-    const result = await invokeTool(executor, rawInput, context);
+    const result = await invokeTool(executor, scopedInput, context);
 
     if (!result.ok) {
       throw new Error(result.error?.message ?? "Tool execution failed");

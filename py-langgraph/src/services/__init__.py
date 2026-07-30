@@ -8,6 +8,8 @@ Service Layer — 业务逻辑编排
 4. 与 API 层解耦，前端看不到内部实现
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 from enum import Enum
 from typing import Optional
@@ -45,6 +47,7 @@ class Conversation:
         self.mode = mode
         self.created_at = datetime.now().isoformat()
         self.message_count = 0
+        self.messages: list[Message] = []
 
     def to_dict(self):
         return {
@@ -147,12 +150,33 @@ class ConversationService:
         if not conv:
             raise BusinessError(BusinessErrorCode.NOT_FOUND, "Conversation not found", 404)
         conv.message_count += 1
-        return Message("user", content)
+        message = Message("user", content)
+        conv.messages.append(message)
+        return message
+
+    @staticmethod
+    def append_assistant_message(conv_id: str, message: Message) -> None:
+        conv = _conversations.get(conv_id)
+        if conv:
+            conv.messages.append(message)
+
+    @staticmethod
+    def get_messages(conv_id: str) -> list[dict]:
+        conv = _conversations.get(conv_id)
+        return [message.to_dict() for message in conv.messages] if conv else []
+
+    @staticmethod
+    def clear_messages(conv_id: str) -> None:
+        conv = _conversations.get(conv_id)
+        if conv:
+            conv.messages.clear()
+            conv.message_count = 0
 
 
 # ============ Knowledge Service ============
 
 _documents: dict[str, Document] = {}
+_document_contents: dict[str, tuple[bytes, str]] = {}
 
 
 class KnowledgeService:
@@ -161,12 +185,13 @@ class KnowledgeService:
         """上传并索引文档"""
         try:
             from src.rag.embedder import Embedder
-            from src.rag.loader import Document
+            from src.config.settings import settings
+            from src.rag.loader import Document as RAGDocument
             from src.rag.splitter import TextSplitter
             from src.rag.vector_store import VectorStore
 
             # 加载文档
-            doc = Document.from_bytes(buffer, filename)
+            doc = RAGDocument.from_bytes(buffer, filename)
 
             # 切分
             splitter = TextSplitter()
@@ -174,20 +199,9 @@ class KnowledgeService:
 
             # 向量化并存储
             vector_store = VectorStore(
-                url="http://localhost:6333",
+                url=settings.qdrant_url,
                 collection_name="documents",
             )
-
-            chunk_dicts = [
-                {
-                    "id": f"chunk_{i}",
-                    "content": chunk.text,
-                    "metadata": chunk.metadata,
-                }
-                for i, chunk in enumerate(chunks)
-            ]
-
-            await vector_store.add_documents(chunk_dicts)
 
             document = Document(
                 name=filename,
@@ -195,7 +209,19 @@ class KnowledgeService:
                 chunks=len(chunks),
                 category=category,
             )
+            chunk_dicts = [
+                {
+                    "id": f"{document.id}:chunk_{i}",
+                    "content": chunk.text,
+                    "metadata": {**chunk.metadata, "document_id": document.id},
+                }
+                for i, chunk in enumerate(chunks)
+            ]
+
+            await vector_store.add_documents(chunk_dicts)
+
             _documents[document.id] = document
+            _document_contents[document.id] = (buffer, filename)
             return document
 
         except Exception as e:
@@ -218,17 +244,46 @@ class KnowledgeService:
         return _documents.get(doc_id)
 
     @staticmethod
-    def delete_document(doc_id: str) -> bool:
-        if doc_id in _documents:
-            del _documents[doc_id]
-            return True
-        return False
+    async def delete_document(doc_id: str) -> bool:
+        if doc_id not in _documents:
+            return False
+        from src.config.settings import settings
+        from src.rag.vector_store import VectorStore
+
+        vector_store = VectorStore(url=settings.qdrant_url, collection_name="documents")
+        await vector_store.delete_document(doc_id)
+        del _documents[doc_id]
+        _document_contents.pop(doc_id, None)
+        return True
 
     @staticmethod
     async def reindex_document(doc_id: str) -> Document:
         doc = _documents.get(doc_id)
         if not doc:
             raise BusinessError(BusinessErrorCode.NOT_FOUND, "Document not found", 404)
+        source = _document_contents.get(doc_id)
+        if source is None:
+            raise BusinessError(BusinessErrorCode.NOT_FOUND, "Document content not found", 404)
+
+        from src.config.settings import settings
+        from src.rag.loader import Document as RAGDocument
+        from src.rag.splitter import TextSplitter
+        from src.rag.vector_store import VectorStore
+
+        buffer, filename = source
+        loaded = RAGDocument.from_bytes(buffer, filename)
+        chunks = TextSplitter().split(loaded.content, filename, loaded.metadata["source"])
+        vector_store = VectorStore(url=settings.qdrant_url, collection_name="documents")
+        await vector_store.delete_document(doc_id)
+        await vector_store.add_documents([
+            {
+                "id": f"{doc_id}:chunk_{index}",
+                "content": chunk.text,
+                "metadata": {**chunk.metadata, "document_id": doc_id},
+            }
+            for index, chunk in enumerate(chunks)
+        ])
+        doc.chunks = len(chunks)
         doc.status = "indexed"
         return doc
 
@@ -236,16 +291,27 @@ class KnowledgeService:
     async def search(query: str, top_k: int = 5) -> list[dict]:
         """知识检索"""
         try:
+            from src.config.settings import settings
             from src.rag.retriever import Retriever
 
             retriever = Retriever(
-                qdrant_url="http://localhost:6333",
+                qdrant_url=settings.qdrant_url,
                 collection_name="documents",
                 top_k=top_k,
             )
 
             results = await retriever.retrieve(query)
-            return results
+            return [
+                {
+                    "document_id": result["metadata"].get("document_id")
+                    or result["metadata"].get("source", ""),
+                    "document_name": result["metadata"].get("filename", ""),
+                    "content": result["content"],
+                    "score": result["score"],
+                    "page": result["metadata"].get("chunk_index"),
+                }
+                for result in results
+            ]
         except Exception:
             raise BusinessError(
                 BusinessErrorCode.SERVICE_UNAVAILABLE,
@@ -270,7 +336,8 @@ class AgentService:
                 except Exception:
                     pass
 
-            agent = build_tool_agent()
+            conversation = ConversationService.get(conversation_id)
+            agent = build_tool_agent() if not conversation or conversation.mode != "knowledge" else None
             config = {
                 "configurable": {"thread_id": conversation_id},
                 "recursion_limit": AGENT_RECURSION_LIMIT,
@@ -278,13 +345,24 @@ class AgentService:
             if user_id:
                 config["configurable"]["user_id"] = user_id
 
-            result = await agent.ainvoke(
-                {"messages": [{"role": "user", "content": content}], "user_id": user_id},
-                config=config,
-            )
+            if conversation and conversation.mode == "knowledge":
+                from langchain_core.messages import HumanMessage
+                from src.rag.rag_agent import build_rag_agent
+
+                result = await build_rag_agent().ainvoke({
+                    "messages": [HumanMessage(content=content)],
+                    "context": [],
+                    "should_retrieve": True,
+                })
+            else:
+                result = await agent.ainvoke(
+                    {"messages": [{"role": "user", "content": content}], "user_id": user_id},
+                    config=config,
+                )
 
             reply_content = result["messages"][-1].content or "抱歉，我没有理解您的问题。"
             reply = Message("assistant", reply_content)
+            ConversationService.append_assistant_message(conversation_id, reply)
 
             # 记录问答历史 + 提取新记忆
             if user_id:

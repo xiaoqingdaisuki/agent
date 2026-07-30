@@ -205,7 +205,7 @@ export const webReadDescriptor: ToolDescriptor = {
 // ============ LangChain Tool ============
 
 export const webReadTool: DynamicStructuredTool = new DynamicStructuredTool({
-  name: "web.read",
+  name: "web_read",
   description:
     "读取指定 URL 的网页正文内容。自动去除 HTML 标签、脚本和样式，提取可读文本。通常在 web_search 之后使用来获取详细信息。",
   schema: z.object({

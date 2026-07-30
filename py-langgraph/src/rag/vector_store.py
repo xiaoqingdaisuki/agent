@@ -4,7 +4,7 @@ RAG 向量存储 — Qdrant
 
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, PointStruct, VectorParams
 
 from src.rag.embedder import Embedder
 
@@ -77,6 +77,21 @@ class VectorStore:
             }
             for r in results
         ]
+
+    async def delete_document(self, document_id: str) -> None:
+        """删除一份文档的全部向量。"""
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=Filter(
+                must=[
+                    FieldCondition(
+                        key="metadata.document_id",
+                        match=MatchValue(value=document_id),
+                    )
+                ]
+            ),
+            wait=True,
+        )
 
     def delete_collection(self) -> None:
         """删除 collection"""
