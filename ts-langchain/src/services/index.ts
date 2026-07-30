@@ -209,7 +209,7 @@ export class AgentService {
       const conversation = ConversationService.get(conversationId);
       const agent = conversation?.mode === "knowledge"
         ? null
-        : await createToolAgent(getAgentPromptOverride(conversationId));
+        : await createToolAgent(getAgentPromptOverride(conversationId, content));
 
       // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
       const toolContext = {
@@ -300,7 +300,7 @@ export class AgentService {
         }
       }
 
-      const agent = await createToolAgent(getAgentPromptOverride(conversationId));
+      const agent = await createToolAgent(getAgentPromptOverride(conversationId, content));
 
       const toolContext = {
         request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,

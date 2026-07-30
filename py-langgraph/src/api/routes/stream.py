@@ -34,7 +34,7 @@ async def stream(request: StreamRequest):
         return StreamingResponse(command_event_generator(), media_type="text/event-stream")
 
     agent = build_tool_agent(
-        system_prompt_override=get_agent_prompt_override(thread_id)
+        system_prompt_override=get_agent_prompt_override(thread_id, request.message)
     )
     config = {
         "configurable": {"thread_id": thread_id},

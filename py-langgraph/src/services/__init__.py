@@ -352,7 +352,7 @@ class AgentService:
             conversation = ConversationService.get(conversation_id)
             agent = (
                 build_tool_agent(
-                    system_prompt_override=get_agent_prompt_override(conversation_id)
+                    system_prompt_override=get_agent_prompt_override(conversation_id, content)
                 )
                 if not conversation or conversation.mode != "knowledge"
                 else None
@@ -433,7 +433,7 @@ class AgentService:
                     pass
 
             agent = build_tool_agent(
-                system_prompt_override=get_agent_prompt_override(conversation_id)
+                system_prompt_override=get_agent_prompt_override(conversation_id, content)
             )
             config = {
                 "configurable": {"thread_id": conversation_id},

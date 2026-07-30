@@ -74,19 +74,15 @@ class TestChatEndpoint:
             clear_agent_command_state,
         )
 
-        thread_id = "api-command-thread"
-        clear_agent_command_state(thread_id)
         response = await client.post(
             "/chat",
-            json={"message": DARK_MODE_COMMAND, "thread_id": thread_id},
+            json={"message": f"user: {DARK_MODE_COMMAND}"},
         )
 
         assert response.status_code == 200
-        assert response.json() == {
-            "reply": DARK_MODE_ENABLED_REPLY,
-            "thread_id": thread_id,
-        }
-        clear_agent_command_state(thread_id)
+        assert response.json()["reply"] == DARK_MODE_ENABLED_REPLY
+        assert response.json()["thread_id"]
+        clear_agent_command_state(response.json()["thread_id"])
 
 
 class TestToolsEndpoint:

@@ -39,15 +39,35 @@ describe("agent commands", () => {
       const enabled = await app.inject({
         method: "POST",
         url: "/chat",
-        payload: { message: DARK_MODE_COMMAND, thread_id: threadId },
+        payload: { message: `user: ${DARK_MODE_COMMAND}` },
       });
       expect(enabled.statusCode).toBe(200);
-      expect(enabled.json()).toEqual({
-        reply: DARK_MODE_ENABLED_REPLY,
-        thread_id: threadId,
-      });
+      expect(enabled.json().reply).toBe(DARK_MODE_ENABLED_REPLY);
+      expect(enabled.json().thread_id).toEqual(expect.any(String));
     } finally {
       await app.close();
     }
+  });
+
+  it("recognizes Vibe formatted conversations without a stable thread id", () => {
+    const formattedCommand = `user: ${DARK_MODE_COMMAND}`;
+    expect(executeAgentCommand(formattedCommand, threadId)?.reply)
+      .toBe(DARK_MODE_ENABLED_REPLY);
+
+    const nextRequest = [
+      formattedCommand,
+      `assistant: ${DARK_MODE_ENABLED_REPLY}`,
+      "user: 你好",
+    ].join("\n\n");
+    expect(getAgentPromptOverride("new-random-thread", nextRequest)).toBe(DARK_MODE_PROMPT);
+
+    const disabledRequest = [
+      nextRequest,
+      `assistant: 黑暗模式回答`,
+      `user: ${DARK_MODE_COMMAND}`,
+    ].join("\n\n");
+    expect(executeAgentCommand(disabledRequest, "another-random-thread")?.reply)
+      .toBe(DARK_MODE_DISABLED_REPLY);
+    expect(getAgentPromptOverride("another-random-thread", disabledRequest)).toBeUndefined();
   });
 });

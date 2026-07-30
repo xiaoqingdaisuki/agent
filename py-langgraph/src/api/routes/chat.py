@@ -43,7 +43,7 @@ async def chat(request: ChatRequest):
                 pass
 
         agent = build_tool_agent(
-            system_prompt_override=get_agent_prompt_override(thread_id)
+            system_prompt_override=get_agent_prompt_override(thread_id, request.message)
         )
 
         config = {

@@ -38,7 +38,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         }
       }
 
-      const toolAgent = await createToolAgent(getAgentPromptOverride(threadId));
+      const toolAgent = await createToolAgent(getAgentPromptOverride(threadId, message));
       const history = getHistory(threadId);
 
       const toolContext = {

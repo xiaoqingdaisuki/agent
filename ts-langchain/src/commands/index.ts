@@ -11,6 +11,21 @@ export interface AgentCommandResult {
 
 const darkModeThreads = new Set<string>();
 
+const TRANSCRIPT_MESSAGE_PATTERN = /(?:^|\n\n)(user|assistant|system): ([\s\S]*?)(?=\n\n(?:user|assistant|system): |$)/g;
+
+function getTranscriptUserMessages(content: string): string[] {
+  const messages: string[] = [];
+  for (const match of content.matchAll(TRANSCRIPT_MESSAGE_PATTERN)) {
+    if (match[1] === "user") messages.push(match[2].trim());
+  }
+  return messages;
+}
+
+function setDarkMode(threadId: string, enabled: boolean): void {
+  if (enabled) darkModeThreads.add(threadId);
+  else darkModeThreads.delete(threadId);
+}
+
 function toggleDarkMode(threadId: string): AgentCommandResult {
   if (darkModeThreads.has(threadId)) {
     darkModeThreads.delete(threadId);
@@ -29,10 +44,38 @@ export function executeAgentCommand(
   content: string,
   threadId: string,
 ): AgentCommandResult | undefined {
-  return commandHandlers.get(content.trim())?.(threadId);
+  const transcriptMessages = getTranscriptUserMessages(content);
+  const commandContent = transcriptMessages.at(-1) ?? content.trim();
+  const handler = commandHandlers.get(commandContent);
+  if (!handler) return undefined;
+
+  if (transcriptMessages.length === 0) return handler(threadId);
+
+  const darkModeCommandCount = transcriptMessages.filter(
+    (message) => message === DARK_MODE_COMMAND,
+  ).length;
+  const enabled = darkModeCommandCount % 2 === 1;
+  setDarkMode(threadId, enabled);
+  return {
+    name: "toggle_dark_mode",
+    reply: enabled ? DARK_MODE_ENABLED_REPLY : DARK_MODE_DISABLED_REPLY,
+  };
 }
 
-export function getAgentPromptOverride(threadId: string): string | undefined {
+export function getAgentPromptOverride(
+  threadId: string,
+  content?: string,
+): string | undefined {
+  if (content) {
+    const transcriptMessages = getTranscriptUserMessages(content);
+    const darkModeCommandCount = transcriptMessages.filter(
+      (message) => message === DARK_MODE_COMMAND,
+    ).length;
+    if (darkModeCommandCount > 0) {
+      return darkModeCommandCount % 2 === 1 ? DARK_MODE_PROMPT : undefined;
+    }
+  }
+
   return darkModeThreads.has(threadId) ? DARK_MODE_PROMPT : undefined;
 }
 
