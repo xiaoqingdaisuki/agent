@@ -7,7 +7,8 @@ class Settings(BaseSettings):
     openai_base_url: str | None = None
     image_model: str = "step-image-edit-2"
     agent_deadline_ms: int = 30000
-    server_request_timeout_ms: int = 40000
+    agent_deadline_with_tools_ms: int = 90000
+    server_request_timeout_ms: int = 100000
     llm_timeout_ms: int = 12000
     llm_max_retries: int = 1
     max_agent_iterations: int = 6
@@ -16,6 +17,7 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     tavily_search_depth: str = "basic"
     search_timeout_ms: int = 4500
+    search_max_attempts: int = 1
     search_max_results: int = 8
     search_cache_ttl_seconds: int = 30
     search_stale_ttl_seconds: int = 600

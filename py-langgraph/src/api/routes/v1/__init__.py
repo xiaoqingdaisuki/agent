@@ -25,6 +25,7 @@ router = APIRouter()
 
 # ============ 请求/响应模型 ============
 
+
 class CreateConversationRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=100)
     mode: str = Field(default="chat", pattern="^(chat|knowledge|mixed)$")
@@ -67,6 +68,7 @@ class SearchRequest(BaseModel):
 
 # ============ 健康检查 ==========
 
+
 @router.get("/health")
 async def health():
     return {
@@ -77,6 +79,7 @@ async def health():
 
 
 # ============ 会话管理 ==========
+
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
 async def create_conversation(req: CreateConversationRequest):
@@ -171,8 +174,17 @@ async def stream_message(conv_id: str, req: SendMessageRequest):
         metadata = json.dumps({"conversation_id": conv_id}, ensure_ascii=False)
         yield f"data: {metadata}\n\n"
         try:
-            async for chunk in AgentService.chat_stream(conv_id, req.content, user_id=req.user_id):
-                payload = json.dumps({"delta": chunk}, ensure_ascii=False)
+            async for event in AgentService.chat_stream(conv_id, req.content, user_id=req.user_id):
+                payload = json.dumps(
+                    {"delta": event["text"]}
+                    if event["type"] == "text"
+                    else {
+                        "event": "tool",
+                        "tool_name": event["tool_name"],
+                        "status": event["status"],
+                    },
+                    ensure_ascii=False,
+                )
                 yield f"data: {payload}\n\n"
         except BusinessError as error:
             payload = json.dumps(error.to_dict(), ensure_ascii=False)
@@ -203,6 +215,7 @@ async def clear_messages(conv_id: str):
 
 # ============ 知识库管理 ==========
 
+
 @router.post("/knowledge/documents", response_model=DocumentResponse, status_code=201)
 async def upload_document(request: Request):
     """上传文档（multipart/form-data）"""
@@ -214,7 +227,10 @@ async def upload_document(request: Request):
         if not file:
             raise HTTPException(
                 status_code=400,
-                detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "file is required"},
+                detail={
+                    "code": BusinessErrorCode.INVALID_REQUEST.value,
+                    "message": "file is required",
+                },
             )
 
         from fastapi import UploadFile
@@ -240,7 +256,10 @@ async def upload_document(request: Request):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"文档上传失败: {e!s}"},
+            detail={
+                "code": BusinessErrorCode.INTERNAL_ERROR.value,
+                "message": f"文档上传失败: {e!s}",
+            },
         )
 
 
@@ -303,12 +322,14 @@ async def search_knowledge(req: SearchRequest):
 
 # ============ 能力查询 ==========
 
+
 @router.get("/capabilities")
 async def get_capabilities():
     return Capabilities.get()
 
 
 # ============ 用户画像 + 记忆 + 历史 ==========
+
 
 class ProfileQuery(BaseModel):
     user_id: str
@@ -319,12 +340,16 @@ class ProfileQuery(BaseModel):
 async def get_profile(user_id: str, name: str = ""):
     try:
         from src.profile.service import ProfileService
+
         profile = ProfileService.get_or_create(user_id, name)
         return profile.to_dict()
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"获取用户画像失败: {e!s}"},
+            detail={
+                "code": BusinessErrorCode.INTERNAL_ERROR.value,
+                "message": f"获取用户画像失败: {e!s}",
+            },
         )
 
 
@@ -337,6 +362,7 @@ class ProfileUpdate(BaseModel):
 async def update_profile(user_id: str, update: ProfileUpdate):
     try:
         from src.profile.service import ProfileService
+
         updates = {}
         if update.name is not None:
             updates["name"] = update.name
@@ -354,7 +380,10 @@ async def update_profile(user_id: str, update: ProfileUpdate):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"更新用户画像失败: {e!s}"},
+            detail={
+                "code": BusinessErrorCode.INTERNAL_ERROR.value,
+                "message": f"更新用户画像失败: {e!s}",
+            },
         )
 
 
@@ -362,6 +391,7 @@ async def update_profile(user_id: str, update: ProfileUpdate):
 async def get_memories(user_id: str, category: str = None):
     try:
         from src.profile.service import MemoryService
+
         memories = MemoryService.list_all(user_id)
         if category:
             memories = [m for m in memories if m["category"] == category]
@@ -369,7 +399,10 @@ async def get_memories(user_id: str, category: str = None):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"获取记忆失败: {e!s}"},
+            detail={
+                "code": BusinessErrorCode.INTERNAL_ERROR.value,
+                "message": f"获取记忆失败: {e!s}",
+            },
         )
 
 
@@ -383,12 +416,16 @@ class MemoryCreate(BaseModel):
 async def create_memory(user_id: str, memory: MemoryCreate):
     try:
         from src.profile.service import MemoryService
+
         mem = MemoryService.add(user_id, memory.content, memory.category, memory.importance)
         return mem.to_dict()
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"添加记忆失败: {e!s}"},
+            detail={
+                "code": BusinessErrorCode.INTERNAL_ERROR.value,
+                "message": f"添加记忆失败: {e!s}",
+            },
         )
 
 
@@ -396,6 +433,7 @@ async def create_memory(user_id: str, memory: MemoryCreate):
 async def delete_memory(user_id: str, memory_id: str):
     try:
         from src.profile.service import MemoryService
+
         deleted = MemoryService.delete(user_id, memory_id)
         if not deleted:
             raise HTTPException(
@@ -408,7 +446,10 @@ async def delete_memory(user_id: str, memory_id: str):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"删除记忆失败: {e!s}"},
+            detail={
+                "code": BusinessErrorCode.INTERNAL_ERROR.value,
+                "message": f"删除记忆失败: {e!s}",
+            },
         )
 
 
@@ -416,10 +457,14 @@ async def delete_memory(user_id: str, memory_id: str):
 async def get_history(user_id: str, conversation_id: str = None, limit: int = 50):
     try:
         from src.profile.service import HistoryService
+
         records = HistoryService.get_history(user_id, conversation_id, limit)
         return {"history": records}
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": f"获取历史记录失败: {e!s}"},
+            detail={
+                "code": BusinessErrorCode.INTERNAL_ERROR.value,
+                "message": f"获取历史记录失败: {e!s}",
+            },
         )

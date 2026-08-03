@@ -80,6 +80,12 @@ export interface ToolCallContext {
   deadline?: string;
 }
 
+export interface ToolProgressEvent {
+  type: "started" | "completed" | "failed";
+  toolName: string;
+  durationMs?: number;
+}
+
 // ============ 工具错误详情 ============
 
 export interface ToolError {

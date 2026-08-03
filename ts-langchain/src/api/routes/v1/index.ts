@@ -177,8 +177,16 @@ export async function registerV1Routes(app: FastifyInstance) {
     reply.raw.write(`data: ${JSON.stringify({ conversation_id: request.params.id })}\n\n`);
 
     try {
-      for await (const chunk of AgentService.chatStream(request.params.id, content, user_id)) {
-        reply.raw.write(`data: ${JSON.stringify({ delta: chunk })}\n\n`);
+      for await (const event of AgentService.chatStream(request.params.id, content, user_id)) {
+        const payload = event.type === "text"
+          ? { delta: event.text }
+          : {
+              event: "tool",
+              tool_name: event.toolName,
+              status: event.status,
+              duration_ms: event.durationMs,
+            };
+        reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
       }
     } catch (error: unknown) {
       const businessError = error instanceof BusinessError

@@ -44,6 +44,46 @@ export interface Message {
   createdAt: string;
 }
 
+export type AgentStreamEvent =
+  | { type: "text"; text: string }
+  | { type: "tool"; toolName: string; status: "started" | "completed" | "failed"; durationMs?: number };
+
+class ToolProgressChannel {
+  private readonly events: Array<Extract<AgentStreamEvent, { type: "tool" }>> = [];
+  private readonly waiters = new Set<(event: Extract<AgentStreamEvent, { type: "tool" }>) => void>();
+
+  push(event: Extract<AgentStreamEvent, { type: "tool" }>): void {
+    const waiter = this.waiters.values().next().value as
+      | ((nextEvent: Extract<AgentStreamEvent, { type: "tool" }>) => void)
+      | undefined;
+    if (waiter) {
+      waiter(event);
+      return;
+    }
+    this.events.push(event);
+  }
+
+  take(): { promise: Promise<Extract<AgentStreamEvent, { type: "tool" }>>; cancel: () => void } {
+    const queued = this.events.shift();
+    if (queued) return { promise: Promise.resolve(queued), cancel: () => undefined };
+
+    let resolve!: (event: Extract<AgentStreamEvent, { type: "tool" }>) => void;
+    const promise = new Promise<Extract<AgentStreamEvent, { type: "tool" }>>((nextResolve) => {
+      resolve = nextResolve;
+    });
+    const waiter = (event: Extract<AgentStreamEvent, { type: "tool" }>) => {
+      this.waiters.delete(waiter);
+      resolve(event);
+    };
+    this.waiters.add(waiter);
+    return { promise, cancel: () => this.waiters.delete(waiter) };
+  }
+
+  drain(): Array<Extract<AgentStreamEvent, { type: "tool" }>> {
+    return this.events.splice(0);
+  }
+}
+
 export interface Document {
   id: string;
   name: string;
@@ -227,17 +267,21 @@ export class AgentService {
         actor_type: "user",
       } as const;
 
-      const result = await runWithAgentDeadline<any>((signal) =>
+      const result = await runWithAgentDeadline<any>((deadline) =>
         conversation?.mode === "knowledge"
           ? KnowledgeService.chat(content, history)
-          : runWithToolCallContext(toolContext, () => (agent as any).invoke(
-              {
-                input: content,
-                chat_history: history,
-                memory_context: memoryContext,
-              },
-              { signal },
-            )),
+          : runWithToolCallContext(
+              toolContext,
+              () => (agent as any).invoke(
+                {
+                  input: content,
+                  chat_history: history,
+                  memory_context: memoryContext,
+                },
+                { signal: deadline.signal },
+              ),
+              { onToolProgress: (event) => event.type === "started" && deadline.enableToolBudget() },
+            ),
       );
 
       const reply: Message = {
@@ -298,7 +342,7 @@ export class AgentService {
     conversationId: string,
     content: string,
     userId?: string
-  ): AsyncGenerator<string, void, unknown> {
+  ): AsyncGenerator<AgentStreamEvent, void, unknown> {
     try {
       const command = executeAgentCommand(content, conversationId);
       if (command) {
@@ -309,7 +353,7 @@ export class AgentService {
           createdAt: new Date().toISOString(),
         };
         ConversationService.appendAssistantMessage(conversationId, reply);
-        yield command.reply;
+        yield { type: "text", text: command.reply };
         return;
       }
 
@@ -337,26 +381,50 @@ export class AgentService {
         actor_type: "user",
       } as const;
 
-      let fullAnswer = "";
-      const scope = createToolCallScope(toolContext);
       const deadline = new AgentDeadline();
+      const progress = new ToolProgressChannel();
+      const scope = createToolCallScope(toolContext, {
+        onToolProgress: (event) => {
+          if (event.type === "started") deadline.enableToolBudget();
+          progress.push({
+            type: "tool",
+            toolName: event.toolName,
+            status: event.type,
+            durationMs: event.durationMs,
+          });
+        },
+      });
+      let fullAnswer = "";
       try {
         const stream = await deadline.run<any>(scope.run(() => (agent as any).stream(
           { input: content, chat_history: history, memory_context: memoryContext },
           { tags: ["stream"], signal: deadline.signal },
         )));
         const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<any>;
+        let next = scope.run(() => iterator.next()) as Promise<IteratorResult<any>>;
 
         while (true) {
-          const next = scope.run(() => iterator.next()) as Promise<IteratorResult<any>>;
-          const { value: chunk, done } = await deadline.run(next);
+          const pendingProgress = progress.take();
+          const winner = await deadline.run(Promise.race([
+            next.then((result) => ({ kind: "agent" as const, result })),
+            pendingProgress.promise.then((event) => ({ kind: "tool" as const, event })),
+          ]));
+          pendingProgress.cancel();
+          if (winner.kind === "tool") {
+            yield winner.event;
+            continue;
+          }
+
+          const { value: chunk, done } = winner.result;
           if (done) break;
           if (chunk?.output) {
             const text = String(chunk.output);
             fullAnswer += text;
-            yield text;
+            yield { type: "text", text };
           }
+          next = scope.run(() => iterator.next()) as Promise<IteratorResult<any>>;
         }
+        for (const event of progress.drain()) yield event;
       } finally {
         deadline.dispose();
       }

@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 from uuid import uuid4
@@ -7,8 +6,8 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
+from src.agents.deadline import AgentDeadline
 from src.commands import execute_agent_command, get_agent_prompt_override
-from src.config.settings import settings
 
 router = APIRouter()
 
@@ -28,6 +27,7 @@ async def stream(request: StreamRequest):
     command = execute_agent_command(request.message, thread_id)
 
     if command:
+
         async def command_event_generator():
             payload = json.dumps({"text": command.reply}, ensure_ascii=False)
             yield f"data: {payload}\n\n"
@@ -60,14 +60,44 @@ async def stream(request: StreamRequest):
         metadata = json.dumps({"thread_id": thread_id}, ensure_ascii=False)
         yield f"data: {metadata}\n\n"
         try:
-            async with asyncio.timeout(settings.agent_deadline_ms / 1000):
+            async with AgentDeadline():
                 async for event in agent.astream_events(
                     input_data,
                     config=config,
                     version="v2",
                 ):
                     kind = event.get("event")
-                    if kind == "on_chat_model_stream":
+                    if kind == "on_tool_start":
+                        payload = json.dumps(
+                            {
+                                "event": "tool",
+                                "tool_name": event.get("name", "tool"),
+                                "status": "started",
+                            },
+                            ensure_ascii=False,
+                        )
+                        yield f"data: {payload}\n\n"
+                    elif kind == "on_tool_end":
+                        payload = json.dumps(
+                            {
+                                "event": "tool",
+                                "tool_name": event.get("name", "tool"),
+                                "status": "completed",
+                            },
+                            ensure_ascii=False,
+                        )
+                        yield f"data: {payload}\n\n"
+                    elif kind == "on_tool_error":
+                        payload = json.dumps(
+                            {
+                                "event": "tool",
+                                "tool_name": event.get("name", "tool"),
+                                "status": "failed",
+                            },
+                            ensure_ascii=False,
+                        )
+                        yield f"data: {payload}\n\n"
+                    elif kind == "on_chat_model_stream":
                         chunk = event["data"]["chunk"]
                         if isinstance(chunk.content, str) and chunk.content:
                             payload = json.dumps({"text": chunk.content}, ensure_ascii=False)

@@ -48,6 +48,7 @@ class SearchSettings:
     cache_ttl_seconds: int
     stale_ttl_seconds: int
     search_depth: str
+    max_attempts: int
 
 
 @dataclass
@@ -113,9 +114,11 @@ def _get_settings() -> SearchSettings:
         ),
         search_depth=(
             "advanced"
-            if (os.getenv("TAVILY_SEARCH_DEPTH") or app_settings.tavily_search_depth)
-            == "advanced"
+            if (os.getenv("TAVILY_SEARCH_DEPTH") or app_settings.tavily_search_depth) == "advanced"
             else "basic"
+        ),
+        max_attempts=_bounded_integer(
+            os.getenv("SEARCH_MAX_ATTEMPTS"), app_settings.search_max_attempts, 1, 2
         ),
     )
 
@@ -144,7 +147,7 @@ def _normalize_url(raw_url: str) -> str | None:
 
 def _request_tavily(settings: SearchSettings, query: str) -> httpx.Response:
     last_error: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(settings.max_attempts):
         try:
             with httpx.Client(timeout=settings.timeout_seconds, follow_redirects=True) as client:
                 response = client.post(
@@ -173,7 +176,7 @@ def _request_tavily(settings: SearchSettings, query: str) -> httpx.Response:
             raise
         except (httpx.HTTPError, RuntimeError) as error:
             last_error = error
-        if attempt == 0:
+        if attempt < settings.max_attempts - 1:
             time.sleep(0.12)
     raise last_error or RuntimeError("Tavily request failed")
 
@@ -317,7 +320,9 @@ def search_results_to_text(outcome: SearchOutcome, query: str) -> str:
             f"Tavily 实时搜索暂时不可用（{reason}）。"
             "不要把训练数据描述为实时结果；请告知用户稍后重试。"
         )
-    freshness = "⚠️ Tavily 暂时不可用，以下为降级缓存结果" if outcome.stale else "Tavily 实时搜索结果"
+    freshness = (
+        "⚠️ Tavily 暂时不可用，以下为降级缓存结果" if outcome.stale else "Tavily 实时搜索结果"
+    )
     lines = [f"🔍 {freshness}（{query}）— 共 {len(outcome.results)} 条：\n"]
     for index, result in enumerate(outcome.results, 1):
         lines.append(f"[{index}] {result.title}")

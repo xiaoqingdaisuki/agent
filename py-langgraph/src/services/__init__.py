@@ -17,6 +17,7 @@ from typing import Optional
 
 # ============ 错误码 ============
 
+
 class BusinessErrorCode(str, Enum):
     INVALID_REQUEST = "INVALID_REQUEST"
     UNAUTHORIZED = "UNAUTHORIZED"
@@ -41,6 +42,7 @@ class BusinessError(Exception):
 
 
 # ============ 类型定义 ============
+
 
 class Conversation:
     def __init__(self, title: str, mode: str = "chat"):
@@ -283,14 +285,16 @@ class KnowledgeService:
         chunks = TextSplitter().split(loaded.content, filename, loaded.metadata["source"])
         vector_store = VectorStore(url=settings.qdrant_url, collection_name="documents")
         await vector_store.delete_document(doc_id)
-        await vector_store.add_documents([
-            {
-                "id": f"{doc_id}:chunk_{index}",
-                "content": chunk.text,
-                "metadata": {**chunk.metadata, "document_id": doc_id},
-            }
-            for index, chunk in enumerate(chunks)
-        ])
+        await vector_store.add_documents(
+            [
+                {
+                    "id": f"{doc_id}:chunk_{index}",
+                    "content": chunk.text,
+                    "metadata": {**chunk.metadata, "document_id": doc_id},
+                }
+                for index, chunk in enumerate(chunks)
+            ]
+        )
         doc.chunks = len(chunks)
         doc.status = "indexed"
         return doc
@@ -336,6 +340,7 @@ class AgentService:
     async def chat(conversation_id: str, content: str, user_id: str = None) -> Message:
         try:
             from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
+            from src.agents.deadline import AgentDeadline
             from src.commands import execute_agent_command, get_agent_prompt_override
             from src.profile.service import HistoryService, MemoryService, ProfileService
 
@@ -366,18 +371,18 @@ class AgentService:
             if user_id:
                 config["configurable"]["user_id"] = user_id
 
-            from src.config.settings import settings
-
-            async with asyncio.timeout(settings.agent_deadline_ms / 1000):
+            async with AgentDeadline():
                 if conversation and conversation.mode == "knowledge":
                     from langchain_core.messages import HumanMessage
                     from src.rag.rag_agent import build_rag_agent
 
-                    result = await build_rag_agent().ainvoke({
-                        "messages": [HumanMessage(content=content)],
-                        "context": [],
-                        "should_retrieve": True,
-                    })
+                    result = await build_rag_agent().ainvoke(
+                        {
+                            "messages": [HumanMessage(content=content)],
+                            "context": [],
+                            "should_retrieve": True,
+                        }
+                    )
                 else:
                     result = await agent.ainvoke(
                         {
@@ -395,7 +400,9 @@ class AgentService:
             if user_id:
                 try:
                     HistoryService.record(user_id, conversation_id, content, reply_content)
-                    MemoryService.extract_memories_from_conversation(user_id, content, reply_content)
+                    MemoryService.extract_memories_from_conversation(
+                        user_id, content, reply_content
+                    )
                     ProfileService.update(user_id)
                 except Exception:
                     pass
@@ -434,6 +441,7 @@ class AgentService:
     async def chat_stream(conversation_id: str, content: str, user_id: str = None):
         try:
             from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
+            from src.agents.deadline import AgentDeadline
             from src.commands import execute_agent_command, get_agent_prompt_override
             from src.profile.service import HistoryService, MemoryService, ProfileService
 
@@ -443,7 +451,7 @@ class AgentService:
                     conversation_id,
                     Message("assistant", command.reply),
                 )
-                yield command.reply
+                yield {"type": "text", "text": command.reply}
                 return
 
             if user_id:
@@ -462,10 +470,8 @@ class AgentService:
             if user_id:
                 config["configurable"]["user_id"] = user_id
 
-            from src.config.settings import settings
-
             full_answer = ""
-            async with asyncio.timeout(settings.agent_deadline_ms / 1000):
+            async with AgentDeadline():
                 async for event in agent.astream_events(
                     {
                         "messages": [{"role": "user", "content": content}],
@@ -474,11 +480,29 @@ class AgentService:
                     config=config,
                     version="v2",
                 ):
-                    if event["event"] == "on_chat_model_stream":
+                    if event["event"] == "on_tool_start":
+                        yield {
+                            "type": "tool",
+                            "tool_name": event.get("name", "tool"),
+                            "status": "started",
+                        }
+                    elif event["event"] == "on_tool_end":
+                        yield {
+                            "type": "tool",
+                            "tool_name": event.get("name", "tool"),
+                            "status": "completed",
+                        }
+                    elif event["event"] == "on_tool_error":
+                        yield {
+                            "type": "tool",
+                            "tool_name": event.get("name", "tool"),
+                            "status": "failed",
+                        }
+                    elif event["event"] == "on_chat_model_stream":
                         chunk = event["data"]["chunk"]
-                        if chunk.content:
+                        if isinstance(chunk.content, str) and chunk.content:
                             full_answer += chunk.content
-                            yield chunk.content
+                            yield {"type": "text", "text": chunk.content}
 
             if full_answer:
                 ConversationService.append_assistant_message(

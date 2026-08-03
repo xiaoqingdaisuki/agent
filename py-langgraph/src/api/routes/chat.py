@@ -1,12 +1,11 @@
-import asyncio
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
+from src.agents.deadline import AgentDeadline
 from src.commands import execute_agent_command, get_agent_prompt_override
-from src.config.settings import settings
 
 router = APIRouter()
 
@@ -55,7 +54,7 @@ async def chat(request: ChatRequest):
         if request.user_id:
             config["configurable"]["user_id"] = request.user_id
 
-        async with asyncio.timeout(settings.agent_deadline_ms / 1000):
+        async with AgentDeadline():
             result = await agent.ainvoke(
                 {
                     "messages": [{"role": "user", "content": request.message}],

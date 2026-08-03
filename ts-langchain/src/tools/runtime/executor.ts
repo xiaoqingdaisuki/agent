@@ -13,7 +13,13 @@
  *   7. 指标记录（metrics）
  */
 
-import type { ToolDescriptor, ToolCallContext, ToolRuntimeResult, ToolResultEnvelope } from "../contracts.js";
+import type {
+  ToolDescriptor,
+  ToolCallContext,
+  ToolProgressEvent,
+  ToolRuntimeResult,
+  ToolResultEnvelope,
+} from "../contracts.js";
 import { recordToolMetric } from "../observability.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -162,9 +168,14 @@ interface BudgetState {
 interface ToolRuntimeContext {
   context: ToolCallContext;
   budget: BudgetState;
+  onToolProgress?: (event: ToolProgressEvent) => void;
 }
 
 const runtimeStorage = new AsyncLocalStorage<ToolRuntimeContext>();
+
+function reportToolProgress(event: ToolProgressEvent): void {
+  runtimeStorage.getStore()?.onToolProgress?.(event);
+}
 
 function createBudgetState(): BudgetState {
   return {
@@ -371,7 +382,7 @@ export async function invokeTool<TInput, TOutput>(
 
   // 4. 执行（带超时）
   let rawOutput: TOutput;
-  let timedOut = false;
+  reportToolProgress({ type: "started", toolName });
 
   try {
     const timeoutMs = executor.descriptor.timeout_ms ?? 10_000;
@@ -403,6 +414,8 @@ export async function invokeTool<TInput, TOutput>(
       trace_id: context.trace_id,
     });
 
+    const durationMs = Date.now() - startTime;
+    reportToolProgress({ type: "failed", toolName, durationMs });
     return {
       ok: false,
       data: null,
@@ -414,7 +427,7 @@ export async function invokeTool<TInput, TOutput>(
         tool_call_id: callId,
         tool_name: toolName,
         tool_version: toolVersion,
-        duration_ms: Date.now() - startTime,
+        duration_ms: durationMs,
       },
     };
   }
@@ -437,6 +450,7 @@ export async function invokeTool<TInput, TOutput>(
     request_id: context.request_id,
     trace_id: context.trace_id,
   });
+  reportToolProgress({ type: "completed", toolName, durationMs });
 
   return {
     ok: true,
@@ -463,14 +477,18 @@ export function getToolCallContext(): ToolCallContext | undefined {
 export function runWithToolCallContext<T>(
   context: ToolCallContext,
   callback: () => T,
+  options?: { onToolProgress?: (event: ToolProgressEvent) => void },
 ): T {
-  return createToolCallScope(context).run(callback);
+  return createToolCallScope(context, options).run(callback);
 }
 
-export function createToolCallScope(context: ToolCallContext): {
+export function createToolCallScope(
+  context: ToolCallContext,
+  options: { onToolProgress?: (event: ToolProgressEvent) => void } = {},
+): {
   run<T>(callback: () => T): T;
 } {
-  const store = { context, budget: createBudgetState() };
+  const store = { context, budget: createBudgetState(), onToolProgress: options.onToolProgress };
   return {
     run<T>(callback: () => T): T {
       return runtimeStorage.run(store, callback);

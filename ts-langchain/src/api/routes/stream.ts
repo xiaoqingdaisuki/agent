@@ -59,7 +59,9 @@ export async function registerStreamRoutes(app: FastifyInstance) {
 
       const deadline = new AgentDeadline();
       try {
-        const scope = createToolCallScope(toolContext);
+        const scope = createToolCallScope(toolContext, {
+          onToolProgress: (event) => event.type === "started" && deadline.enableToolBudget(),
+        });
         const stream = await deadline.run(scope.run(() => toolAgent.stream(
           { input: message, chat_history: history, memory_context: memoryContext },
           { tags: ["stream"], signal: deadline.signal }

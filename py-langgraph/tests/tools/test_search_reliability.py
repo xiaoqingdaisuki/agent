@@ -7,7 +7,12 @@ from src.tools import search
 
 @pytest.fixture(autouse=True)
 def clean_search_state(monkeypatch):
-    for key in ("TAVILY_API_KEY", "SEARCH_CACHE_TTL_SECONDS", "TAVILY_SEARCH_DEPTH"):
+    for key in (
+        "TAVILY_API_KEY",
+        "SEARCH_CACHE_TTL_SECONDS",
+        "TAVILY_SEARCH_DEPTH",
+        "SEARCH_MAX_ATTEMPTS",
+    ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(search.app_settings, "tavily_api_key", "")
     search.reset_search_state_for_tests()
@@ -72,9 +77,15 @@ def test_tavily_parser_canonicalizes_and_deduplicates_urls(monkeypatch):
             }
 
     monkeypatch.setattr(search, "_request_tavily", lambda settings, query: FakeResponse())
-    settings = search.SearchSettings("key", 1, 8, 30, 600, "basic")
+    settings = search.SearchSettings("key", 1, 8, 30, 600, "basic", 1)
     results = search._search_tavily("test", settings)
 
     assert len(results) == 1
     assert results[0].title == "实时结果"
     assert results[0].url == "https://example.com/live"
+
+
+def test_search_uses_one_tavily_attempt_by_default(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+
+    assert search._get_settings().max_attempts == 1

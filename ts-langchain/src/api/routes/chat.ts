@@ -51,15 +51,19 @@ export async function registerChatRoutes(app: FastifyInstance) {
           actor_type: "user",
         } as const;
 
-        const result = await runWithAgentDeadline<{ output?: unknown }>((signal) =>
-          runWithToolCallContext(toolContext, () => (agent as any).invoke(
-            {
-              input: message,
-              chat_history: history,
-              memory_context: memoryContext,
-            },
-            { signal },
-          )),
+        const result = await runWithAgentDeadline<{ output?: unknown }>((deadline) =>
+          runWithToolCallContext(
+            toolContext,
+            () => (agent as any).invoke(
+              {
+                input: message,
+                chat_history: history,
+                memory_context: memoryContext,
+              },
+              { signal: deadline.signal },
+            ),
+            { onToolProgress: (event) => event.type === "started" && deadline.enableToolBudget() },
+          ),
         );
 
           const reply_text =

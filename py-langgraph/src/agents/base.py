@@ -13,6 +13,7 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from typing_extensions import TypedDict
 
 from src.config.settings import settings
+from src.agents.deadline import enable_tool_budget
 
 MAX_TOOL_CALLS = settings.max_agent_iterations
 AGENT_RECURSION_LIMIT = MAX_TOOL_CALLS * 2 + 4
@@ -21,6 +22,7 @@ MAX_HISTORY_MESSAGES = 50
 
 class AgentState(TypedDict, total=False):
     """LangGraph Agent 状态 — 显式定义，与 TS 版隐式状态形成对比"""
+
     messages: Annotated[list[BaseMessage], add_messages]
     user_id: str | None
 
@@ -35,9 +37,7 @@ def trim_history(state: AgentState) -> dict[str, list[RemoveMessage]]:
     while keep_from < len(messages) and messages[keep_from].type != "human":
         keep_from += 1
     removals = [
-        RemoveMessage(id=message.id)
-        for message in messages[:keep_from]
-        if message.id is not None
+        RemoveMessage(id=message.id) for message in messages[:keep_from] if message.id is not None
     ]
     return {"messages": removals} if removals else {}
 
@@ -76,15 +76,14 @@ def build_chat_agent(checkpointer=None):
         if user_id:
             try:
                 from src.profile.service import MemoryService
+
                 memory_context = MemoryService.build_memory_context(user_id)
                 if memory_context:
                     system_prompt = f"{memory_context}\n\n{SYSTEM_PROMPT}"
             except Exception:
                 pass
 
-        response = await llm.ainvoke(
-            [SystemMessage(content=system_prompt), *state["messages"]]
-        )
+        response = await llm.ainvoke([SystemMessage(content=system_prompt), *state["messages"]])
         return {"messages": [response]}
 
     builder = StateGraph(AgentState)
@@ -101,6 +100,7 @@ def build_chat_agent(checkpointer=None):
 def _get_default_checkpointer():
     """获取默认 checkpointer，避免循环导入"""
     from src.memory import get_default_checkpointer
+
     return get_default_checkpointer()
 
 
@@ -141,11 +141,13 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
             re.DOTALL,
         ):
             args[param_match.group(1)] = param_match.group(2).strip()
-        tool_calls.append({
-            "name": func_name,
-            "args": args,
-            "id": f"call_{func_name}_{index}",
-        })
+        tool_calls.append(
+            {
+                "name": func_name,
+                "args": args,
+                "id": f"call_{func_name}_{index}",
+            }
+        )
 
     if not tool_calls:
         return message
@@ -187,8 +189,8 @@ def _scope_memory_tool_call(request: ToolCallRequest, execute):
         state = request.state if isinstance(request.state, dict) else {}
         args["user_id"] = state.get("user_id") or ""
     elif name == "memory_session_search":
-        args["conversation_id"] = (
-            request.runtime.config.get("configurable", {}).get("thread_id", "")
+        args["conversation_id"] = request.runtime.config.get("configurable", {}).get(
+            "thread_id", ""
         )
 
     scoped_call = {**request.tool_call, "args": args}
@@ -202,10 +204,12 @@ def should_continue(state: AgentState) -> Literal["tools", "limit", END]:
     if tool_calls:
         if _current_turn_tool_call_count(state["messages"]) > MAX_TOOL_CALLS:
             return "limit"
+        enable_tool_budget()
         return "tools"
     # Also check for XML-format tool calls (e.g. StepFun models)
     content = last_message.content if hasattr(last_message, "content") else ""
     if isinstance(content, str) and "<function=" in content:
+        enable_tool_budget()
         return "tools"
     return END
 
@@ -232,6 +236,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
         if user_id:
             try:
                 from src.profile.service import MemoryService
+
                 memory_context = MemoryService.build_memory_context(user_id)
                 if memory_context:
                     system_prompt = f"{memory_context}\n\n{base_prompt}"
@@ -266,16 +271,18 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
         messages = state["messages"]
         if getattr(messages[-1], "tool_calls", None):
             messages = messages[:-1]
-        response = await llm.ainvoke([
-            SystemMessage(content=base_prompt),
-            *messages,
-            SystemMessage(
-                content=(
-                    "The tool-call safety limit has been reached. Give the best final "
-                    "answer using results already available; do not request another tool."
-                )
-            ),
-        ])
+        response = await llm.ainvoke(
+            [
+                SystemMessage(content=base_prompt),
+                *messages,
+                SystemMessage(
+                    content=(
+                        "The tool-call safety limit has been reached. Give the best final "
+                        "answer using results already available; do not request another tool."
+                    )
+                ),
+            ]
+        )
         pending_message = state["messages"][-1]
         return {
             "messages": [RemoveMessage(id=pending_message.id), response],
