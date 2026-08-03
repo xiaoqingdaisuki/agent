@@ -1,3 +1,4 @@
+import asyncio
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
@@ -5,6 +6,7 @@ from pydantic import BaseModel
 
 from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
 from src.commands import execute_agent_command, get_agent_prompt_override
+from src.config.settings import settings
 
 router = APIRouter()
 
@@ -53,14 +55,23 @@ async def chat(request: ChatRequest):
         if request.user_id:
             config["configurable"]["user_id"] = request.user_id
 
-        result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": request.message}], "user_id": request.user_id},
-            config=config,
-        )
+        async with asyncio.timeout(settings.agent_deadline_ms / 1000):
+            result = await agent.ainvoke(
+                {
+                    "messages": [{"role": "user", "content": request.message}],
+                    "user_id": request.user_id,
+                },
+                config=config,
+            )
 
         last_msg = result["messages"][-1]
         reply_text = last_msg.content or "抱歉，我没有理解您的问题。"
 
         return ChatResponse(reply=reply_text, thread_id=thread_id)
+    except TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail={"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"},
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

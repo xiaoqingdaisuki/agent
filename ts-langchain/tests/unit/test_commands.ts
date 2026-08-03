@@ -49,7 +49,32 @@ describe("agent commands", () => {
     }
   });
 
-  it("recognizes Vibe formatted conversations without a stable thread id", () => {
+  it("streams the command through the v1 conversation API", async () => {
+    const app = await buildApp();
+
+    try {
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/v1/conversations",
+        payload: { title: "stream test" },
+      });
+      const conversationId = created.json().id as string;
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/conversations/${conversationId}/messages/stream`,
+        payload: { content: DARK_MODE_COMMAND },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toContain("text/event-stream");
+      expect(response.body).toContain(JSON.stringify({ delta: DARK_MODE_ENABLED_REPLY }));
+      expect(response.body).toContain("data: [DONE]");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("recognizes legacy formatted conversations without a stable thread id", () => {
     const formattedCommand = `user: ${DARK_MODE_COMMAND}`;
     expect(executeAgentCommand(formattedCommand, threadId)?.reply)
       .toBe(DARK_MODE_ENABLED_REPLY);

@@ -7,9 +7,10 @@ import type { AgentStep } from "@langchain/core/agents";
 import { TOOL_CALLING_PROMPT } from "../prompts/system.js";
 import { tools, toolDescriptors, toolSchemas } from "../tools/index.js";
 import { wrapToolWithRuntime } from "../tools/runtime/executor.js";
+import { config } from "../config/index.js";
 
-// Eight tool rounds plus one final planning round, aligned with Python.
-export const MAX_AGENT_ITERATIONS = 9;
+// Keep tool loops inside the end-to-end request budget, aligned with Python.
+export const MAX_AGENT_ITERATIONS = config.MAX_AGENT_ITERATIONS;
 
 export function convertXmlToolCalls(message: BaseMessage): BaseMessage {
   const content = typeof message.content === "string" ? message.content : "";
@@ -112,6 +113,8 @@ export function invalidateToolAgentCache(): void {
 async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecutor> {
   const rawModel = new ChatOpenAI({
     modelName: process.env.OPENAI_MODEL,
+    timeout: config.LLM_TIMEOUT_MS,
+    maxRetries: config.LLM_MAX_RETRIES,
     configuration: {
       baseURL: process.env.OPENAI_BASE_URL,
       apiKey: process.env.OPENAI_API_KEY,

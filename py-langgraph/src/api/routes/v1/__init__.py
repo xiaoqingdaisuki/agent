@@ -2,10 +2,12 @@
 External API v1 — 给前端 UI 使用
 """
 
+import json
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.services import (
@@ -152,6 +154,36 @@ async def send_message(conv_id: str, req: SendMessageRequest):
             status_code=500,
             detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": "发送消息失败"},
         )
+
+
+@router.post("/conversations/{conv_id}/messages/stream")
+async def stream_message(conv_id: str, req: SendMessageRequest):
+    conversation = ConversationService.get(conv_id)
+    if not conversation:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
+        )
+
+    ConversationService.append_user_message(conv_id, req.content)
+
+    async def event_generator():
+        metadata = json.dumps({"conversation_id": conv_id}, ensure_ascii=False)
+        yield f"data: {metadata}\n\n"
+        try:
+            async for chunk in AgentService.chat_stream(conv_id, req.content, user_id=req.user_id):
+                payload = json.dumps({"delta": chunk}, ensure_ascii=False)
+                yield f"data: {payload}\n\n"
+        except BusinessError as error:
+            payload = json.dumps(error.to_dict(), ensure_ascii=False)
+            yield f"data: {payload}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.delete("/conversations/{conv_id}/messages")

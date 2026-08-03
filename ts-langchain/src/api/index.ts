@@ -11,8 +11,8 @@ import { config } from "../config/index.js";
 export async function buildApp() {
   const app = fastify({
     logger: { level: "info" },
-    // 全局请求超时：普通请求 60s，流式请求禁用（由路由层控制）
-    requestTimeout: 60_000,
+    // 外层服务超时长于 Agent deadline，确保业务层先返回明确的 504。
+    requestTimeout: config.SERVER_REQUEST_TIMEOUT_MS,
     // 连接超时
     connectionTimeout: 30_000,
     // 保持超时

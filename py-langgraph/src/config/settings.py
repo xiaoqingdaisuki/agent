@@ -6,6 +6,11 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str | None = None
     image_model: str = "step-image-edit-2"
+    agent_deadline_ms: int = 30000
+    server_request_timeout_ms: int = 40000
+    llm_timeout_ms: int = 12000
+    llm_max_retries: int = 1
+    max_agent_iterations: int = 6
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-3-5-haiku-20241022"
     tavily_api_key: str = ""

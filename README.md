@@ -181,6 +181,7 @@ GET  /api/v1/conversations             列出会话
 GET  /api/v1/conversations/:id         获取会话详情
 DELETE /api/v1/conversations/:id       删除会话
 POST /api/v1/conversations/:id/messages 发送消息
+POST /api/v1/conversations/:id/messages/stream 流式发送消息（SSE）
 GET  /api/v1/conversations/:id/messages 获取历史
 DELETE /api/v1/conversations/:id/messages 清空消息
 
@@ -209,6 +210,10 @@ POST /stream                            流式对话
 GET  /tools                             可用工具列表
 POST /images/generations                图片生成
 ```
+
+生产环境的超时应按从内到外递增配置：`AGENT_DEADLINE_MS=30000`、
+`SERVER_REQUEST_TIMEOUT_MS=40000`（外部网关读超时也至少 40 秒）、Vibe
+`AGENT_REQUEST_TIMEOUT_MS=45000`。流式路由需要关闭代理缓冲，以便会话元数据立即作为首个 SSE 事件发出。
 
 ## 开发工作流
 

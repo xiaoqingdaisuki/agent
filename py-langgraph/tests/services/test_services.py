@@ -1,9 +1,12 @@
 """Tests for service layer"""
 
+import asyncio
+
 import pytest
 from src.services import (
     BusinessError,
     BusinessErrorCode,
+    AgentService,
     ConversationService,
     Conversation,
     KnowledgeService,
@@ -105,6 +108,27 @@ class TestConversationService:
         ConversationService.clear_messages(conv.id)
         assert ConversationService.get_messages(conv.id) == []
         assert conv.message_count == 0
+
+
+class TestAgentService:
+    @pytest.mark.asyncio
+    async def test_chat_returns_explicit_timeout_error(self, monkeypatch):
+        from src.agents import base
+        from src.config.settings import settings
+
+        class SlowAgent:
+            async def ainvoke(self, *_args, **_kwargs):
+                await asyncio.sleep(1)
+
+        conversation = ConversationService.create("deadline")
+        monkeypatch.setattr(base, "build_tool_agent", lambda **_kwargs: SlowAgent())
+        monkeypatch.setattr(settings, "agent_deadline_ms", 5)
+
+        with pytest.raises(BusinessError) as error:
+            await AgentService.chat(conversation.id, "正常问题")
+
+        assert error.value.code == BusinessErrorCode.AGENT_TIMEOUT
+        assert error.value.status_code == 504
 
 
 class TestKnowledgeService:

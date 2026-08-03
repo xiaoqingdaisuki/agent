@@ -14,17 +14,13 @@ from .routes.v1 import router as v1_router
 
 logger = logging.getLogger(__name__)
 
-# 默认请求超时（秒）
-DEFAULT_REQUEST_TIMEOUT = 60
-
-# 流式路由禁用超时
-STREAM_ROUTE_PATTERNS = ("/stream", "/api/v1/conversations")
-
+# 外层服务超时长于 Agent deadline，确保业务层先返回明确的 504。
+DEFAULT_REQUEST_TIMEOUT = settings.server_request_timeout_ms / 1000
 
 async def _timeout_middleware(request: Request, call_next):
     """请求级超时中间件：非流式路由默认 60s 超时。"""
     path = request.url.path
-    is_stream = any(path.startswith(p) for p in STREAM_ROUTE_PATTERNS)
+    is_stream = path == "/stream" or path.endswith("/messages/stream")
 
     if is_stream:
         return await call_next(request)

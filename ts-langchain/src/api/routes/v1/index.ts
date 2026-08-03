@@ -150,6 +150,47 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   });
 
+  app.post<{
+    Params: { id: string };
+    Body: { content: string; user_id?: string };
+  }>("/conversations/:id/messages/stream", async (request, reply) => {
+    const { content, user_id } = request.body;
+    const conversation = ConversationService.get(request.params.id);
+    if (!conversation) {
+      return reply.status(404).send({
+        error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
+      });
+    }
+    if (!content) {
+      return reply.status(400).send({
+        error: { code: BusinessErrorCode.INVALID_REQUEST, message: "content is required" },
+      });
+    }
+
+    ConversationService.appendUserMessage(request.params.id, content);
+    reply.hijack();
+    reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.setHeader("X-Accel-Buffering", "no");
+    reply.raw.flushHeaders();
+    reply.raw.write(`data: ${JSON.stringify({ conversation_id: request.params.id })}\n\n`);
+
+    try {
+      for await (const chunk of AgentService.chatStream(request.params.id, content, user_id)) {
+        reply.raw.write(`data: ${JSON.stringify({ delta: chunk })}\n\n`);
+      }
+    } catch (error: unknown) {
+      const businessError = error instanceof BusinessError
+        ? error
+        : new BusinessError(BusinessErrorCode.INTERNAL_ERROR, "处理请求时发生错误", 500);
+      reply.raw.write(`data: ${JSON.stringify(businessError.toJSON())}\n\n`);
+    } finally {
+      reply.raw.write("data: [DONE]\n\n");
+      reply.raw.end();
+    }
+  });
+
   app.delete<{ Params: { id: string } }>(
     "/conversations/:id/messages",
     async (request, reply) => {

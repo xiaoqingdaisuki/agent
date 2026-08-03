@@ -5,6 +5,7 @@ import { MemoryService, ProfileService } from "../../profile/service.js";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { createToolCallScope } from "../../tools/runtime/executor.js";
 import { executeAgentCommand, getAgentPromptOverride } from "../../commands/index.js";
+import { AgentDeadline, isAgentDeadlineError } from "../../agents/deadline.js";
 
 export async function registerStreamRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
@@ -53,18 +54,22 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       reply.raw.setHeader("Content-Type", "text/event-stream");
       reply.raw.setHeader("Cache-Control", "no-cache");
       reply.raw.setHeader("Connection", "keep-alive");
+      reply.raw.flushHeaders();
+      reply.raw.write(`data: ${JSON.stringify({ thread_id: threadId })}\n\n`);
 
+      const deadline = new AgentDeadline();
       try {
         const scope = createToolCallScope(toolContext);
-        const stream = await scope.run(() => toolAgent.stream(
+        const stream = await deadline.run(scope.run(() => toolAgent.stream(
           { input: message, chat_history: history, memory_context: memoryContext },
-          { tags: ["stream"] }
-        ));
+          { tags: ["stream"], signal: deadline.signal }
+        )));
         const iterator = stream[Symbol.asyncIterator]();
 
         let fullAnswer = "";
         while (true) {
-          const { value: chunk, done } = await scope.run(() => iterator.next());
+          const next = scope.run(() => iterator.next());
+          const { value: chunk, done } = await deadline.run(next);
           if (done) break;
           if (chunk?.output) {
             const text = String(chunk.output);
@@ -82,9 +87,15 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         reply.raw.end();
       } catch (error) {
         console.error("Stream error:", error);
-        reply.raw.write(`data: ${JSON.stringify({ error: "Internal server error" })}\n\n`);
+        const message = isAgentDeadlineError(error)
+          ? "AI助手响应超时，请稍后重试。"
+          : "Internal server error";
+        const code = isAgentDeadlineError(error) ? "AGENT_TIMEOUT" : "INTERNAL_ERROR";
+        reply.raw.write(`data: ${JSON.stringify({ error: { code, message } })}\n\n`);
         reply.raw.write("data: [DONE]\n\n");
         reply.raw.end();
+      } finally {
+        deadline.dispose();
       }
     }
   );

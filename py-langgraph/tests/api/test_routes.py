@@ -145,6 +145,22 @@ class TestConversationEndpoints:
         response = await client.delete("/api/v1/conversations/nonexistent_id")
         assert response.status_code == 404
 
+    @pytest.mark.asyncio
+    async def test_stream_message_uses_v1_conversation_protocol(self, client: AsyncClient):
+        from src.commands import DARK_MODE_COMMAND, DARK_MODE_ENABLED_REPLY
+
+        created = await client.post("/api/v1/conversations", json={"title": "stream test"})
+        conversation_id = created.json()["id"]
+        response = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages/stream",
+            json={"content": DARK_MODE_COMMAND},
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert DARK_MODE_ENABLED_REPLY in response.text
+        assert "data: [DONE]" in response.text
+
 
 class TestKnowledgeEndpoints:
     @pytest.mark.asyncio

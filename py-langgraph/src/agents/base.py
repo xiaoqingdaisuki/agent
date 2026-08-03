@@ -12,8 +12,9 @@ from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from typing_extensions import TypedDict
 
+from src.config.settings import settings
 
-MAX_TOOL_CALLS = 8
+MAX_TOOL_CALLS = settings.max_agent_iterations
 AGENT_RECURSION_LIMIT = MAX_TOOL_CALLS * 2 + 4
 MAX_HISTORY_MESSAGES = 50
 
@@ -44,13 +45,17 @@ def trim_history(state: AgentState) -> dict[str, list[RemoveMessage]]:
 def get_llm(provider: str = "openai"):
     """根据配置获取 LLM"""
     if provider == "anthropic":
-        from src.config.settings import settings
-        return ChatAnthropic(model=settings.anthropic_model)
-    from src.config.settings import settings
+        return ChatAnthropic(
+            model=settings.anthropic_model,
+            timeout=settings.llm_timeout_ms / 1000,
+            max_retries=settings.llm_max_retries,
+        )
     return ChatOpenAI(
         model=settings.openai_model,
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
+        timeout=settings.llm_timeout_ms / 1000,
+        max_retries=settings.llm_max_retries,
     )
 
 

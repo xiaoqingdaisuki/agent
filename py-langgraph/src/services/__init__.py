@@ -10,6 +10,7 @@ Service Layer — 业务逻辑编排
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from enum import Enum
 from typing import Optional
@@ -25,6 +26,7 @@ class BusinessErrorCode(str, Enum):
     RATE_LIMITED = "RATE_LIMITED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+    AGENT_TIMEOUT = "AGENT_TIMEOUT"
 
 
 class BusinessError(Exception):
@@ -364,20 +366,26 @@ class AgentService:
             if user_id:
                 config["configurable"]["user_id"] = user_id
 
-            if conversation and conversation.mode == "knowledge":
-                from langchain_core.messages import HumanMessage
-                from src.rag.rag_agent import build_rag_agent
+            from src.config.settings import settings
 
-                result = await build_rag_agent().ainvoke({
-                    "messages": [HumanMessage(content=content)],
-                    "context": [],
-                    "should_retrieve": True,
-                })
-            else:
-                result = await agent.ainvoke(
-                    {"messages": [{"role": "user", "content": content}], "user_id": user_id},
-                    config=config,
-                )
+            async with asyncio.timeout(settings.agent_deadline_ms / 1000):
+                if conversation and conversation.mode == "knowledge":
+                    from langchain_core.messages import HumanMessage
+                    from src.rag.rag_agent import build_rag_agent
+
+                    result = await build_rag_agent().ainvoke({
+                        "messages": [HumanMessage(content=content)],
+                        "context": [],
+                        "should_retrieve": True,
+                    })
+                else:
+                    result = await agent.ainvoke(
+                        {
+                            "messages": [{"role": "user", "content": content}],
+                            "user_id": user_id,
+                        },
+                        config=config,
+                    )
 
             reply_content = result["messages"][-1].content or "抱歉，我没有理解您的问题。"
             reply = Message("assistant", reply_content)
@@ -394,6 +402,14 @@ class AgentService:
 
             return reply
 
+        except TimeoutError:
+            raise BusinessError(
+                BusinessErrorCode.AGENT_TIMEOUT,
+                "AI助手响应超时，请稍后重试。",
+                504,
+            )
+        except BusinessError:
+            raise
         except Exception as error:
             error_msg = str(error)
             if "rate limit" in error_msg.lower() or "429" in error_msg:
@@ -423,6 +439,10 @@ class AgentService:
 
             command = execute_agent_command(content, conversation_id)
             if command:
+                ConversationService.append_assistant_message(
+                    conversation_id,
+                    Message("assistant", command.reply),
+                )
                 yield command.reply
                 return
 
@@ -442,17 +462,29 @@ class AgentService:
             if user_id:
                 config["configurable"]["user_id"] = user_id
 
+            from src.config.settings import settings
+
             full_answer = ""
-            async for event in agent.astream_events(
-                {"messages": [{"role": "user", "content": content}], "user_id": user_id},
-                config=config,
-                version="v2",
-            ):
-                if event["event"] == "on_chat_model_stream":
-                    chunk = event["data"]["chunk"]
-                    if chunk.content:
-                        full_answer += chunk.content
-                        yield chunk.content
+            async with asyncio.timeout(settings.agent_deadline_ms / 1000):
+                async for event in agent.astream_events(
+                    {
+                        "messages": [{"role": "user", "content": content}],
+                        "user_id": user_id,
+                    },
+                    config=config,
+                    version="v2",
+                ):
+                    if event["event"] == "on_chat_model_stream":
+                        chunk = event["data"]["chunk"]
+                        if chunk.content:
+                            full_answer += chunk.content
+                            yield chunk.content
+
+            if full_answer:
+                ConversationService.append_assistant_message(
+                    conversation_id,
+                    Message("assistant", full_answer),
+                )
 
             # Record Q&A + extract memories
             if user_id and full_answer:
@@ -463,6 +495,14 @@ class AgentService:
                 except Exception:
                     pass
 
+        except TimeoutError:
+            raise BusinessError(
+                BusinessErrorCode.AGENT_TIMEOUT,
+                "AI助手响应超时，请稍后重试。",
+                504,
+            )
+        except BusinessError:
+            raise
         except Exception as error:
             error_msg = str(error)
             if "rate limit" in error_msg.lower():

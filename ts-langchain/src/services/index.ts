@@ -21,6 +21,11 @@ import {
   executeAgentCommand,
   getAgentPromptOverride,
 } from "../commands/index.js";
+import {
+  AgentDeadline,
+  isAgentDeadlineError,
+  runWithAgentDeadline,
+} from "../agents/deadline.js";
 
 // ============ 类型定义 ============
 
@@ -81,6 +86,7 @@ export enum BusinessErrorCode {
   RATE_LIMITED = "RATE_LIMITED",
   INTERNAL_ERROR = "INTERNAL_ERROR",
   SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE",
+  AGENT_TIMEOUT = "AGENT_TIMEOUT",
 }
 
 export class BusinessError extends Error {
@@ -221,13 +227,18 @@ export class AgentService {
         actor_type: "user",
       } as const;
 
-      const result = conversation?.mode === "knowledge"
-        ? await KnowledgeService.chat(content, history)
-        : await runWithToolCallContext(toolContext, () => (agent as any).invoke({
-            input: content,
-            chat_history: history,
-            memory_context: memoryContext,
-          }));
+      const result = await runWithAgentDeadline<any>((signal) =>
+        conversation?.mode === "knowledge"
+          ? KnowledgeService.chat(content, history)
+          : runWithToolCallContext(toolContext, () => (agent as any).invoke(
+              {
+                input: content,
+                chat_history: history,
+                memory_context: memoryContext,
+              },
+              { signal },
+            )),
+      );
 
       const reply: Message = {
         id: crypto.randomUUID(),
@@ -253,6 +264,14 @@ export class AgentService {
 
       return reply;
     } catch (error: any) {
+      if (error instanceof BusinessError) throw error;
+      if (isAgentDeadlineError(error)) {
+        throw new BusinessError(
+          BusinessErrorCode.AGENT_TIMEOUT,
+          "AI助手响应超时，请稍后重试。",
+          504,
+        );
+      }
       if (error.message?.includes("API key")) {
         throw new BusinessError(
           BusinessErrorCode.SERVICE_UNAVAILABLE,
@@ -283,6 +302,13 @@ export class AgentService {
     try {
       const command = executeAgentCommand(content, conversationId);
       if (command) {
+        const reply: Message = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: command.reply,
+          createdAt: new Date().toISOString(),
+        };
+        ConversationService.appendAssistantMessage(conversationId, reply);
         yield command.reply;
         return;
       }
@@ -313,24 +339,37 @@ export class AgentService {
 
       let fullAnswer = "";
       const scope = createToolCallScope(toolContext);
-      const stream = await scope.run(() => (agent as any).stream(
-        { input: content, chat_history: history, memory_context: memoryContext },
-        { tags: ["stream"] },
-      ));
-      const iterator = stream[Symbol.asyncIterator]();
+      const deadline = new AgentDeadline();
+      try {
+        const stream = await deadline.run<any>(scope.run(() => (agent as any).stream(
+          { input: content, chat_history: history, memory_context: memoryContext },
+          { tags: ["stream"], signal: deadline.signal },
+        )));
+        const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<any>;
 
-      while (true) {
-        const { value: chunk, done } = await scope.run(() => iterator.next());
-        if (done) break;
-        if (chunk?.output) {
-          fullAnswer += chunk.output;
-          yield chunk.output;
+        while (true) {
+          const next = scope.run(() => iterator.next()) as Promise<IteratorResult<any>>;
+          const { value: chunk, done } = await deadline.run(next);
+          if (done) break;
+          if (chunk?.output) {
+            const text = String(chunk.output);
+            fullAnswer += text;
+            yield text;
+          }
         }
+      } finally {
+        deadline.dispose();
       }
 
       if (fullAnswer) {
         appendMessage(conversationId, new HumanMessage(content));
         appendMessage(conversationId, new AIMessage(fullAnswer));
+        ConversationService.appendAssistantMessage(conversationId, {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: fullAnswer,
+          createdAt: new Date().toISOString(),
+        });
       }
 
       // Record Q&A + extract memories
@@ -344,6 +383,14 @@ export class AgentService {
         }
       }
     } catch (error: any) {
+      if (error instanceof BusinessError) throw error;
+      if (isAgentDeadlineError(error)) {
+        throw new BusinessError(
+          BusinessErrorCode.AGENT_TIMEOUT,
+          "AI助手响应超时，请稍后重试。",
+          504,
+        );
+      }
       if (error.message?.includes("rate limit")) {
         throw new BusinessError(
           BusinessErrorCode.SERVICE_UNAVAILABLE,

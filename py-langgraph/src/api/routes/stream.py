@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from uuid import uuid4
@@ -7,6 +8,7 @@ from pydantic import BaseModel
 
 from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
 from src.commands import execute_agent_command, get_agent_prompt_override
+from src.config.settings import settings
 
 router = APIRouter()
 
@@ -55,18 +57,27 @@ async def stream(request: StreamRequest):
     }
 
     async def event_generator():
+        metadata = json.dumps({"thread_id": thread_id}, ensure_ascii=False)
+        yield f"data: {metadata}\n\n"
         try:
-            async for event in agent.astream_events(
-                input_data,
-                config=config,
-                version="v2",
-            ):
-                kind = event.get("event")
-                if kind == "on_chat_model_stream":
-                    chunk = event["data"]["chunk"]
-                    if isinstance(chunk.content, str) and chunk.content:
-                        payload = json.dumps({"text": chunk.content}, ensure_ascii=False)
-                        yield f"data: {payload}\n\n"
+            async with asyncio.timeout(settings.agent_deadline_ms / 1000):
+                async for event in agent.astream_events(
+                    input_data,
+                    config=config,
+                    version="v2",
+                ):
+                    kind = event.get("event")
+                    if kind == "on_chat_model_stream":
+                        chunk = event["data"]["chunk"]
+                        if isinstance(chunk.content, str) and chunk.content:
+                            payload = json.dumps({"text": chunk.content}, ensure_ascii=False)
+                            yield f"data: {payload}\n\n"
+        except TimeoutError:
+            payload = json.dumps(
+                {"error": {"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"}},
+                ensure_ascii=False,
+            )
+            yield f"data: {payload}\n\n"
         except Exception:
             logging.getLogger("agent.stream").exception("Stream failed")
             payload = json.dumps({"error": "Internal server error"}, ensure_ascii=False)

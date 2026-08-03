@@ -5,6 +5,7 @@ import { MemoryService, ProfileService } from "../../profile/service.js";
 import { HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 import { runWithToolCallContext } from "../../tools/runtime/executor.js";
 import { executeAgentCommand, getAgentPromptOverride } from "../../commands/index.js";
+import { isAgentDeadlineError, runWithAgentDeadline } from "../../agents/deadline.js";
 
 export async function registerChatRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
@@ -50,11 +51,16 @@ export async function registerChatRoutes(app: FastifyInstance) {
           actor_type: "user",
         } as const;
 
-        const result = await runWithToolCallContext(toolContext, () => (agent as any).invoke({
-            input: message,
-            chat_history: history,
-            memory_context: memoryContext,
-          }));
+        const result = await runWithAgentDeadline<{ output?: unknown }>((signal) =>
+          runWithToolCallContext(toolContext, () => (agent as any).invoke(
+            {
+              input: message,
+              chat_history: history,
+              memory_context: memoryContext,
+            },
+            { signal },
+          )),
+        );
 
           const reply_text =
             typeof result.output === "string" ? result.output : "抱歉，我没有理解您的问题。";
@@ -65,6 +71,11 @@ export async function registerChatRoutes(app: FastifyInstance) {
         return { reply: reply_text, thread_id: threadId };
       } catch (error: any) {
         console.error("Chat error:", error);
+        if (isAgentDeadlineError(error)) {
+          return reply.status(504).send({
+            error: { code: "AGENT_TIMEOUT", message: "AI助手响应超时，请稍后重试。" },
+          });
+        }
         if (error.message?.includes("API key")) {
           return reply.status(500).send({ error: "API key not configured. Set OPENAI_API_KEY in .env" });
         }
