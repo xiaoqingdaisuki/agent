@@ -1,4 +1,19 @@
-/** web.search — Tavily-backed real-time search with retry, circuit breaking and cache fallback. */
+/**
+ * web.search — 实时互联网搜索（Tavily 后端）
+ *
+ * 核心能力：
+ * 1. 多级缓存（新鲜缓存 + 过期降级缓存）避免重复请求
+ * 2. 并发去重（in-flight dedup）防止同一查询重复发出
+ * 3. 熔断器（circuit breaker）在连续失败后自动降级，避免压垮上游
+ * 4. 自动重试 + 退避，提升网络波动下的鲁棒性
+ * 5. 返回结构化结果（标题、URL、摘要、发布时间），供 Agent 或工具管线消费
+ *
+ * 设计要点：
+ * - 纯函数式组织：settings / 私有 helper / 公开 API 三层分离
+ * - 缓存键使用 query 的小写规范化形式，保证命中一致性
+ * - stale 缓存允许在上游不可用时返回降级结果，而非硬失败
+ * - resetSearchStateForTests 暴露内部状态，便于单元测试隔离
+ */
 
 import { DynamicStructuredTool } from "langchain/tools";
 import { z } from "zod";

@@ -1,3 +1,12 @@
+/**
+ * tools/index — 工具 barrel 导出
+ *
+ * 职责：
+ * 1. 聚合所有工具实例、Descriptor 和 Zod schema
+ * 2. 对外统一导出 `tools` 数组（供 Agent 使用）
+ * 3. 对外统一导出 `toolDescriptors` / `toolSchemas` 映射（供 Runtime 管线使用）
+ */
+
 import { weatherTool, weatherDescriptor } from "./weather.js";
 import { webSearchTool, webSearchDescriptor } from "./web-search.js";
 import { webReadTool, webReadDescriptor } from "./web-read.js";

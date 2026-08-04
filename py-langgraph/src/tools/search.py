@@ -1,4 +1,19 @@
-"""Tavily-backed real-time search with retry, circuit breaking and cache fallback."""
+"""
+web.search — Tavily-backed real-time search with retry, circuit breaking and cache fallback.
+
+Core capabilities:
+1. Multi-level cache (fresh cache + stale fallback) avoids duplicate requests
+2. In-flight dedup prevents the same query from being sent concurrently
+3. Circuit breaker auto-degrades after consecutive failures, protecting upstream
+4. Auto-retry with backoff for robustness under network flakiness
+5. Returns structured results (title, URL, snippet, published_at) for Agent consumption
+
+Design notes:
+- Functional layering: settings / private helpers / public API
+- Cache key uses lowercased normalized query for consistent hits
+- Stale cache returns degraded results instead of hard failure when upstream is down
+- reset_search_state_for_tests exposes internal state for unit test isolation
+"""
 
 from __future__ import annotations
 
