@@ -11,7 +11,8 @@ export interface AgentCommandResult {
 
 const darkModeThreads = new Set<string>();
 
-const TRANSCRIPT_MESSAGE_PATTERN = /(?:^|\n\n)(user|assistant|system): ([\s\S]*?)(?=\n\n(?:user|assistant|system): |$)/g;
+const TRANSCRIPT_MESSAGE_PATTERN =
+  /(?:^|\n\n)(user|assistant|system): ([\s\S]*?)(?=\n\n(?:user|assistant|system): |$)/g;
 
 // 从内容中提取所有用户消息（解析 transcript 格式）
 function getTranscriptUserMessages(content: string): string[] {
@@ -39,9 +40,10 @@ function toggleDarkMode(threadId: string): AgentCommandResult {
   return { name: "toggle_dark_mode", reply: DARK_MODE_ENABLED_REPLY };
 }
 
-const commandHandlers = new Map<string, (threadId: string) => AgentCommandResult>([
-  [DARK_MODE_COMMAND, toggleDarkMode],
-]);
+const commandHandlers = new Map<
+  string,
+  (threadId: string) => AgentCommandResult
+>([[DARK_MODE_COMMAND, toggleDarkMode]]);
 
 export function executeAgentCommand(
   content: string,

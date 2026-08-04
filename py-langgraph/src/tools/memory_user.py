@@ -56,6 +56,7 @@ _USER_SAVE_DESCRIPTOR = ToolDescriptor(
 
 # ============ 用户记忆存储 ============
 
+
 class UserMemoryStore:
     """用户记忆存储 — 基于内存（生产环境可替换为数据库）"""
 
@@ -80,7 +81,9 @@ class UserMemoryStore:
         self._memories[user_id].append(memory)
         return memory
 
-    def search(self, user_id: str, query: str = "", category: str = "", max_results: int = 10) -> list[dict]:
+    def search(
+        self, user_id: str, query: str = "", category: str = "", max_results: int = 10
+    ) -> list[dict]:
         """搜索用户记忆"""
         memories = self._memories.get(user_id, [])
 
@@ -125,10 +128,13 @@ def get_user_memory_store() -> UserMemoryStore:
 
 # ============ LangChain Tool: memory.user.search ============
 
+
 class UserSearchInput(BaseModel):
     user_id: str = Field(description="用户 ID")
     query: str = Field(default="", description="搜索关键词，留空则返回所有记忆")
-    category: str = Field(default="", description="记忆类别过滤：preference / fact / decision / context")
+    category: str = Field(
+        default="", description="记忆类别过滤：preference / fact / decision / context"
+    )
     max_results: int = Field(default=10, description="最多返回条数", ge=1, le=50)
 
 
@@ -162,10 +168,13 @@ def memory_user_search(
 
 # ============ LangChain Tool: memory.user.save ============
 
+
 class UserSaveInput(BaseModel):
     user_id: str = Field(description="用户 ID")
     content: str = Field(description="要保存的记忆内容，简洁明确", max_length=200)
-    category: str = Field(default="fact", description="记忆类别：preference / fact / decision / context")
+    category: str = Field(
+        default="fact", description="记忆类别：preference / fact / decision / context"
+    )
     importance: int = Field(default=3, description="重要性 1-5，越高越重要", ge=1, le=5)
 
 

@@ -98,7 +98,9 @@ class MemoryService:
         return "\n".join(lines)
 
     @staticmethod
-    def extract_memories_from_conversation(user_id: str, question: str, answer: str) -> list[Memory]:
+    def extract_memories_from_conversation(
+        user_id: str, question: str, answer: str
+    ) -> list[Memory]:
         """从对话中提取值得记忆的事实（正则 + LLM 双层提取）"""
         # 第一层：正则规则立即提取
         regex_memories = MemoryService._extract_with_regex(user_id, question)
@@ -135,13 +137,15 @@ class MemoryService:
             for match in matches:
                 content = match.strip()
                 if len(content) > 1 and len(content) < 50:
-                    new_memories.append(Memory(
-                        id=f"mem_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
-                        user_id=user_id,
-                        content=f"用户喜欢/偏好: {content}",
-                        category=category,
-                        importance=4,
-                    ))
+                    new_memories.append(
+                        Memory(
+                            id=f"mem_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+                            user_id=user_id,
+                            content=f"用户喜欢/偏好: {content}",
+                            category=category,
+                            importance=4,
+                        )
+                    )
 
         info_patterns = [
             (r"我在(.+?)[。！\n]", "fact"),
@@ -154,13 +158,15 @@ class MemoryService:
             for match in matches:
                 content = match.strip()
                 if len(content) > 1 and len(content) < 50:
-                    new_memories.append(Memory(
-                        id=f"mem_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
-                        user_id=user_id,
-                        content=f"用户信息: {content}",
-                        category=category,
-                        importance=5,
-                    ))
+                    new_memories.append(
+                        Memory(
+                            id=f"mem_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+                            user_id=user_id,
+                            content=f"用户信息: {content}",
+                            category=category,
+                            importance=5,
+                        )
+                    )
 
         return new_memories
 
@@ -190,14 +196,17 @@ class MemoryService:
         )
 
         try:
-            response = llm.invoke([
-                SystemMessage(content="你只输出 JSON 数组，不输出其他内容。"),
-                HumanMessage(content=prompt),
-            ])
+            response = llm.invoke(
+                [
+                    SystemMessage(content="你只输出 JSON 数组，不输出其他内容。"),
+                    HumanMessage(content=prompt),
+                ]
+            )
             text = response.content if isinstance(response.content, str) else ""
 
             import json
-            json_match = re.search(r'\[[\s\S]*\]', text)
+
+            json_match = re.search(r"\[[\s\S]*\]", text)
             if not json_match:
                 return
 

@@ -21,28 +21,72 @@ import type { ToolDescriptor } from "./contracts.js";
 // ============ 安全限制 ============
 
 const ALLOWED_EXTENSIONS = new Set([
-  ".txt", ".md", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-  ".py", ".js", ".ts", ".java", ".go", ".rs", ".c", ".cpp", ".h",
-  ".html", ".css", ".xml", ".csv", ".tsv", ".sql",
-  ".sh", ".bash", ".zsh", ".bat", ".ps1",
-  ".log", ".env.example", ".gitignore", ".dockerfile",
-  ".license", ".readme",
+  ".txt",
+  ".md",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".toml",
+  ".ini",
+  ".cfg",
+  ".py",
+  ".js",
+  ".ts",
+  ".java",
+  ".go",
+  ".rs",
+  ".c",
+  ".cpp",
+  ".h",
+  ".html",
+  ".css",
+  ".xml",
+  ".csv",
+  ".tsv",
+  ".sql",
+  ".sh",
+  ".bash",
+  ".zsh",
+  ".bat",
+  ".ps1",
+  ".log",
+  ".env.example",
+  ".gitignore",
+  ".dockerfile",
+  ".license",
+  ".readme",
 ]);
 
 const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1MB
 const MAX_READ_CHARS = 50_000;
 
 const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
-  { pattern: /(api[_-]?key|apikey)\s*[:=]\s*['"]?([A-Za-z0-9_\-]{16,})['"]?/gi, replacement: "***REDACTED***" },
-  { pattern: /(password|passwd|pwd)\s*[:=]\s*['"]?([^'\"\s]{4,})['"]?/gi, replacement: "***REDACTED***" },
-  { pattern: /(token|secret)\s*[:=]\s*['"]?([A-Za-z0-9_\-\.]{16,})['"]?/gi, replacement: "***REDACTED***" },
-  { pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----/gi, replacement: "***REDACTED***" },
+  {
+    pattern: /(api[_-]?key|apikey)\s*[:=]\s*['"]?([A-Za-z0-9_\-]{16,})['"]?/gi,
+    replacement: "***REDACTED***",
+  },
+  {
+    pattern: /(password|passwd|pwd)\s*[:=]\s*['"]?([^'\"\s]{4,})['"]?/gi,
+    replacement: "***REDACTED***",
+  },
+  {
+    pattern: /(token|secret)\s*[:=]\s*['"]?([A-Za-z0-9_\-\.]{16,})['"]?/gi,
+    replacement: "***REDACTED***",
+  },
+  {
+    pattern:
+      /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----/gi,
+    replacement: "***REDACTED***",
+  },
 ];
 
 // ============ 安全路径解析 ============
 
 // 安全解析文件路径，防止路径穿越和工作区逃逸
-export function resolveSafePath(filepath: string, rootDir: string): { path: string | null; error?: string } {
+export function resolveSafePath(
+  filepath: string,
+  rootDir: string,
+): { path: string | null; error?: string } {
   const cleanPath = filepath.trim();
 
   if (!cleanPath) {
@@ -63,7 +107,11 @@ export function resolveSafePath(filepath: string, rootDir: string): { path: stri
   const root = path.resolve(rootDir || ".");
   const fullPath = path.resolve(root, cleanPath);
   const relative = path.relative(root, fullPath);
-  if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+  if (
+    relative.startsWith(`..${path.sep}`) ||
+    relative === ".." ||
+    path.isAbsolute(relative)
+  ) {
     return { path: null, error: "文件路径超出工作区范围" };
   }
 
@@ -100,7 +148,8 @@ export const fileReadDescriptor: ToolDescriptor = {
     properties: {
       filepath: {
         type: "string",
-        description: "要读取的文件路径（相对于工作区），如 'README.md' 或 'src/main.py'",
+        description:
+          "要读取的文件路径（相对于工作区），如 'README.md' 或 'src/main.py'",
       },
       offset: {
         type: "integer",
@@ -125,13 +174,23 @@ export const fileReadTool: DynamicStructuredTool = new DynamicStructuredTool({
   description:
     "安全读取工作区内的指定文件内容。自动进行路径安全检查。大文件支持通过 offset/limit 分段读取。",
   schema: z.object({
-    filepath: z.string().describe("要读取的文件路径，如 'README.md' 或 'src/main.py'"),
+    filepath: z
+      .string()
+      .describe("要读取的文件路径，如 'README.md' 或 'src/main.py'"),
     offset: z.number().int().min(0).default(0).describe("起始行号（从0开始）"),
-    limit: z.number().int().min(1).max(500).default(100).describe("最多读取行数"),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .default(100)
+      .describe("最多读取行数"),
   }),
   func: async ({ filepath, offset, limit }) => {
     // 1. 路径安全检查
-    const workspaceRoot = path.resolve(process.env.AGENT_WORKSPACE_ROOT || process.cwd());
+    const workspaceRoot = path.resolve(
+      process.env.AGENT_WORKSPACE_ROOT || process.cwd(),
+    );
     const { path: safePath, error } = resolveSafePath(filepath, workspaceRoot);
     if (!safePath) {
       return `❌ 路径安全拒绝：${error}`;
@@ -142,7 +201,11 @@ export const fileReadTool: DynamicStructuredTool = new DynamicStructuredTool({
       const realRoot = await fs.realpath(workspaceRoot);
       const realPath = await fs.realpath(safePath);
       const relative = path.relative(realRoot, realPath);
-      if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+      if (
+        relative.startsWith(`..${path.sep}`) ||
+        relative === ".." ||
+        path.isAbsolute(relative)
+      ) {
         return `❌ 符号链接安全拒绝：${filepath}`;
       }
 
@@ -195,7 +258,6 @@ export const fileReadTool: DynamicStructuredTool = new DynamicStructuredTool({
       }
 
       return header + body;
-
     } catch (error) {
       return `❌ 读取文件失败：${error instanceof Error ? error.message : "未知错误"}`;
     }

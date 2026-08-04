@@ -19,7 +19,10 @@ import type { ToolDescriptor } from "./contracts.js";
 // ============ SSRF 防护 ============
 
 const BLOCKED_HOSTS = new Set([
-  "localhost", "127.0.0.1", "0.0.0.0", "::1",
+  "localhost",
+  "127.0.0.1",
+  "0.0.0.0",
+  "::1",
   "169.254.169.254", // AWS metadata
   "metadata.google.internal", // GCP metadata
 ]);
@@ -88,7 +91,9 @@ function isBlockedIp(address: string): boolean {
 }
 
 // 对 URL 进行 DNS 解析并验证所有解析结果的安全性
-async function validateNetworkUrl(url: string): Promise<{ safe: boolean; reason?: string }> {
+async function validateNetworkUrl(
+  url: string,
+): Promise<{ safe: boolean; reason?: string }> {
   const syntaxCheck = isSafeUrl(url);
   if (!syntaxCheck.safe) return syntaxCheck;
 
@@ -158,7 +163,10 @@ function cleanHtml(html: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'");
 
-  text = text.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  text = text
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
   return text;
 }
 
@@ -199,7 +207,8 @@ export const webReadDescriptor: ToolDescriptor = {
     properties: {
       url: {
         type: "string",
-        description: "要读取的网页 URL，必须是完整的 URL（https:// 或 http://）",
+        description:
+          "要读取的网页 URL，必须是完整的 URL（https:// 或 http://）",
       },
     },
     required: ["url"],
@@ -213,7 +222,10 @@ export const webReadTool: DynamicStructuredTool = new DynamicStructuredTool({
   description:
     "读取指定 URL 的网页正文内容。自动去除 HTML 标签、脚本和样式，提取可读文本。通常在 web_search 之后使用来获取详细信息。",
   schema: z.object({
-    url: z.string().url().describe("要读取的网页 URL，必须是完整的 URL（https:// 或 http://）"),
+    url: z
+      .string()
+      .url()
+      .describe("要读取的网页 URL，必须是完整的 URL（https:// 或 http://）"),
   }),
   func: async ({ url }) => {
     // 1. URL 和 DNS 安全检查
@@ -236,7 +248,8 @@ export const webReadTool: DynamicStructuredTool = new DynamicStructuredTool({
         res = await fetch(currentUrl, {
           headers: {
             "User-Agent": "Mozilla/5.0 (compatible; AI-Agent/1.0)",
-            Accept: "text/html,application/xhtml+xml,application/xml,text/plain,*/*",
+            Accept:
+              "text/html,application/xhtml+xml,application/xml,text/plain,*/*",
           },
           signal: controller.signal,
           redirect: "manual",
@@ -298,7 +311,10 @@ export const webReadTool: DynamicStructuredTool = new DynamicStructuredTool({
 function extractTitle(html: string): string | undefined {
   const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   if (match) {
-    const title = match[1].replace(/<[^>]+>/g, "").trim().slice(0, 200);
+    const title = match[1]
+      .replace(/<[^>]+>/g, "")
+      .trim()
+      .slice(0, 200);
     return title || undefined;
   }
   return undefined;

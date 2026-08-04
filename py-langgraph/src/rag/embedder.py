@@ -3,7 +3,6 @@ RAG 向量化器
 使用 OpenAI Embedding 模型
 """
 
-
 from langchain_openai import OpenAIEmbeddings
 
 

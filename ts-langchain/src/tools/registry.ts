@@ -14,8 +14,16 @@ import { webReadTool, webReadDescriptor } from "./web-read.js";
 import { calculatorTool, calculatorDescriptor } from "./calculator.js";
 import { knowledgeSearchTool, knowledgeSearchDescriptor } from "./knowledge.js";
 import { fileReadTool, fileReadDescriptor } from "./file-read.js";
-import { memorySessionSearchTool, sessionMemoryDescriptor } from "./memory-session.js";
-import { memoryUserSearchTool, memoryUserSaveTool, userMemorySearchDescriptor, userMemorySaveDescriptor } from "./memory-user.js";
+import {
+  memorySessionSearchTool,
+  sessionMemoryDescriptor,
+} from "./memory-session.js";
+import {
+  memoryUserSearchTool,
+  memoryUserSaveTool,
+  userMemorySearchDescriptor,
+  userMemorySaveDescriptor,
+} from "./memory-user.js";
 import type { DynamicStructuredTool } from "langchain/tools";
 
 // ============ 工具注册表 ============
@@ -90,7 +98,9 @@ class ToolRegistry {
     return visible;
   }
 
-  getVisibleDescriptors(userPermissions: string[]): Array<Record<string, unknown>> {
+  getVisibleDescriptors(
+    userPermissions: string[],
+  ): Array<Record<string, unknown>> {
     const result: Array<Record<string, unknown>> = [];
 
     for (const entry of this.tools.values()) {
@@ -114,8 +124,14 @@ class ToolRegistry {
     return result;
   }
 
-  getCategories(): Record<string, Array<{ name: string; title: string; risk_level: string }>> {
-    const categories: Record<string, Array<{ name: string; title: string; risk_level: string }>> = {};
+  getCategories(): Record<
+    string,
+    Array<{ name: string; title: string; risk_level: string }>
+  > {
+    const categories: Record<
+      string,
+      Array<{ name: string; title: string; risk_level: string }>
+    > = {};
 
     for (const d of this.getDescriptors()) {
       if (!categories[d.category]) {
@@ -136,7 +152,9 @@ class ToolRegistry {
 
 export const registry = new ToolRegistry();
 
-export function getToolsForUser(userPermissions: string[] = ["*"]): DynamicStructuredTool[] {
+export function getToolsForUser(
+  userPermissions: string[] = ["*"],
+): DynamicStructuredTool[] {
   // Default: return all tools (no filtering)
   if (userPermissions.includes("*")) {
     return registry.getAllTools();
@@ -144,7 +162,9 @@ export function getToolsForUser(userPermissions: string[] = ["*"]): DynamicStruc
   return registry.getVisibleTools(userPermissions);
 }
 
-export function getToolMetadata(userPermissions: string[] = ["*"]): Array<Record<string, unknown>> {
+export function getToolMetadata(
+  userPermissions: string[] = ["*"],
+): Array<Record<string, unknown>> {
   if (userPermissions.includes("*")) {
     return registry.getDescriptors().map((d) => ({
       name: d.name,

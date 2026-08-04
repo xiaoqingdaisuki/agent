@@ -27,7 +27,9 @@ function hitsToText(hits: KnowledgeHit[], query: string): string {
     return `📚 知识库中未找到与"${query}"相关的内容。`;
   }
 
-  const lines: string[] = [`📚 知识库检索（${query}） — 找到 ${hits.length} 条相关结果：\n`];
+  const lines: string[] = [
+    `📚 知识库检索（${query}） — 找到 ${hits.length} 条相关结果：\n`,
+  ];
   for (let i = 0; i < hits.length; i++) {
     const h = hits[i];
     lines.push(`[${i + 1}] ${h.doc_name}`);
@@ -81,45 +83,52 @@ export const knowledgeSearchDescriptor: ToolDescriptor = {
 
 // ============ LangChain Tool ============
 
-export const knowledgeSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
-  name: "knowledge_search",
-  description:
-    "在企业知识库中搜索相关信息。适用于需要从公司文档、产品手册、技术文档等内部资料中查找答案的场景。返回带文档来源和页码的引用。",
-  schema: z.object({
-    query: z.string().describe("检索关键词或问题，尽量简洁明确"),
-    top_k: z.number().int().min(1).max(10).default(5).describe("返回结果数量，默认 5"),
-  }),
-  func: async ({ query, top_k }) => {
-    try {
-      // 动态导入，避免循环依赖
-      const { Retriever } = await import("../rag/retriever.js");
+export const knowledgeSearchTool: DynamicStructuredTool =
+  new DynamicStructuredTool({
+    name: "knowledge_search",
+    description:
+      "在企业知识库中搜索相关信息。适用于需要从公司文档、产品手册、技术文档等内部资料中查找答案的场景。返回带文档来源和页码的引用。",
+    schema: z.object({
+      query: z.string().describe("检索关键词或问题，尽量简洁明确"),
+      top_k: z
+        .number()
+        .int()
+        .min(1)
+        .max(10)
+        .default(5)
+        .describe("返回结果数量，默认 5"),
+    }),
+    func: async ({ query, top_k }) => {
+      try {
+        // 动态导入，避免循环依赖
+        const { Retriever } = await import("../rag/retriever.js");
 
-      const retriever = new Retriever({
-        qdrantUrl: process.env.QDRANT_URL || "http://localhost:6333",
-        collectionName: "documents",
-        topK: top_k || 5,
-      });
+        const retriever = new Retriever({
+          qdrantUrl: process.env.QDRANT_URL || "http://localhost:6333",
+          collectionName: "documents",
+          topK: top_k || 5,
+        });
 
-      const results = await retriever.retrieve(query);
+        const results = await retriever.retrieve(query);
 
-      if (!results || results.length === 0) {
-        return `📚 知识库中未找到与"${query}"相关的内容。`;
+        if (!results || results.length === 0) {
+          return `📚 知识库中未找到与"${query}"相关的内容。`;
+        }
+
+        const hits: KnowledgeHit[] = results.map((r) => {
+          const meta = r.metadata || {};
+          return {
+            doc_id: meta.source || "unknown",
+            doc_name: meta.filename || "未知文档",
+            content: r.content || "",
+            score: r.score || 0,
+            chunk_index: meta.chunkIndex,
+          };
+        });
+
+        return hitsToText(hits, query);
+      } catch (error) {
+        return `📚 知识库检索暂时不可用：${error instanceof Error ? error.message : "未知错误"}`;
       }
-
-      const hits: KnowledgeHit[] = results.map((r) => {
-        const meta = r.metadata || {};
-        return {
-          doc_id: meta.source || "unknown",
-          doc_name: meta.filename || "未知文档",
-          content: r.content || "",
-          score: r.score || 0,
-          chunk_index: meta.chunkIndex,
-        };
-      });
-
-      return hitsToText(hits, query);
-    } catch (error) {
-      return `📚 知识库检索暂时不可用：${error instanceof Error ? error.message : "未知错误"}`;
-    }
-  },
-});
+    },
+  });

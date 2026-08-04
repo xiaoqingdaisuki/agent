@@ -57,7 +57,7 @@ export class VectorStore {
    */
   async addDocuments(
     documents: Array<{ content: string; metadata: Record<string, any> }>,
-    embeddings: number[][]
+    embeddings: number[][],
   ): Promise<void> {
     await this.ensureCollection(embeddings[0]?.length || 1536);
 
@@ -88,7 +88,10 @@ export class VectorStore {
   /**
    * 搜索相似文档
    */
-  async search(queryVector: number[], topK: number = 5): Promise<SearchResult[]> {
+  async search(
+    queryVector: number[],
+    topK: number = 5,
+  ): Promise<SearchResult[]> {
     const url = `${this.baseUrl}/collections/${this.collectionName}/points/search`;
 
     const response = await fetch(url, {
@@ -110,11 +113,13 @@ export class VectorStore {
 
     const data = await response.json();
 
-    return data.result?.map((r: any) => ({
-      content: r.payload?.content || "",
-      score: r.score,
-      metadata: r.payload?.metadata || {},
-    })) || [];
+    return (
+      data.result?.map((r: any) => ({
+        content: r.payload?.content || "",
+        score: r.score,
+        metadata: r.payload?.metadata || {},
+      })) || []
+    );
   }
 
   async deleteDocuments(documentId: string): Promise<void> {
@@ -132,7 +137,9 @@ export class VectorStore {
       }),
     });
     if (!response.ok) {
-      throw new Error(`Failed to delete document vectors: ${response.statusText}`);
+      throw new Error(
+        `Failed to delete document vectors: ${response.statusText}`,
+      );
     }
   }
 

@@ -33,19 +33,56 @@ from src.tools.contracts import (
 
 # 允许的文件扩展名（小写）
 ALLOWED_EXTENSIONS = {
-    ".txt", ".md", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-    ".py", ".js", ".ts", ".java", ".go", ".rs", ".c", ".cpp", ".h",
-    ".html", ".css", ".xml", ".csv", ".tsv", ".sql",
-    ".sh", ".bash", ".zsh", ".bat", ".ps1",
-    ".log", ".env.example", ".gitignore", ".dockerfile",
-    ".license", ".readme",
+    ".txt",
+    ".md",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".py",
+    ".js",
+    ".ts",
+    ".java",
+    ".go",
+    ".rs",
+    ".c",
+    ".cpp",
+    ".h",
+    ".html",
+    ".css",
+    ".xml",
+    ".csv",
+    ".tsv",
+    ".sql",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".bat",
+    ".ps1",
+    ".log",
+    ".env.example",
+    ".gitignore",
+    ".dockerfile",
+    ".license",
+    ".readme",
 }
 
 # 禁止的文件名模式
 _BLOCKED_FILENAMES = {
-    ".env", ".env.local", ".env.production", ".env.dev",
-    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
-    "*.pem", "*.key", "*.p12", "*.pfx",
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.dev",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
 }
 
 # 最大文件大小（字节）— 1MB
@@ -56,9 +93,20 @@ MAX_READ_CHARS = 50_000
 
 # 敏感内容模式（用于脱敏）
 _SENSITIVE_PATTERNS = [
-    (re.compile(r"(api[_-]?key|apikey)\s*[:=]\s*['\"]?([A-Za-z0-9_\-]{16,})['\"]?", re.IGNORECASE), "***REDACTED***"),
-    (re.compile(r"(password|passwd|pwd)\s*[:=]\s*['\"]?([^'\"\s]{4,})['\"]?", re.IGNORECASE), "***REDACTED***"),
-    (re.compile(r"(token|secret)\s*[:=]\s*['\"]?([A-Za-z0-9_\-\.]{16,})['\"]?", re.IGNORECASE), "***REDACTED***"),
+    (
+        re.compile(
+            r"(api[_-]?key|apikey)\s*[:=]\s*['\"]?([A-Za-z0-9_\-]{16,})['\"]?", re.IGNORECASE
+        ),
+        "***REDACTED***",
+    ),
+    (
+        re.compile(r"(password|passwd|pwd)\s*[:=]\s*['\"]?([^'\"\s]{4,})['\"]?", re.IGNORECASE),
+        "***REDACTED***",
+    ),
+    (
+        re.compile(r"(token|secret)\s*[:=]\s*['\"]?([A-Za-z0-9_\-\.]{16,})['\"]?", re.IGNORECASE),
+        "***REDACTED***",
+    ),
     (
         re.compile(
             r"-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?"
@@ -89,6 +137,7 @@ _DESCRIPTOR = ToolDescriptor(
 
 
 # ============ 安全路径解析 ============
+
 
 # 安全解析文件路径，防止路径穿越和逃逸
 def _resolve_safe_path(filepath: str, root_dir: str) -> tuple[Path | None, str | None]:
@@ -177,8 +226,11 @@ def _mask_sensitive(content: str) -> str:
 
 # ============ LangChain Tool ============
 
+
 class FileReadInput(BaseModel):
-    filepath: str = Field(description="要读取的文件路径（相对于工作区），如 'README.md' 或 'src/main.py'")
+    filepath: str = Field(
+        description="要读取的文件路径（相对于工作区），如 'README.md' 或 'src/main.py'"
+    )
     offset: int = Field(default=0, description="起始行号（从 0 开始），用于分段读取大文件", ge=0)
     limit: int = Field(default=100, description="最多读取行数，默认 100，最大 500", ge=1, le=500)
 
@@ -255,7 +307,9 @@ def file_read(filepath: str, offset: int = 0, limit: int = 100) -> str:
     body = "\n".join(selected_lines)
 
     if end < total_lines:
-        body += f"\n\n...（共 {total_lines} 行，已显示 {end} 行，剩余 {total_lines - end} 行未显示）"
+        body += (
+            f"\n\n...（共 {total_lines} 行，已显示 {end} 行，剩余 {total_lines - end} 行未显示）"
+        )
 
     return header + body
 

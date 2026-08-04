@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 @dataclass
 class KnowledgeHit:
     """单条知识检索命中"""
+
     doc_id: str = ""
     doc_name: str = ""
     content: str = ""
@@ -41,7 +42,7 @@ class KnowledgeHit:
 def hits_to_text(hits: list[KnowledgeHit], query: str) -> str:
     """将命中结果转换为展示文本"""
     if not hits:
-        return f"📚 知识库中未找到与\"{query}\"相关的内容。"
+        return f'📚 知识库中未找到与"{query}"相关的内容。'
 
     lines = [f"📚 知识库检索（{query}） — 找到 {len(hits)} 条相关结果：\n"]
     for i, h in enumerate(hits, 1):
@@ -77,6 +78,7 @@ _DESCRIPTOR = ToolDescriptor(
 
 # ============ LangChain Tool ============
 
+
 class KnowledgeSearchInput(BaseModel):
     query: str = Field(description="检索关键词或问题，尽量简洁明确")
     top_k: int = Field(default=5, description="返回结果数量，默认 5，最大 10", ge=1, le=10)
@@ -100,18 +102,20 @@ async def knowledge_search(query: str, top_k: int = 5) -> str:
         results = await retriever.retrieve_with_context(query)
 
         if not results:
-            return f"📚 知识库中未找到与\"{query}\"相关的内容。"
+            return f'📚 知识库中未找到与"{query}"相关的内容。'
 
         hits: list[KnowledgeHit] = []
         for r in results:
             meta = r.get("metadata", {})
-            hits.append(KnowledgeHit(
-                doc_id=meta.get("source", "unknown"),
-                doc_name=meta.get("filename", "未知文档"),
-                content=r.get("content", ""),
-                score=r.get("score", 0),
-                chunk_index=meta.get("chunk_index"),
-            ))
+            hits.append(
+                KnowledgeHit(
+                    doc_id=meta.get("source", "unknown"),
+                    doc_name=meta.get("filename", "未知文档"),
+                    content=r.get("content", ""),
+                    score=r.get("score", 0),
+                    chunk_index=meta.get("chunk_index"),
+                )
+            )
 
         return hits_to_text(hits, query)
 
@@ -121,4 +125,10 @@ async def knowledge_search(query: str, top_k: int = 5) -> str:
 
 # ============ 导出 ============
 
-__all__ = ["_DESCRIPTOR", "KnowledgeHit", "KnowledgeSearchInput", "hits_to_text", "knowledge_search"]
+__all__ = [
+    "_DESCRIPTOR",
+    "KnowledgeHit",
+    "KnowledgeSearchInput",
+    "hits_to_text",
+    "knowledge_search",
+]

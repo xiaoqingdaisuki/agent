@@ -9,13 +9,28 @@
  */
 
 import { createToolAgent } from "../agents/tool-agent.js";
-import { getHistory, clearHistory, appendMessage } from "../memory/conversation.js";
+import {
+  getHistory,
+  clearHistory,
+  appendMessage,
+} from "../memory/conversation.js";
 import { RAGAgent } from "../rag/rag-agent.js";
 import { DocumentLoader } from "../rag/loader.js";
 import { TextSplitter } from "../rag/splitter.js";
-import { MemoryService, ProfileService, HistoryService } from "../profile/service.js";
-import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { createToolCallScope, runWithToolCallContext } from "../tools/runtime/executor.js";
+import {
+  MemoryService,
+  ProfileService,
+  HistoryService,
+} from "../profile/service.js";
+import {
+  AIMessage,
+  HumanMessage,
+  SystemMessage,
+} from "@langchain/core/messages";
+import {
+  createToolCallScope,
+  runWithToolCallContext,
+} from "../tools/runtime/executor.js";
 import {
   clearAgentCommandState,
   executeAgentCommand,
@@ -46,11 +61,19 @@ export interface Message {
 
 export type AgentStreamEvent =
   | { type: "text"; text: string }
-  | { type: "tool"; toolName: string; status: "started" | "completed" | "failed"; durationMs?: number };
+  | {
+      type: "tool";
+      toolName: string;
+      status: "started" | "completed" | "failed";
+      durationMs?: number;
+    };
 
 class ToolProgressChannel {
-  private readonly events: Array<Extract<AgentStreamEvent, { type: "tool" }>> = [];
-  private readonly waiters = new Set<(event: Extract<AgentStreamEvent, { type: "tool" }>) => void>();
+  private readonly events: Array<Extract<AgentStreamEvent, { type: "tool" }>> =
+    [];
+  private readonly waiters = new Set<
+    (event: Extract<AgentStreamEvent, { type: "tool" }>) => void
+  >();
 
   // 推送一个工具进度事件，等待中的消费者优先消费
   push(event: Extract<AgentStreamEvent, { type: "tool" }>): void {
@@ -65,14 +88,20 @@ class ToolProgressChannel {
   }
 
   // 取出一个待消费的工具进度事件，无事件时返回等待 Promise
-  take(): { promise: Promise<Extract<AgentStreamEvent, { type: "tool" }>>; cancel: () => void } {
+  take(): {
+    promise: Promise<Extract<AgentStreamEvent, { type: "tool" }>>;
+    cancel: () => void;
+  } {
     const queued = this.events.shift();
-    if (queued) return { promise: Promise.resolve(queued), cancel: () => undefined };
+    if (queued)
+      return { promise: Promise.resolve(queued), cancel: () => undefined };
 
     let resolve!: (event: Extract<AgentStreamEvent, { type: "tool" }>) => void;
-    const promise = new Promise<Extract<AgentStreamEvent, { type: "tool" }>>((nextResolve) => {
-      resolve = nextResolve;
-    });
+    const promise = new Promise<Extract<AgentStreamEvent, { type: "tool" }>>(
+      (nextResolve) => {
+        resolve = nextResolve;
+      },
+    );
     const waiter = (event: Extract<AgentStreamEvent, { type: "tool" }>) => {
       this.waiters.delete(waiter);
       resolve(event);
@@ -136,7 +165,7 @@ export class BusinessError extends Error {
   constructor(
     public code: BusinessErrorCode | string,
     message: string,
-    public statusCode: number = 500
+    public statusCode: number = 500,
   ) {
     super(message);
     this.name = "BusinessError";
@@ -160,7 +189,10 @@ const conversationMessages = new Map<string, Message[]>();
 
 export class ConversationService {
   // 创建新会话，分配唯一 ID 并初始化消息列表
-  static create(title: string, mode: "chat" | "knowledge" | "mixed" = "chat"): Conversation {
+  static create(
+    title: string,
+    mode: "chat" | "knowledge" | "mixed" = "chat",
+  ): Conversation {
     const id = crypto.randomUUID();
     const conversation: Conversation = {
       id,
@@ -182,7 +214,8 @@ export class ConversationService {
   // 列出所有会话，按创建时间倒序排列
   static list(): Conversation[] {
     return Array.from(conversations.values()).sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
   }
 
@@ -197,7 +230,12 @@ export class ConversationService {
   // 向会话追加一条用户消息，增加消息计数
   static appendUserMessage(conversationId: string, content: string): Message {
     const conv = conversations.get(conversationId);
-    if (!conv) throw new BusinessError(BusinessErrorCode.NOT_FOUND, "Conversation not found", 404);
+    if (!conv)
+      throw new BusinessError(
+        BusinessErrorCode.NOT_FOUND,
+        "Conversation not found",
+        404,
+      );
 
     const msg: Message = {
       id: crypto.randomUUID(),
@@ -213,7 +251,10 @@ export class ConversationService {
   }
 
   // 向会话追加一条助手消息
-  static appendAssistantMessage(conversationId: string, message: Message): void {
+  static appendAssistantMessage(
+    conversationId: string,
+    message: Message,
+  ): void {
     const messages = conversationMessages.get(conversationId);
     if (messages) messages.push(message);
   }
@@ -237,7 +278,11 @@ export class ConversationService {
 
 export class AgentService {
   // 执行单轮对话，处理工具调用、记忆提取和错误转换
-  static async chat(conversationId: string, content: string, userId?: string): Promise<Message> {
+  static async chat(
+    conversationId: string,
+    content: string,
+    userId?: string,
+  ): Promise<Message> {
     try {
       const command = executeAgentCommand(content, conversationId);
       if (command) {
@@ -266,9 +311,12 @@ export class AgentService {
       }
 
       const conversation = ConversationService.get(conversationId);
-      const agent = conversation?.mode === "knowledge"
-        ? null
-        : await createToolAgent(getAgentPromptOverride(conversationId, content));
+      const agent =
+        conversation?.mode === "knowledge"
+          ? null
+          : await createToolAgent(
+              getAgentPromptOverride(conversationId, content),
+            );
 
       // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
       const toolContext = {
@@ -285,15 +333,19 @@ export class AgentService {
           ? KnowledgeService.chat(content, history)
           : runWithToolCallContext(
               toolContext,
-              () => (agent as any).invoke(
-                {
-                  input: content,
-                  chat_history: history,
-                  memory_context: memoryContext,
-                },
-                { signal: deadline.signal },
-              ),
-              { onToolProgress: (event) => event.type === "started" && deadline.enableToolBudget() },
+              () =>
+                (agent as any).invoke(
+                  {
+                    input: content,
+                    chat_history: history,
+                    memory_context: memoryContext,
+                  },
+                  { signal: deadline.signal },
+                ),
+              {
+                onToolProgress: (event) =>
+                  event.type === "started" && deadline.enableToolBudget(),
+              },
             ),
       );
 
@@ -312,7 +364,11 @@ export class AgentService {
       if (userId) {
         try {
           HistoryService.record(userId, conversationId, content, reply.content);
-          MemoryService.extractMemoriesFromConversation(userId, content, reply.content);
+          MemoryService.extractMemoriesFromConversation(
+            userId,
+            content,
+            reply.content,
+          );
           ProfileService.update(userId);
         } catch {
           // 记忆记录失败不影响主流程
@@ -333,20 +389,23 @@ export class AgentService {
         throw new BusinessError(
           BusinessErrorCode.SERVICE_UNAVAILABLE,
           "AI 服务配置异常，请联系管理员",
-          503
+          503,
         );
       }
-      if (error.message?.includes("rate limit") || error.message?.includes("429")) {
+      if (
+        error.message?.includes("rate limit") ||
+        error.message?.includes("429")
+      ) {
         throw new BusinessError(
           BusinessErrorCode.SERVICE_UNAVAILABLE,
           "AI 服务暂时繁忙，请稍后重试",
-          503
+          503,
         );
       }
       throw new BusinessError(
         BusinessErrorCode.INTERNAL_ERROR,
         "处理请求时发生错误，请稍后重试",
-        500
+        500,
       );
     }
   }
@@ -355,7 +414,7 @@ export class AgentService {
   static async *chatStream(
     conversationId: string,
     content: string,
-    userId?: string
+    userId?: string,
   ): AsyncGenerator<AgentStreamEvent, void, unknown> {
     try {
       const command = executeAgentCommand(content, conversationId);
@@ -384,7 +443,9 @@ export class AgentService {
         }
       }
 
-      const agent = await createToolAgent(getAgentPromptOverride(conversationId, content));
+      const agent = await createToolAgent(
+        getAgentPromptOverride(conversationId, content),
+      );
 
       const toolContext = {
         request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -410,19 +471,34 @@ export class AgentService {
       });
       let fullAnswer = "";
       try {
-        const stream = await deadline.run<any>(scope.run(() => (agent as any).stream(
-          { input: content, chat_history: history, memory_context: memoryContext },
-          { tags: ["stream"], signal: deadline.signal },
-        )));
+        const stream = await deadline.run<any>(
+          scope.run(() =>
+            (agent as any).stream(
+              {
+                input: content,
+                chat_history: history,
+                memory_context: memoryContext,
+              },
+              { tags: ["stream"], signal: deadline.signal },
+            ),
+          ),
+        );
         const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<any>;
-        let next = scope.run(() => iterator.next()) as Promise<IteratorResult<any>>;
+        let next = scope.run(() => iterator.next()) as Promise<
+          IteratorResult<any>
+        >;
 
         while (true) {
           const pendingProgress = progress.take();
-          const winner = await deadline.run(Promise.race([
-            next.then((result) => ({ kind: "agent" as const, result })),
-            pendingProgress.promise.then((event) => ({ kind: "tool" as const, event })),
-          ]));
+          const winner = await deadline.run(
+            Promise.race([
+              next.then((result) => ({ kind: "agent" as const, result })),
+              pendingProgress.promise.then((event) => ({
+                kind: "tool" as const,
+                event,
+              })),
+            ]),
+          );
           pendingProgress.cancel();
           if (winner.kind === "tool") {
             yield winner.event;
@@ -436,7 +512,9 @@ export class AgentService {
             fullAnswer += text;
             yield { type: "text", text };
           }
-          next = scope.run(() => iterator.next()) as Promise<IteratorResult<any>>;
+          next = scope.run(() => iterator.next()) as Promise<
+            IteratorResult<any>
+          >;
         }
         for (const event of progress.drain()) yield event;
       } finally {
@@ -458,7 +536,11 @@ export class AgentService {
       if (userId && fullAnswer) {
         try {
           HistoryService.record(userId, conversationId, content, fullAnswer);
-          MemoryService.extractMemoriesFromConversation(userId, content, fullAnswer);
+          MemoryService.extractMemoriesFromConversation(
+            userId,
+            content,
+            fullAnswer,
+          );
           ProfileService.update(userId);
         } catch {
           // silent
@@ -477,13 +559,13 @@ export class AgentService {
         throw new BusinessError(
           BusinessErrorCode.SERVICE_UNAVAILABLE,
           "AI 服务暂时繁忙，请稍后重试",
-          503
+          503,
         );
       }
       throw new BusinessError(
         BusinessErrorCode.INTERNAL_ERROR,
         "处理请求时发生错误",
-        500
+        500,
       );
     }
   }
@@ -492,7 +574,10 @@ export class AgentService {
 // ============ Knowledge Service ============
 
 const documents = new Map<string, Document>();
-const documentContents = new Map<string, { content: string; filename: string }>();
+const documentContents = new Map<
+  string,
+  { content: string; filename: string }
+>();
 
 export class KnowledgeService {
   private static ragAgent: RAGAgent | null = null;
@@ -519,7 +604,7 @@ export class KnowledgeService {
   static async uploadDocument(
     buffer: Buffer,
     filename: string,
-    category?: string
+    category?: string,
   ): Promise<Document> {
     try {
       const doc = await DocumentLoader.loadFromBuffer(buffer, filename);
@@ -545,7 +630,7 @@ export class KnowledgeService {
       throw new BusinessError(
         BusinessErrorCode.INTERNAL_ERROR,
         `文档上传失败: ${error.message}`,
-        500
+        500,
       );
     }
   }
@@ -555,7 +640,8 @@ export class KnowledgeService {
    */
   static listDocuments(): Document[] {
     return Array.from(documents.values()).sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
   }
 
@@ -582,16 +668,28 @@ export class KnowledgeService {
   static async reindexDocument(id: string): Promise<Document> {
     const doc = documents.get(id);
     if (!doc) {
-      throw new BusinessError(BusinessErrorCode.NOT_FOUND, "Document not found", 404);
+      throw new BusinessError(
+        BusinessErrorCode.NOT_FOUND,
+        "Document not found",
+        404,
+      );
     }
 
     const source = documentContents.get(id);
     if (!source) {
-      throw new BusinessError(BusinessErrorCode.NOT_FOUND, "Document content not found", 404);
+      throw new BusinessError(
+        BusinessErrorCode.NOT_FOUND,
+        "Document content not found",
+        404,
+      );
     }
     doc.status = "indexing";
     await this.getRAGAgent().deleteDocument(id);
-    const result = await this.getRAGAgent().indexDocument(source.content, source.filename, id);
+    const result = await this.getRAGAgent().indexDocument(
+      source.content,
+      source.filename,
+      id,
+    );
     doc.status = "indexed";
     doc.chunks = result.chunks;
     return doc;
@@ -600,9 +698,15 @@ export class KnowledgeService {
   /**
    * 知识检索
    */
-  static async search(query: string, topK: number = 5): Promise<SearchResult[]> {
+  static async search(
+    query: string,
+    topK: number = 5,
+  ): Promise<SearchResult[]> {
     try {
-      const results = await this.getRAGAgent()["retriever"].retrieve(query, topK);
+      const results = await this.getRAGAgent()["retriever"].retrieve(
+        query,
+        topK,
+      );
 
       return results.map((r) => ({
         document_id: r.metadata.source,
@@ -615,7 +719,7 @@ export class KnowledgeService {
       throw new BusinessError(
         BusinessErrorCode.SERVICE_UNAVAILABLE,
         "知识库检索失败，请稍后重试",
-        503
+        503,
       );
     }
   }

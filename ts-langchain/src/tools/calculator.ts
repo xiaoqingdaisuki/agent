@@ -65,10 +65,17 @@ function tokenize(expr: string): Token[] {
   return tokens;
 }
 
-function parseExpr(tokens: Token[], pos: number): { value: number; pos: number } {
+function parseExpr(
+  tokens: Token[],
+  pos: number,
+): { value: number; pos: number } {
   let { value, pos: p } = parseTerm(tokens, pos);
 
-  while (p < tokens.length && tokens[p].type === "OP" && (tokens[p].value === "+" || tokens[p].value === "-")) {
+  while (
+    p < tokens.length &&
+    tokens[p].type === "OP" &&
+    (tokens[p].value === "+" || tokens[p].value === "-")
+  ) {
     const op = tokens[p].value!;
     p++;
     const right = parseTerm(tokens, p);
@@ -79,10 +86,17 @@ function parseExpr(tokens: Token[], pos: number): { value: number; pos: number }
   return { value, pos: p };
 }
 
-function parseTerm(tokens: Token[], pos: number): { value: number; pos: number } {
+function parseTerm(
+  tokens: Token[],
+  pos: number,
+): { value: number; pos: number } {
   let { value, pos: p } = parseFactor(tokens, pos);
 
-  while (p < tokens.length && tokens[p].type === "OP" && ["*", "/", "%"].includes(tokens[p].value!)) {
+  while (
+    p < tokens.length &&
+    tokens[p].type === "OP" &&
+    ["*", "/", "%"].includes(tokens[p].value!)
+  ) {
     const op = tokens[p].value!;
     p++;
     const right = parseFactor(tokens, p);
@@ -106,19 +120,33 @@ function parseTerm(tokens: Token[], pos: number): { value: number; pos: number }
   return { value, pos: p };
 }
 
-function parseFactor(tokens: Token[], pos: number): { value: number; pos: number } {
+function parseFactor(
+  tokens: Token[],
+  pos: number,
+): { value: number; pos: number } {
   // 一元运算符
-  if (pos < tokens.length && tokens[pos].type === "OP" && (tokens[pos].value === "+" || tokens[pos].value === "-")) {
+  if (
+    pos < tokens.length &&
+    tokens[pos].type === "OP" &&
+    (tokens[pos].value === "+" || tokens[pos].value === "-")
+  ) {
     const op = tokens[pos].value!;
     pos++;
     const result = parseFactor(tokens, pos);
-    return { value: op === "+" ? result.value : -result.value, pos: result.pos };
+    return {
+      value: op === "+" ? result.value : -result.value,
+      pos: result.pos,
+    };
   }
 
   let result = parsePrimary(tokens, pos);
 
   // 幂运算（**）— 右结合
-  while (result.pos < tokens.length && tokens[result.pos].type === "OP" && tokens[result.pos].value === "**") {
+  while (
+    result.pos < tokens.length &&
+    tokens[result.pos].type === "OP" &&
+    tokens[result.pos].value === "**"
+  ) {
     result.pos++;
     const exponent = parseFactor(tokens, result.pos);
     result.pos = exponent.pos;
@@ -128,7 +156,10 @@ function parseFactor(tokens: Token[], pos: number): { value: number; pos: number
   return result;
 }
 
-function parsePrimary(tokens: Token[], pos: number): { value: number; pos: number } {
+function parsePrimary(
+  tokens: Token[],
+  pos: number,
+): { value: number; pos: number } {
   if (pos >= tokens.length) {
     throw new ParseError("表达式不完整");
   }
@@ -212,7 +243,9 @@ export const calculatorTool: DynamicStructuredTool = new DynamicStructuredTool({
   func: async ({ expression }) => {
     try {
       const result = safeCalculate(expression);
-      const formatted = Number.isInteger(result) ? String(result) : String(parseFloat(result.toFixed(10)));
+      const formatted = Number.isInteger(result)
+        ? String(result)
+        : String(parseFloat(result.toFixed(10)));
       return `计算结果：${formatted}`;
     } catch (error) {
       return `表达式错误：${error instanceof Error ? error.message : "未知错误"}`;

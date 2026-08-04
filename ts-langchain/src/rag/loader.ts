@@ -47,7 +47,10 @@ export class DocumentLoader {
    * 从 Buffer 加载（用于上传场景）
    */
   // 从 Buffer 加载文档（用于上传场景）
-  static async loadFromBuffer(buffer: Buffer, filename: string): Promise<Document> {
+  static async loadFromBuffer(
+    buffer: Buffer,
+    filename: string,
+  ): Promise<Document> {
     const ext = path.extname(filename).toLowerCase();
     const content = buffer.toString("utf-8");
 

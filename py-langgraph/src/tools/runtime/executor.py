@@ -93,6 +93,7 @@ def permission_check(
 
 # ============ 参数校验 ============
 
+
 # 使用 Pydantic model 校验输入参数
 def validate_input(
     schema: Callable[[Any], Any],
@@ -116,11 +117,20 @@ def validate_input(
 
 # ============ 结果脱敏 ============
 
-_SENSITIVE_KEYS = frozenset({
-    "api_key", "apikey", "secret", "password", "token",
-    "access_token", "refresh_token", "private_key",
-    "authorization", "credentials",
-})
+_SENSITIVE_KEYS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "secret",
+        "password",
+        "token",
+        "access_token",
+        "refresh_token",
+        "private_key",
+        "authorization",
+        "credentials",
+    }
+)
 
 
 # 递归过滤结果中的敏感字段（密钥、Token、密码等）
@@ -142,6 +152,7 @@ def sanitize_result(data: Any) -> Any:
 
 
 # ============ 预算守卫 ============
+
 
 class _BudgetState:
     tool_calls_this_round: int = 0
@@ -184,6 +195,7 @@ def budget_guard() -> ToolRuntimeResult[None] | None:
 
 # ============ 审计记录 ============
 
+
 # 记录审计日志条目，同时同步写入可观测性指标
 def record_audit(entry: dict[str, Any]) -> None:
     _audit_log.append(entry)
@@ -193,6 +205,7 @@ def record_audit(entry: dict[str, Any]) -> None:
 
 
 # ============ 核心执行器 ============
+
 
 class ToolExecutor(Generic[TInput, TOutput]):
     """
@@ -234,7 +247,17 @@ async def invoke_tool(
     budget_result = budget_guard()
     if budget_result is not None:
         duration_ms = int((time.perf_counter() - start_time) * 1000)
-        _record_audit(tool_name, tool_version, context, executor.descriptor.risk_level, False, budget_result.error.code, duration_ms, context.request_id, context.trace_id)
+        _record_audit(
+            tool_name,
+            tool_version,
+            context,
+            executor.descriptor.risk_level,
+            False,
+            budget_result.error.code,
+            duration_ms,
+            context.request_id,
+            context.trace_id,
+        )
         return _error_envelope(call_id, tool_name, tool_version, budget_result.error, duration_ms)
 
     # 2. 参数校验
@@ -243,17 +266,45 @@ async def invoke_tool(
         validation = validate_input(executor.schema, raw_input)
         if not validation.success:
             duration_ms = int((time.perf_counter() - start_time) * 1000)
-            _record_audit(tool_name, tool_version, context, executor.descriptor.risk_level, False, validation.error.code, duration_ms, context.request_id, context.trace_id)
+            _record_audit(
+                tool_name,
+                tool_version,
+                context,
+                executor.descriptor.risk_level,
+                False,
+                validation.error.code,
+                duration_ms,
+                context.request_id,
+                context.trace_id,
+            )
             return _error_envelope(call_id, tool_name, tool_version, validation.error, duration_ms)
         validated_input = validation.data
 
     # 3. 权限检查
     granted, reason = permission_check(context, executor.descriptor)
     if not granted:
-        error_code = "UNAUTHENTICATED" if reason and "UNAUTHENTICATED" in reason else "PERMISSION_DENIED"
+        error_code = (
+            "UNAUTHENTICATED" if reason and "UNAUTHENTICATED" in reason else "PERMISSION_DENIED"
+        )
         duration_ms = int((time.perf_counter() - start_time) * 1000)
-        _record_audit(tool_name, tool_version, context, executor.descriptor.risk_level, False, error_code, duration_ms, context.request_id, context.trace_id)
-        return _error_envelope(call_id, tool_name, tool_version, ToolError(code=error_code, message=reason or "Permission denied"), duration_ms)
+        _record_audit(
+            tool_name,
+            tool_version,
+            context,
+            executor.descriptor.risk_level,
+            False,
+            error_code,
+            duration_ms,
+            context.request_id,
+            context.trace_id,
+        )
+        return _error_envelope(
+            call_id,
+            tool_name,
+            tool_version,
+            ToolError(code=error_code, message=reason or "Permission denied"),
+            duration_ms,
+        )
 
     # 4. 执行（带超时）
     raw_output: TOutput
@@ -266,21 +317,63 @@ async def invoke_tool(
     except TimeoutError:
         error_code = "TIMEOUT"
         duration_ms = int((time.perf_counter() - start_time) * 1000)
-        _record_audit(tool_name, tool_version, context, executor.descriptor.risk_level, False, error_code, duration_ms, context.request_id, context.trace_id)
-        return _error_envelope(call_id, tool_name, tool_version, ToolError(code=error_code, message=f"工具执行超时 ({timeout_ms}ms)"), duration_ms)
+        _record_audit(
+            tool_name,
+            tool_version,
+            context,
+            executor.descriptor.risk_level,
+            False,
+            error_code,
+            duration_ms,
+            context.request_id,
+            context.trace_id,
+        )
+        return _error_envelope(
+            call_id,
+            tool_name,
+            tool_version,
+            ToolError(code=error_code, message=f"工具执行超时 ({timeout_ms}ms)"),
+            duration_ms,
+        )
     except Exception as exc:
         error_code: ToolErrorCode = "INTERNAL_ERROR"
         message = str(exc)
         duration_ms = int((time.perf_counter() - start_time) * 1000)
-        _record_audit(tool_name, tool_version, context, executor.descriptor.risk_level, False, error_code, duration_ms, context.request_id, context.trace_id)
-        return _error_envelope(call_id, tool_name, tool_version, ToolError(code=error_code, message=message), duration_ms)
+        _record_audit(
+            tool_name,
+            tool_version,
+            context,
+            executor.descriptor.risk_level,
+            False,
+            error_code,
+            duration_ms,
+            context.request_id,
+            context.trace_id,
+        )
+        return _error_envelope(
+            call_id,
+            tool_name,
+            tool_version,
+            ToolError(code=error_code, message=message),
+            duration_ms,
+        )
 
     # 5. 结果脱敏
     sanitized = sanitize_result(raw_output)
     duration_ms = int((time.perf_counter() - start_time) * 1000)
 
     # 6. 审计记录
-    _record_audit(tool_name, tool_version, context, executor.descriptor.risk_level, True, None, duration_ms, context.request_id, context.trace_id)
+    _record_audit(
+        tool_name,
+        tool_version,
+        context,
+        executor.descriptor.risk_level,
+        True,
+        None,
+        duration_ms,
+        context.request_id,
+        context.trace_id,
+    )
 
     return ToolResultEnvelope(
         ok=True,
@@ -328,19 +421,21 @@ def _record_audit(
     request_id: str,
     trace_id: str,
 ) -> None:
-    record_audit({
-        "tool_name": tool_name,
-        "tool_version": tool_version,
-        "user_id": context.user_id,
-        "tenant_id": context.tenant_id,
-        "conversation_id": context.conversation_id,
-        "risk_level": risk_level,
-        "ok": ok,
-        "error_code": error_code,
-        "duration_ms": duration_ms,
-        "request_id": request_id,
-        "trace_id": trace_id,
-    })
+    record_audit(
+        {
+            "tool_name": tool_name,
+            "tool_version": tool_version,
+            "user_id": context.user_id,
+            "tenant_id": context.tenant_id,
+            "conversation_id": context.conversation_id,
+            "risk_level": risk_level,
+            "ok": ok,
+            "error_code": error_code,
+            "duration_ms": duration_ms,
+            "request_id": request_id,
+            "trace_id": trace_id,
+        }
+    )
     # 同步记录可观测性指标
     record_tool_metric(
         tool_name=tool_name,

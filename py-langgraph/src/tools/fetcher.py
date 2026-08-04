@@ -34,7 +34,10 @@ from src.tools.contracts import (
 # ============ SSRF 防护 ============
 
 _BLOCKED_HOSTS = {
-    "localhost", "127.0.0.1", "0.0.0.0", "::1",
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "::1",
     "169.254.169.254",  # AWS metadata
     "metadata.google.internal",  # GCP metadata
 }
@@ -90,6 +93,7 @@ def _is_safe_url(url: str) -> tuple[bool, str | None]:
 
 # ============ 正文清洗 ============
 
+
 # 清洗 HTML 文本，去除 script/style 标签并提取正文
 def _clean_html(html: str) -> str:
     """提取网页正文，去除 script/style/标签"""
@@ -105,8 +109,12 @@ def _clean_html(html: str) -> str:
 # ============ 内容类型判断 ============
 
 _TEXT_CONTENT_TYPES = {
-    "text/html", "text/plain", "text/xml", "application/xml",
-    "application/json", "application/xhtml+xml",
+    "text/html",
+    "text/plain",
+    "text/xml",
+    "application/xml",
+    "application/json",
+    "application/xhtml+xml",
 }
 
 
@@ -135,6 +143,7 @@ _DESCRIPTOR = ToolDescriptor(
 
 
 # ============ LangChain Tool ============
+
 
 class WebReadInput(BaseModel):
     url: str = Field(description="要读取的网页 URL，必须是完整的 URL（https:// 或 http://）")

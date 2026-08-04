@@ -2,9 +2,16 @@ import type { FastifyInstance } from "fastify";
 import { createToolAgent } from "../../agents/tool-agent.js";
 import { appendMessage, getHistory } from "../../memory/conversation.js";
 import { MemoryService, ProfileService } from "../../profile/service.js";
-import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
+import {
+  AIMessage,
+  HumanMessage,
+  SystemMessage,
+} from "@langchain/core/messages";
 import { createToolCallScope } from "../../tools/runtime/executor.js";
-import { executeAgentCommand, getAgentPromptOverride } from "../../commands/index.js";
+import {
+  executeAgentCommand,
+  getAgentPromptOverride,
+} from "../../commands/index.js";
 import { AgentDeadline, isAgentDeadlineError } from "../../agents/deadline.js";
 
 export async function registerStreamRoutes(app: FastifyInstance) {
@@ -39,7 +46,9 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         }
       }
 
-      const toolAgent = await createToolAgent(getAgentPromptOverride(threadId, message));
+      const toolAgent = await createToolAgent(
+        getAgentPromptOverride(threadId, message),
+      );
       const history = getHistory(threadId);
 
       const toolContext = {
@@ -60,12 +69,21 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       const deadline = new AgentDeadline();
       try {
         const scope = createToolCallScope(toolContext, {
-          onToolProgress: (event) => event.type === "started" && deadline.enableToolBudget(),
+          onToolProgress: (event) =>
+            event.type === "started" && deadline.enableToolBudget(),
         });
-        const stream = await deadline.run(scope.run(() => toolAgent.stream(
-          { input: message, chat_history: history, memory_context: memoryContext },
-          { tags: ["stream"], signal: deadline.signal }
-        )));
+        const stream = await deadline.run(
+          scope.run(() =>
+            toolAgent.stream(
+              {
+                input: message,
+                chat_history: history,
+                memory_context: memoryContext,
+              },
+              { tags: ["stream"], signal: deadline.signal },
+            ),
+          ),
+        );
         const iterator = stream[Symbol.asyncIterator]();
 
         let fullAnswer = "";
@@ -92,13 +110,17 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         const message = isAgentDeadlineError(error)
           ? "AI助手响应超时，请稍后重试。"
           : "Internal server error";
-        const code = isAgentDeadlineError(error) ? "AGENT_TIMEOUT" : "INTERNAL_ERROR";
-        reply.raw.write(`data: ${JSON.stringify({ error: { code, message } })}\n\n`);
+        const code = isAgentDeadlineError(error)
+          ? "AGENT_TIMEOUT"
+          : "INTERNAL_ERROR";
+        reply.raw.write(
+          `data: ${JSON.stringify({ error: { code, message } })}\n\n`,
+        );
         reply.raw.write("data: [DONE]\n\n");
         reply.raw.end();
       } finally {
         deadline.dispose();
       }
-    }
+    },
   );
 }

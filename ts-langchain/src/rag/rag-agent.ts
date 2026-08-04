@@ -10,7 +10,10 @@
 import { createOpenAIToolsAgent } from "langchain/agents";
 import { AgentExecutor } from "langchain/agents";
 import { ChatOpenAI } from "@langchain/openai";
-import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
+import {
+  ChatPromptTemplate,
+  MessagesPlaceholder,
+} from "@langchain/core/prompts";
 import { Retriever } from "./retriever.js";
 import { TextSplitter } from "./splitter.js";
 import { DocumentLoader } from "./loader.js";
@@ -32,7 +35,8 @@ export interface RAGOptions {
 function createRetrieverTool(retriever: Retriever) {
   return new DynamicStructuredTool({
     name: "search_knowledge_base",
-    description: "Search the company knowledge base for relevant information. Use this when you need to find specific information from documents.",
+    description:
+      "Search the company knowledge base for relevant information. Use this when you need to find specific information from documents.",
     schema: {
       type: "object",
       properties: {
@@ -52,7 +56,7 @@ function createRetrieverTool(retriever: Retriever) {
       return results
         .map(
           (r, i) =>
-            `[Document ${i + 1}] (score: ${r.score.toFixed(3)})\n${r.content}\nSource: ${r.metadata.filename}`
+            `[Document ${i + 1}] (score: ${r.score.toFixed(3)})\n${r.content}\nSource: ${r.metadata.filename}`,
         )
         .join("\n\n");
     },
@@ -136,10 +140,15 @@ Be concise and accurate in your responses.`,
     filename: string,
     documentId?: string,
   ): Promise<{ chunks: number }> {
-    const doc = await DocumentLoader.loadFromBuffer(Buffer.from(content), filename);
+    const doc = await DocumentLoader.loadFromBuffer(
+      Buffer.from(content),
+      filename,
+    );
     const chunks = this.splitter.split(doc);
 
-    const embeddings = await this.embedder.embedBatch(chunks.map((chunk) => chunk.text));
+    const embeddings = await this.embedder.embedBatch(
+      chunks.map((chunk) => chunk.text),
+    );
     await this.vectorStore.addDocuments(
       chunks.map((chunk) => ({
         content: chunk.text,
@@ -164,7 +173,7 @@ Be concise and accurate in your responses.`,
     const agent = await this.agent;
     const result = await agent.invoke(
       { input: message, chat_history: history },
-      { configurable: { thread_id: "rag-session" } }
+      { configurable: { thread_id: "rag-session" } },
     );
     return result;
   }

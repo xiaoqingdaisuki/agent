@@ -1,7 +1,10 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { createOpenAIToolsAgent } from "langchain/agents";
 import { AgentExecutor } from "langchain/agents";
-import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
+import {
+  ChatPromptTemplate,
+  MessagesPlaceholder,
+} from "@langchain/core/prompts";
 import { AIMessage, BaseMessage } from "@langchain/core/messages";
 import type { AgentStep } from "@langchain/core/agents";
 import { TOOL_CALLING_PROMPT } from "../prompts/system.js";
@@ -63,7 +66,8 @@ export function convertXmlToolCalls(message: BaseMessage): BaseMessage {
     const si = clean.indexOf(sm);
     if (si !== -1) {
       const ei = clean.indexOf(em, si);
-      if (ei !== -1) clean = clean.substring(0, si) + clean.substring(ei + em.length);
+      if (ei !== -1)
+        clean = clean.substring(0, si) + clean.substring(ei + em.length);
     }
   }
   return new AIMessage({ content: clean.trim(), tool_calls: toolCalls });
@@ -91,7 +95,9 @@ const agentCache = new Map<string, Promise<AgentExecutor>>();
 const MAX_CACHE_SIZE = 10;
 
 // 创建或获取缓存的工具调用 Agent，相同 prompt 复用编译结果
-export async function createToolAgent(systemPromptOverride?: string): Promise<AgentExecutor> {
+export async function createToolAgent(
+  systemPromptOverride?: string,
+): Promise<AgentExecutor> {
   const prompt = systemPromptOverride || TOOL_CALLING_PROMPT;
 
   // 缓存命中：相同 prompt 直接返回
@@ -114,7 +120,9 @@ export function invalidateToolAgentCache(): void {
   agentCache.clear();
 }
 
-async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecutor> {
+async function buildToolAgent(
+  systemPromptOverride?: string,
+): Promise<AgentExecutor> {
   const rawModel = new ChatOpenAI({
     modelName: process.env.OPENAI_MODEL,
     timeout: config.LLM_TIMEOUT_MS,
@@ -170,9 +178,10 @@ async function buildToolAgent(systemPromptOverride?: string): Promise<AgentExecu
     steps: AgentStep[],
   ) => {
     const lastObservation = steps.at(-1)?.observation;
-    const detail = typeof lastObservation === "string" && lastObservation.trim()
-      ? ` Last tool result: ${lastObservation.slice(0, 2_000)}`
-      : "";
+    const detail =
+      typeof lastObservation === "string" && lastObservation.trim()
+        ? ` Last tool result: ${lastObservation.slice(0, 2_000)}`
+        : "";
     return {
       returnValues: {
         output: `I could not complete more tool calls within the safety limit.${detail}`,

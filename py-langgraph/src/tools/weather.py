@@ -22,14 +22,30 @@ from src.tools.contracts import (
 # ============ WMO Weather Codes ============
 
 WEATHER_CODES = {
-    0: "晴朗", 1: "大部晴朗", 2: "多云", 3: "阴天",
-    45: "雾", 48: "雾凇",
-    51: "小毛毛雨", 53: "中毛毛雨", 55: "大毛毛雨",
-    61: "小雨", 63: "中雨", 65: "大雨",
-    71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
-    80: "小阵雨", 81: "中阵雨", 82: "大阵雨",
-    85: "小阵雪", 86: "大阵雪",
-    95: "雷暴", 96: "雷暴伴小冰雹", 99: "雷暴伴大冰雹",
+    0: "晴朗",
+    1: "大部晴朗",
+    2: "多云",
+    3: "阴天",
+    45: "雾",
+    48: "雾凇",
+    51: "小毛毛雨",
+    53: "中毛毛雨",
+    55: "大毛毛雨",
+    61: "小雨",
+    63: "中雨",
+    65: "大雨",
+    71: "小雪",
+    73: "中雪",
+    75: "大雪",
+    77: "雪粒",
+    80: "小阵雨",
+    81: "中阵雨",
+    82: "大阵雨",
+    85: "小阵雪",
+    86: "大阵雪",
+    95: "雷暴",
+    96: "雷暴伴小冰雹",
+    99: "雷暴伴大冰雹",
 }
 
 
@@ -52,6 +68,7 @@ _DESCRIPTOR = ToolDescriptor(
 
 
 # ============ LangChain Tool ============
+
 
 class WeatherInput(BaseModel):
     city: str = Field(description="城市名称，如 '北京'、'上海'、'深圳'")
@@ -107,7 +124,15 @@ def get_weather(city: str, days: int = 7) -> str:
                     min_t = daily["temperature_2m_min"][i]
                     wcode = daily["weathercode"][i]
                     wdesc = WEATHER_CODES.get(wcode, "未知")
-                    weekday = "今天" if i == 0 else ("明天" if i == 1 else f"周{'一二三四五六日'[__import__('datetime').datetime.strptime(date, '%Y-%m-%d').weekday()]}")
+                    weekday = (
+                        "今天"
+                        if i == 0
+                        else (
+                            "明天"
+                            if i == 1
+                            else f"周{'一二三四五六日'[__import__('datetime').datetime.strptime(date, '%Y-%m-%d').weekday()]}"
+                        )
+                    )
                     lines.append(f"  {weekday}({date[5:]}) {wdesc} {min_t}°C ~ {max_t}°C")
 
             return "\n".join(lines)
@@ -140,8 +165,14 @@ def get_weather(city: str, days: int = 7) -> str:
                 lines.append("")
                 lines.append(f"📅 未来 {len(wdata['weather'])} 天预报：")
                 for day in wdata["weather"]:
-                    desc = day.get("hourly", [{}])[4].get("weatherDesc", [{}])[0].get("value", "未知") if day.get("hourly") else "未知"
-                    lines.append(f"  {day['date']} {desc} {day['mintempC']}°C ~ {day['maxtempC']}°C")
+                    desc = (
+                        day.get("hourly", [{}])[4].get("weatherDesc", [{}])[0].get("value", "未知")
+                        if day.get("hourly")
+                        else "未知"
+                    )
+                    lines.append(
+                        f"  {day['date']} {desc} {day['mintempC']}°C ~ {day['maxtempC']}°C"
+                    )
 
             return "\n".join(lines)
     except Exception:

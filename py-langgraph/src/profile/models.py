@@ -11,9 +11,11 @@ from datetime import datetime
 
 # ============ User Profile ============
 
+
 @dataclass
 class UserProfile:
     """用户画像"""
+
     id: str
     name: str = ""
     preferences: dict = field(default_factory=dict)
@@ -33,14 +35,16 @@ class UserProfile:
 
 # ============ Memory ============
 
+
 @dataclass
 class Memory:
     """长期记忆 — Agent 记住的关于用户的事实"""
+
     id: str
     user_id: str
     content: str
     category: str = "fact"  # preference | fact | decision | context
-    importance: int = 3     # 1-5, 越高越重要
+    importance: int = 3  # 1-5, 越高越重要
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
@@ -59,9 +63,11 @@ class Memory:
 
 # ============ Q&A History ============
 
+
 @dataclass
 class QARecord:
     """问答记录"""
+
     id: str
     user_id: str
     conversation_id: str
@@ -82,6 +88,7 @@ class QARecord:
 
 
 # ============ Store ==========
+
 
 class ProfileStore:
     """内存存储 — 可替换为数据库"""
@@ -148,7 +155,9 @@ class ProfileStore:
         return record
 
     # 获取用户问答历史，支持按会话过滤和数量限制
-    def get_qa_history(self, user_id: str, conversation_id: str = None, limit: int = 50) -> list[QARecord]:
+    def get_qa_history(
+        self, user_id: str, conversation_id: str = None, limit: int = 50
+    ) -> list[QARecord]:
         records = self._qa_records.get(user_id, [])
         if conversation_id:
             records = [r for r in records if r.conversation_id == conversation_id]

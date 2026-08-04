@@ -64,7 +64,8 @@ class MetricsCollector {
       } else {
         snap.failed_calls++;
         if (m.error_code) {
-          snap.error_distribution[m.error_code] = (snap.error_distribution[m.error_code] || 0) + 1;
+          snap.error_distribution[m.error_code] =
+            (snap.error_distribution[m.error_code] || 0) + 1;
         }
       }
 
@@ -103,7 +104,9 @@ export function getMetricsCollector(): MetricsCollector {
   return metricsCollector;
 }
 
-export function recordToolMetric(metric: Omit<ToolCallMetric, "timestamp">): void {
+export function recordToolMetric(
+  metric: Omit<ToolCallMetric, "timestamp">,
+): void {
   metricsCollector.record({
     ...metric,
     timestamp: new Date().toISOString(),

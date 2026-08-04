@@ -30,7 +30,10 @@ export class Retriever {
   /**
    * 检索相关文档
    */
-  async retrieve(query: string, topK: number = this.topK): Promise<SearchResult[]> {
+  async retrieve(
+    query: string,
+    topK: number = this.topK,
+  ): Promise<SearchResult[]> {
     const queryEmbedding = await this.embedder.embed(query);
     return this.vectorStore.search(queryEmbedding, topK);
   }
@@ -38,9 +41,9 @@ export class Retriever {
   /**
    * 批量检索
    */
-  async retrieveBatch(queries: string[]): Promise<
-    Array<SearchResult & { query: string }>
-  > {
+  async retrieveBatch(
+    queries: string[],
+  ): Promise<Array<SearchResult & { query: string }>> {
     const results = await Promise.all(queries.map((q) => this.retrieve(q)));
     return results.flat().map((r, i) => ({
       ...r,

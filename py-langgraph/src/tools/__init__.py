@@ -14,7 +14,17 @@ from .memory_user import memory_user_search, memory_user_save
 from .search import web_search
 from .weather import get_weather
 
-tools = [get_weather, web_search, web_read, file_read, calculator, knowledge_search, memory_session_search, memory_user_search, memory_user_save]
+tools = [
+    get_weather,
+    web_search,
+    web_read,
+    file_read,
+    calculator,
+    knowledge_search,
+    memory_session_search,
+    memory_user_search,
+    memory_user_save,
+]
 
 __all__ = [
     "ToolRegistry",

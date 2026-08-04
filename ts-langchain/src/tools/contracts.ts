@@ -11,7 +11,8 @@ export type RiskLevel = "R0" | "R1" | "R2" | "R3";
 
 // ============ 能力类别 ============
 
-export type ToolCategory = "READ" | "SEARCH" | "ACTION" | "COMPUTE" | "MEMORY" | "CONTROL" | "GUARD";
+export type ToolCategory =
+  "READ" | "SEARCH" | "ACTION" | "COMPUTE" | "MEMORY" | "CONTROL" | "GUARD";
 
 // ============ 副作用类型 ============
 

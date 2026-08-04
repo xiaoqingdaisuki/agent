@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 # 外层服务超时长于 Agent deadline，确保业务层先返回明确的 504。
 DEFAULT_REQUEST_TIMEOUT = settings.server_request_timeout_ms / 1000
 
+
 # 请求级超时中间件：非流式路由默认超时返回 504
 async def _timeout_middleware(request: Request, call_next):
     """请求级超时中间件：非流式路由默认 60s 超时。"""
@@ -29,7 +30,9 @@ async def _timeout_middleware(request: Request, call_next):
     try:
         return await asyncio.wait_for(call_next(request), timeout=DEFAULT_REQUEST_TIMEOUT)
     except TimeoutError:
-        logger.warning("Request timeout: %s %s (%.1fs)", request.method, path, DEFAULT_REQUEST_TIMEOUT)
+        logger.warning(
+            "Request timeout: %s %s (%.1fs)", request.method, path, DEFAULT_REQUEST_TIMEOUT
+        )
         return JSONResponse(
             status_code=504,
             content={

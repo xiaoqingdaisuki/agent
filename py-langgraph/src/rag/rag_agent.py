@@ -20,6 +20,7 @@ from src.rag.retriever import Retriever
 
 class RAGState(TypedDict):
     """RAG Agent 状态"""
+
     messages: Annotated[list[BaseMessage], operator.add]
     context: list[dict[str, Any]]
     should_retrieve: bool

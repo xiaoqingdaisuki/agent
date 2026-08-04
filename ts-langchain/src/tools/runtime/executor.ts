@@ -52,7 +52,10 @@ export function clearAuditLog(): void {
 
 // ============ 权限检查 ============
 
-const permissionCache = new Map<string, { granted: boolean; expires: number }>();
+const permissionCache = new Map<
+  string,
+  { granted: boolean; expires: number }
+>();
 const PERMISSION_CACHE_TTL_MS = 5_000;
 
 /**
@@ -65,7 +68,7 @@ const PERMISSION_CACHE_TTL_MS = 5_000;
  */
 export function permissionCheck(
   context: ToolCallContext,
-  descriptor: ToolDescriptor
+  descriptor: ToolDescriptor,
 ): { granted: boolean; reason?: string } {
   // R0 工具默认允许
   if (descriptor.risk_level === "R0") {
@@ -107,7 +110,7 @@ export function permissionCheck(
  */
 export function validateInput<T>(
   schema: { parse: (input: unknown) => T },
-  rawInput: unknown
+  rawInput: unknown,
 ): ToolRuntimeResult<T> {
   try {
     const parsed = schema.parse(rawInput);
@@ -131,9 +134,16 @@ export function validateInput<T>(
  * 当前为最小实现：递归过滤常见敏感键。
  */
 const SENSITIVE_KEYS = new Set([
-  "api_key", "apikey", "secret", "password", "token",
-  "access_token", "refresh_token", "private_key",
-  "authorization", "credentials",
+  "api_key",
+  "apikey",
+  "secret",
+  "password",
+  "token",
+  "access_token",
+  "refresh_token",
+  "private_key",
+  "authorization",
+  "credentials",
 ]);
 
 export function sanitizeResult<T>(data: T): T {
@@ -281,7 +291,7 @@ export interface ToolExecutor<TInput, TOutput> {
 export async function invokeTool<TInput, TOutput>(
   executor: ToolExecutor<TInput, TOutput>,
   rawInput: unknown,
-  context: ToolCallContext
+  context: ToolCallContext,
 ): Promise<ToolResultEnvelope<TOutput>> {
   const toolName = executor.descriptor.name;
   const toolVersion = executor.descriptor.version;
@@ -372,7 +382,10 @@ export async function invokeTool<TInput, TOutput>(
     return {
       ok: false,
       data: null,
-      error: { code: errorCode, message: permResult.reason ?? "Permission denied" },
+      error: {
+        code: errorCode,
+        message: permResult.reason ?? "Permission denied",
+      },
       meta: {
         tool_call_id: callId,
         tool_name: toolName,
@@ -391,7 +404,9 @@ export async function invokeTool<TInput, TOutput>(
 
     rawOutput = await Promise.race([
       executor.execute(
-        (executor.schema ? validateInput(executor.schema, rawInput).data! : rawInput) as TInput,
+        (executor.schema
+          ? validateInput(executor.schema, rawInput).data!
+          : rawInput) as TInput,
         context,
       ),
       new Promise<never>((_, reject) =>
@@ -423,7 +438,11 @@ export async function invokeTool<TInput, TOutput>(
       data: null,
       error: {
         code: errorCode,
-        message: isTimeout ? `工具执行超时 (${executor.descriptor.timeout_ms}ms)` : (error instanceof Error ? error.message : "执行失败"),
+        message: isTimeout
+          ? `工具执行超时 (${executor.descriptor.timeout_ms}ms)`
+          : error instanceof Error
+            ? error.message
+            : "执行失败",
       },
       meta: {
         tool_call_id: callId,
@@ -493,7 +512,11 @@ export function createToolCallScope(
 ): {
   run<T>(callback: () => T): T;
 } {
-  const store = { context, budget: createBudgetState(), onToolProgress: options.onToolProgress };
+  const store = {
+    context,
+    budget: createBudgetState(),
+    onToolProgress: options.onToolProgress,
+  };
   return {
     run<T>(callback: () => T): T {
       return runtimeStorage.run(store, callback);
@@ -531,7 +554,8 @@ export function wrapToolWithRuntime(
     let scopedInput = rawInput;
     if (rawInput && typeof rawInput === "object") {
       const input = { ...(rawInput as Record<string, unknown>) };
-      if (descriptor.name.startsWith("memory.user.")) input.user_id = context.user_id;
+      if (descriptor.name.startsWith("memory.user."))
+        input.user_id = context.user_id;
       if (descriptor.name === "memory.session.search") {
         input.conversation_id = context.conversation_id;
       }

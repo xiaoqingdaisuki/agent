@@ -10,14 +10,30 @@ import type { ToolDescriptor } from "./contracts.js";
 // ============ WMO Weather Codes ============
 
 const WEATHER_CODES: Record<number, string> = {
-  0: "晴朗", 1: "大部晴朗", 2: "多云", 3: "阴天",
-  45: "雾", 48: "雾凇",
-  51: "小毛毛雨", 53: "中毛毛雨", 55: "大毛毛雨",
-  61: "小雨", 63: "中雨", 65: "大雨",
-  71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
-  80: "小阵雨", 81: "中阵雨", 82: "大阵雨",
-  85: "小阵雪", 86: "大阵雪",
-  95: "雷暴", 96: "雷暴伴小冰雹", 99: "雷暴伴大冰雹",
+  0: "晴朗",
+  1: "大部晴朗",
+  2: "多云",
+  3: "阴天",
+  45: "雾",
+  48: "雾凇",
+  51: "小毛毛雨",
+  53: "中毛毛雨",
+  55: "大毛毛雨",
+  61: "小雨",
+  63: "中雨",
+  65: "大雨",
+  71: "小雪",
+  73: "中雪",
+  75: "大雪",
+  77: "雪粒",
+  80: "小阵雨",
+  81: "中阵雨",
+  82: "大阵雨",
+  85: "小阵雪",
+  86: "大阵雪",
+  95: "雷暴",
+  96: "雷暴伴小冰雹",
+  99: "雷暴伴大冰雹",
 };
 
 // ============ Tool Descriptor ============
@@ -41,7 +57,8 @@ export const weatherDescriptor: ToolDescriptor = {
     properties: {
       city: {
         type: "string",
-        description: "城市名称，支持中文如 '北京' '上海' '深圳'，也支持英文如 'Beijing' 'Shanghai'",
+        description:
+          "城市名称，支持中文如 '北京' '上海' '深圳'，也支持英文如 'Beijing' 'Shanghai'",
       },
       days: {
         type: "integer",
@@ -59,8 +76,18 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
   description:
     "【天气查询工具】查询指定城市的实时天气及未来 7 天天气预报。用户问天气、气温、下雨、下雪、冷不冷、热不热、未来几天天气时，必须先调用此工具。优先通过 Open-Meteo 获取，如果失败再用 web.search 搜索。",
   schema: z.object({
-    city: z.string().describe("城市名称，支持中文如 '北京' '上海' '深圳'，也支持英文如 'Beijing' 'Shanghai'"),
-    days: z.number().int().min(1).max(7).default(7).describe("预报天数，默认 7 天"),
+    city: z
+      .string()
+      .describe(
+        "城市名称，支持中文如 '北京' '上海' '深圳'，也支持英文如 'Beijing' 'Shanghai'",
+      ),
+    days: z
+      .number()
+      .int()
+      .min(1)
+      .max(7)
+      .default(7)
+      .describe("预报天数，默认 7 天"),
   }),
   func: async ({ city, days = 7 }) => {
     const signal = AbortSignal.timeout(10000);
@@ -71,7 +98,14 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
         { signal },
       );
       if (!geoRes.ok) throw new Error(`Geocoding HTTP ${geoRes.status}`);
-      const geoData = (await geoRes.json()) as { results?: Array<{ latitude: number; longitude: number; name: string; country?: string }> };
+      const geoData = (await geoRes.json()) as {
+        results?: Array<{
+          latitude: number;
+          longitude: number;
+          name: string;
+          country?: string;
+        }>;
+      };
       if (!geoData.results?.length) throw new Error(`找不到城市: ${city}`);
 
       const { latitude, longitude, name, country } = geoData.results[0];
@@ -82,7 +116,11 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
       );
       if (!weatherRes.ok) throw new Error(`Weather HTTP ${weatherRes.status}`);
       const weatherData = (await weatherRes.json()) as {
-        current_weather: { temperature: number; weathercode: number; windspeed: number };
+        current_weather: {
+          temperature: number;
+          weathercode: number;
+          windspeed: number;
+        };
         daily?: {
           time: string[];
           temperature_2m_max: number[];
@@ -109,8 +147,15 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
           const minT = weatherData.daily.temperature_2m_min[i];
           const wcode = weatherData.daily.weathercode[i];
           const wdesc = WEATHER_CODES[wcode] || "未知";
-          const dayLabel = i === 0 ? "今天" : i === 1 ? "明天" : `周${"日一二三四五六"[new Date(date).getDay()]}`;
-          lines.push(`  ${dayLabel}(${date.slice(5)}) ${wdesc} ${minT}°C ~ ${maxT}°C`);
+          const dayLabel =
+            i === 0
+              ? "今天"
+              : i === 1
+                ? "明天"
+                : `周${"日一二三四五六"[new Date(date).getDay()]}`;
+          lines.push(
+            `  ${dayLabel}(${date.slice(5)}) ${wdesc} ${minT}°C ~ ${maxT}°C`,
+          );
         }
       }
 
@@ -118,15 +163,35 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
     } catch {
       // Open-Meteo 失败，尝试 wttr.in 备用
       try {
-        const wttrRes = await fetch(`https://wttr.in/${encodeURIComponent(city)}?format=j1&lang=zh`, {
-          headers: { "User-Agent": "curl/7.68" },
-          signal,
-        });
+        const wttrRes = await fetch(
+          `https://wttr.in/${encodeURIComponent(city)}?format=j1&lang=zh`,
+          {
+            headers: { "User-Agent": "curl/7.68" },
+            signal,
+          },
+        );
         if (wttrRes.ok) {
           const wData = (await wttrRes.json()) as {
-            current_condition: Array<{ temp_C: string; FeelsLikeC: string; weatherDesc: Array<{ value: string }>; windspeedKmph: string; humidity: string }>;
-            nearest_area: Array<{ areaName: Array<{ value: string }>; country: Array<{ value: string }> }>;
-            weather: Array<{ date: string; maxtempC: string; mintempC: string; hourly: Array<{ time: string; weatherDesc: Array<{ value: string }> }> }>;
+            current_condition: Array<{
+              temp_C: string;
+              FeelsLikeC: string;
+              weatherDesc: Array<{ value: string }>;
+              windspeedKmph: string;
+              humidity: string;
+            }>;
+            nearest_area: Array<{
+              areaName: Array<{ value: string }>;
+              country: Array<{ value: string }>;
+            }>;
+            weather: Array<{
+              date: string;
+              maxtempC: string;
+              mintempC: string;
+              hourly: Array<{
+                time: string;
+                weatherDesc: Array<{ value: string }>;
+              }>;
+            }>;
           };
           const curr = wData.current_condition[0];
           const area = wData.nearest_area[0];
@@ -145,7 +210,9 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
             lines.push(`📅 未来 ${wData.weather.length} 天预报：`);
             for (const day of wData.weather) {
               const desc = day.hourly[4]?.weatherDesc[0]?.value || "未知";
-              lines.push(`  ${day.date} ${desc} ${day.mintempC}°C ~ ${day.maxtempC}°C`);
+              lines.push(
+                `  ${day.date} ${desc} ${day.mintempC}°C ~ ${day.maxtempC}°C`,
+              );
             }
           }
 

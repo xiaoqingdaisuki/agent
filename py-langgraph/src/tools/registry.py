@@ -19,11 +19,20 @@ from src.tools.fetcher import web_read, _DESCRIPTOR as READ_DESCRIPTOR
 from src.tools.calculator import calculator, DESCRIPTOR as CALC_DESCRIPTOR
 from src.tools.knowledge import knowledge_search, _DESCRIPTOR as KNOWLEDGE_DESCRIPTOR
 from src.tools.file_reader import file_read, _DESCRIPTOR as FILE_READ_DESCRIPTOR
-from src.tools.memory_session import memory_session_search, _SESSION_DESCRIPTOR as SESSION_DESCRIPTOR
-from src.tools.memory_user import memory_user_search, memory_user_save, _USER_SEARCH_DESCRIPTOR, _USER_SAVE_DESCRIPTOR
+from src.tools.memory_session import (
+    memory_session_search,
+    _SESSION_DESCRIPTOR as SESSION_DESCRIPTOR,
+)
+from src.tools.memory_user import (
+    memory_user_search,
+    memory_user_save,
+    _USER_SEARCH_DESCRIPTOR,
+    _USER_SAVE_DESCRIPTOR,
+)
 
 
 # ============ 工具注册表 ============
+
 
 class ToolRegistry:
     """工具注册表 — 管理所有工具及其元数据"""
@@ -110,35 +119,41 @@ class ToolRegistry:
         result = []
         for descriptor in self._descriptors.values():
             if descriptor.risk_level == "R0":
-                result.append({
-                    "name": descriptor.name,
-                    "title": descriptor.title,
-                    "description": descriptor.description,
-                    "category": descriptor.category,
-                    "risk_level": descriptor.risk_level,
-                    "available": True,
-                })
+                result.append(
+                    {
+                        "name": descriptor.name,
+                        "title": descriptor.title,
+                        "description": descriptor.description,
+                        "category": descriptor.category,
+                        "risk_level": descriptor.risk_level,
+                        "available": True,
+                    }
+                )
                 continue
 
             required = descriptor.required_permissions or []
             if not required or any(perm in user_permissions for perm in required):
-                result.append({
-                    "name": descriptor.name,
-                    "title": descriptor.title,
-                    "description": descriptor.description,
-                    "category": descriptor.category,
-                    "risk_level": descriptor.risk_level,
-                    "available": True,
-                })
+                result.append(
+                    {
+                        "name": descriptor.name,
+                        "title": descriptor.title,
+                        "description": descriptor.description,
+                        "category": descriptor.category,
+                        "risk_level": descriptor.risk_level,
+                        "available": True,
+                    }
+                )
             else:
-                result.append({
-                    "name": descriptor.name,
-                    "title": descriptor.title,
-                    "description": descriptor.description,
-                    "category": descriptor.category,
-                    "risk_level": descriptor.risk_level,
-                    "available": False,
-                })
+                result.append(
+                    {
+                        "name": descriptor.name,
+                        "title": descriptor.title,
+                        "description": descriptor.description,
+                        "category": descriptor.category,
+                        "risk_level": descriptor.risk_level,
+                        "available": False,
+                    }
+                )
         return result
 
     # 按类别分组返回工具元数据
@@ -149,11 +164,13 @@ class ToolRegistry:
             cat = desc.category
             if cat not in categories:
                 categories[cat] = []
-            categories[cat].append({
-                "name": desc.name,
-                "title": desc.title,
-                "risk_level": desc.risk_level,
-            })
+            categories[cat].append(
+                {
+                    "name": desc.name,
+                    "title": desc.title,
+                    "risk_level": desc.risk_level,
+                }
+            )
         return categories
 
 

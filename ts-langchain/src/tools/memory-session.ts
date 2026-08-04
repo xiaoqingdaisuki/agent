@@ -25,7 +25,11 @@ class SessionMemoryStore {
   }
 
   // 向指定会话追加一条消息
-  add(conversationId: string, role: "user" | "assistant", content: string): void {
+  add(
+    conversationId: string,
+    role: "user" | "assistant",
+    content: string,
+  ): void {
     const messages = this.sessions.get(conversationId) || [];
     messages.push({ role, content });
     this.sessions.set(conversationId, messages);
@@ -37,7 +41,11 @@ class SessionMemoryStore {
   }
 
   // 在会话中搜索匹配关键词的消息，最多返回 maxResults 条
-  search(conversationId: string, query: string, maxResults: number = 5): SessionMessage[] {
+  search(
+    conversationId: string,
+    query: string,
+    maxResults: number = 5,
+  ): SessionMessage[] {
     const messages = this.sessions.get(conversationId) || [];
     if (!query) return messages.slice(-maxResults);
 
@@ -96,30 +104,43 @@ export const sessionMemoryDescriptor: ToolDescriptor = {
 
 // ============ LangChain Tool ============
 
-export const memorySessionSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
-  name: "memory_session_search",
-  description:
-    "在当前会话中搜索之前的对话内容。当需要回顾用户之前说过的话或查找之前的回答时使用。",
-  schema: z.object({
-    conversation_id: z.string().describe("会话 ID"),
-    query: z.string().default("").describe("搜索关键词，留空返回最近对话"),
-    max_results: z.number().int().min(1).max(20).default(5).describe("最多返回条数"),
-  }),
-  func: async ({ conversation_id, query, max_results }) => {
-    const results = sessionStore.search(conversation_id, query || "", max_results || 5);
+export const memorySessionSearchTool: DynamicStructuredTool =
+  new DynamicStructuredTool({
+    name: "memory_session_search",
+    description:
+      "在当前会话中搜索之前的对话内容。当需要回顾用户之前说过的话或查找之前的回答时使用。",
+    schema: z.object({
+      conversation_id: z.string().describe("会话 ID"),
+      query: z.string().default("").describe("搜索关键词，留空返回最近对话"),
+      max_results: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .default(5)
+        .describe("最多返回条数"),
+    }),
+    func: async ({ conversation_id, query, max_results }) => {
+      const results = sessionStore.search(
+        conversation_id,
+        query || "",
+        max_results || 5,
+      );
 
-    if (results.length === 0) {
-      return "📝 当前会话中未找到相关内容。";
-    }
+      if (results.length === 0) {
+        return "📝 当前会话中未找到相关内容。";
+      }
 
-    const lines: string[] = [`📝 会话记忆（${conversation_id}）— ${results.length} 条：\n`];
-    for (let i = 0; i < results.length; i++) {
-      const msg = results[i];
-      const role = msg.role === "user" ? "用户" : "助手";
-      lines.push(`[${i + 1}] ${role}：${msg.content.slice(0, 200)}`);
-      lines.push("");
-    }
+      const lines: string[] = [
+        `📝 会话记忆（${conversation_id}）— ${results.length} 条：\n`,
+      ];
+      for (let i = 0; i < results.length; i++) {
+        const msg = results[i];
+        const role = msg.role === "user" ? "用户" : "助手";
+        lines.push(`[${i + 1}] ${role}：${msg.content.slice(0, 200)}`);
+        lines.push("");
+      }
 
-    return lines.join("\n");
-  },
-});
+      return lines.join("\n");
+    },
+  });

@@ -26,7 +26,13 @@ export class ProfileService {
   static getOrCreate(userId: string, name: string = ""): UserProfile {
     let profile = profileStore.getProfile(userId);
     if (!profile) {
-      profile = { id: userId, name, preferences: {}, created_at: new Date().toISOString(), last_active_at: new Date().toISOString() };
+      profile = {
+        id: userId,
+        name,
+        preferences: {},
+        created_at: new Date().toISOString(),
+        last_active_at: new Date().toISOString(),
+      };
       profileStore.createProfile(profile);
     } else {
       profileStore.updateProfile(userId, {}); // update last_active_at
@@ -40,7 +46,10 @@ export class ProfileService {
   }
 
   // 更新用户画像，支持部分字段更新
-  static update(userId: string, updates?: Partial<UserProfile>): UserProfile | undefined {
+  static update(
+    userId: string,
+    updates?: Partial<UserProfile>,
+  ): UserProfile | undefined {
     return profileStore.updateProfile(userId, updates ?? {});
   }
 }
@@ -49,7 +58,12 @@ export class ProfileService {
 
 export class MemoryService {
   // 存储一条新的用户记忆
-  static add(userId: string, content: string, category: string = "fact", importance: number = 3): Memory {
+  static add(
+    userId: string,
+    content: string,
+    category: string = "fact",
+    importance: number = 3,
+  ): Memory {
     const memory = createMemory(userId, content, category, importance);
     return profileStore.addMemory(memory);
   }
@@ -88,7 +102,11 @@ export class MemoryService {
     return lines.join("\n");
   }
 
-  static extractMemoriesFromConversation(userId: string, question: string, answer: string): Memory[] {
+  static extractMemoriesFromConversation(
+    userId: string,
+    question: string,
+    answer: string,
+  ): Memory[] {
     // 同步调用正则提取（立即返回），LLM 提取在后台异步执行
     const regexMemories = MemoryService._extractWithRegex(userId, question);
     for (const mem of regexMemories) {
@@ -123,7 +141,9 @@ export class MemoryService {
       for (const match of matches) {
         const content = match[1].trim();
         if (content.length > 1 && content.length < 50) {
-          newMemories.push(createMemory(userId, `用户喜欢/偏好: ${content}`, category, 4));
+          newMemories.push(
+            createMemory(userId, `用户喜欢/偏好: ${content}`, category, 4),
+          );
         }
       }
     }
@@ -139,7 +159,9 @@ export class MemoryService {
       for (const match of matches) {
         const content = match[1].trim();
         if (content.length > 1 && content.length < 50) {
-          newMemories.push(createMemory(userId, `用户信息: ${content}`, category, 5));
+          newMemories.push(
+            createMemory(userId, `用户信息: ${content}`, category, 5),
+          );
         }
       }
     }
@@ -153,7 +175,11 @@ export class MemoryService {
    * 通过 LLM 分析用户问题，提取值得长期记忆的事实。
    * 只提取有明确长期价值的信息（偏好、个人信息、决定），不提取临时性内容。
    */
-  private static async _extractWithLLM(userId: string, question: string, answer: string): Promise<void> {
+  private static async _extractWithLLM(
+    userId: string,
+    question: string,
+    answer: string,
+  ): Promise<void> {
     if (!config.OPENAI_API_KEY) return;
 
     const llm = new ChatOpenAI({
@@ -189,10 +215,18 @@ JSON 输出（无其他内容）：`;
       const jsonMatch = text.match(/\[[\s\S]*\]/);
       if (!jsonMatch) return;
 
-      const extracted = JSON.parse(jsonMatch[0]) as Array<{ category: string; content: string }>;
+      const extracted = JSON.parse(jsonMatch[0]) as Array<{
+        category: string;
+        content: string;
+      }>;
       for (const item of extracted) {
         if (!item.content || item.content.length > 50) continue;
-        const memory = createMemory(userId, item.content, item.category || "fact", 3);
+        const memory = createMemory(
+          userId,
+          item.content,
+          item.category || "fact",
+          3,
+        );
         profileStore.addMemory(memory);
       }
     } catch {
@@ -205,13 +239,22 @@ JSON 输出（无其他内容）：`;
 
 export class HistoryService {
   // 记录一条问答历史记录
-  static record(userId: string, conversationId: string, question: string, answer: string): QARecord {
+  static record(
+    userId: string,
+    conversationId: string,
+    question: string,
+    answer: string,
+  ): QARecord {
     const record = createQARecord(userId, conversationId, question, answer);
     return profileStore.addQARecord(record);
   }
 
   // 获取用户问答历史，支持按会话过滤
-  static getHistory(userId: string, conversationId?: string, limit: number = 50): QARecord[] {
+  static getHistory(
+    userId: string,
+    conversationId?: string,
+    limit: number = 50,
+  ): QARecord[] {
     return profileStore.getQAHistory(userId, conversationId, limit);
   }
 }

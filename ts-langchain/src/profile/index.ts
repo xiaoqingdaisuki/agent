@@ -29,7 +29,12 @@ export interface Memory {
 }
 
 // 创建一条新的记忆记录
-export function createMemory(userId: string, content: string, category: string = "fact", importance: number = 3): Memory {
+export function createMemory(
+  userId: string,
+  content: string,
+  category: string = "fact",
+  importance: number = 3,
+): Memory {
   const now = new Date().toISOString();
   return {
     id: `mem_${Date.now()}_${randomUUID().slice(0, 8)}`,
@@ -54,7 +59,12 @@ export interface QARecord {
 }
 
 // 创建一条问答历史记录
-export function createQARecord(userId: string, conversationId: string, question: string, answer: string): QARecord {
+export function createQARecord(
+  userId: string,
+  conversationId: string,
+  question: string,
+  answer: string,
+): QARecord {
   return {
     id: `qa_${Date.now()}_${randomUUID().slice(0, 8)}`,
     user_id: userId,
@@ -84,10 +94,15 @@ class ProfileStore {
   }
 
   // 更新用户画像字段
-  updateProfile(userId: string, updates: Partial<UserProfile>): UserProfile | undefined {
+  updateProfile(
+    userId: string,
+    updates: Partial<UserProfile>,
+  ): UserProfile | undefined {
     const profile = this.profiles.get(userId);
     if (!profile) return undefined;
-    Object.assign(profile, updates, { last_active_at: new Date().toISOString() });
+    Object.assign(profile, updates, {
+      last_active_at: new Date().toISOString(),
+    });
     return profile;
   }
 
@@ -126,7 +141,11 @@ class ProfileStore {
   }
 
   // 获取用户问答历史，支持按会话过滤和数量限制
-  getQAHistory(userId: string, conversationId?: string, limit = 50): QARecord[] {
+  getQAHistory(
+    userId: string,
+    conversationId?: string,
+    limit = 50,
+  ): QARecord[] {
     let records = this.qaRecords.get(userId) || [];
     if (conversationId) {
       records = records.filter((r) => r.conversation_id === conversationId);

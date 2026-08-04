@@ -40,6 +40,7 @@ _SESSION_DESCRIPTOR = ToolDescriptor(
 
 # ============ 会话记忆存储（内存） ============
 
+
 class SessionMemoryStore:
     """会话记忆存储 — 基于内存 Map（生产环境可替换为 Redis/数据库）"""
 
@@ -53,10 +54,12 @@ class SessionMemoryStore:
     def add(self, conversation_id: str, role: str, content: str) -> None:
         if conversation_id not in self._sessions:
             self._sessions[conversation_id] = []
-        self._sessions[conversation_id].append({
-            "role": role,
-            "content": content,
-        })
+        self._sessions[conversation_id].append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
 
     def search(self, conversation_id: str, query: str, max_results: int = 5) -> list[dict]:
         """简单关键词搜索（后续可替换为向量搜索）"""
@@ -83,6 +86,7 @@ def get_session_store() -> SessionMemoryStore:
 
 
 # ============ LangChain Tool ============
+
 
 class SessionSearchInput(BaseModel):
     conversation_id: str = Field(description="会话 ID，用于标识当前对话")
@@ -111,7 +115,9 @@ def memory_session_search(
         normalized = [
             {
                 "role": "user" if message.type == "human" else "assistant",
-                "content": message.content if isinstance(message.content, str) else str(message.content),
+                "content": message.content
+                if isinstance(message.content, str)
+                else str(message.content),
             }
             for message in messages
             if message.type in {"human", "ai"}
@@ -140,4 +146,10 @@ def memory_session_search(
 
 # ============ 导出 ============
 
-__all__ = ["_SESSION_DESCRIPTOR", "SessionMemoryStore", "SessionSearchInput", "get_session_store", "memory_session_search"]
+__all__ = [
+    "_SESSION_DESCRIPTOR",
+    "SessionMemoryStore",
+    "SessionSearchInput",
+    "get_session_store",
+    "memory_session_search",
+]

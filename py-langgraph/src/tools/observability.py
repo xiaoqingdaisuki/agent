@@ -19,9 +19,11 @@ from typing import Any
 
 # ============ 指标模型 ============
 
+
 @dataclass
 class ToolCallMetric:
     """单次工具调用指标"""
+
     tool_name: str
     tool_version: str
     ok: bool
@@ -36,6 +38,7 @@ class ToolCallMetric:
 @dataclass
 class MetricsSnapshot:
     """指标快照"""
+
     total_calls: int = 0
     success_calls: int = 0
     failed_calls: int = 0
@@ -46,6 +49,7 @@ class MetricsSnapshot:
 
 
 # ============ 指标收集器 ============
+
 
 class MetricsCollector:
     """指标收集器 — 内存实现"""
@@ -59,7 +63,7 @@ class MetricsCollector:
     def record(self, metric: ToolCallMetric) -> None:
         self._metrics.append(metric)
         if len(self._metrics) > self._max_events:
-            self._metrics = self._metrics[-self._max_events:]
+            self._metrics = self._metrics[-self._max_events :]
 
     # 生成当前指标快照（汇总统计）
     def snapshot(self) -> MetricsSnapshot:
@@ -71,7 +75,9 @@ class MetricsCollector:
             else:
                 snap.failed_calls += 1
                 if m.error_code:
-                    snap.error_distribution[m.error_code] = snap.error_distribution.get(m.error_code, 0) + 1
+                    snap.error_distribution[m.error_code] = (
+                        snap.error_distribution.get(m.error_code, 0) + 1
+                    )
 
             snap.total_duration_ms += m.duration_ms
 
@@ -94,16 +100,18 @@ class MetricsCollector:
         """获取最近的事件"""
         events = []
         for m in self._metrics[-limit:]:
-            events.append({
-                "tool": m.tool_name,
-                "version": m.tool_version,
-                "ok": m.ok,
-                "error": m.error_code,
-                "duration_ms": m.duration_ms,
-                "risk": m.risk_level,
-                "user_id": m.user_id,
-                "timestamp": m.timestamp,
-            })
+            events.append(
+                {
+                    "tool": m.tool_name,
+                    "version": m.tool_version,
+                    "ok": m.ok,
+                    "error": m.error_code,
+                    "duration_ms": m.duration_ms,
+                    "risk": m.risk_level,
+                    "user_id": m.user_id,
+                    "timestamp": m.timestamp,
+                }
+            )
         return events
 
     # 清空所有已记录的指标事件
@@ -132,17 +140,19 @@ def record_tool_metric(
     tenant_id: str = "",
 ) -> None:
     """记录一次工具调用指标"""
-    _metrics.record(ToolCallMetric(
-        tool_name=tool_name,
-        tool_version=tool_version,
-        ok=ok,
-        error_code=error_code,
-        duration_ms=duration_ms,
-        risk_level=risk_level,
-        user_id=user_id,
-        tenant_id=tenant_id,
-        timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    ))
+    _metrics.record(
+        ToolCallMetric(
+            tool_name=tool_name,
+            tool_version=tool_version,
+            ok=ok,
+            error_code=error_code,
+            duration_ms=duration_ms,
+            risk_level=risk_level,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        )
+    )
 
 
 # ============ 导出 ============

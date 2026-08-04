@@ -26,12 +26,12 @@ from src.tools.contracts import (
 
 _TOKEN_RE = re.compile(
     r"\s*(?:"
-    r"(\d+(?:\.\d+)?)"           # 1: number
-    r"|(\*\*)"                   # 2: power (must be before single *)
-    r"|([+\-*/%])"               # 3: binary op
-    r"|(\^)"                     # 4: caret (alias for power)
-    r"|(\()"                     # 5: lparen
-    r"|(\))"                     # 6: rparen
+    r"(\d+(?:\.\d+)?)"  # 1: number
+    r"|(\*\*)"  # 2: power (must be before single *)
+    r"|([+\-*/%])"  # 3: binary op
+    r"|(\^)"  # 4: caret (alias for power)
+    r"|(\()"  # 5: lparen
+    r"|(\))"  # 6: rparen
     r")\s*"
 )
 
@@ -49,7 +49,7 @@ def _tokenize(expr: str) -> list[dict]:
     while pos < len(expr):
         m = _TOKEN_RE.match(expr, pos)
         if not m:
-            raise _ParseError(f"无法解析的位置 {pos}: '{expr[pos:pos+20]}'")
+            raise _ParseError(f"无法解析的位置 {pos}: '{expr[pos : pos + 20]}'")
 
         pos = m.end()
 
@@ -77,7 +77,9 @@ def _eval_tokens(tokens: list[dict]) -> float:
         """处理 + 和 -（最低优先级）"""
         left, pos = parse_term(pos)
 
-        while pos < len(tokens) and tokens[pos]["type"] == "OP" and tokens[pos]["value"] in ("+", "-"):
+        while (
+            pos < len(tokens) and tokens[pos]["type"] == "OP" and tokens[pos]["value"] in ("+", "-")
+        ):
             op = tokens[pos]["value"]
             pos += 1
             right, pos = parse_term(pos)
@@ -89,7 +91,11 @@ def _eval_tokens(tokens: list[dict]) -> float:
         """处理 * / %"""
         left, pos = parse_factor(pos)
 
-        while pos < len(tokens) and tokens[pos]["type"] == "OP" and tokens[pos]["value"] in ("*", "/", "%"):
+        while (
+            pos < len(tokens)
+            and tokens[pos]["type"] == "OP"
+            and tokens[pos]["value"] in ("*", "/", "%")
+        ):
             op = tokens[pos]["value"]
             pos += 1
             right, pos = parse_factor(pos)
@@ -123,7 +129,7 @@ def _eval_tokens(tokens: list[dict]) -> float:
             # 右结合：右侧也是 factor
             exponent, pos = parse_factor(pos)
             try:
-                value = value ** exponent
+                value = value**exponent
             except OverflowError:
                 raise _ParseError("数值溢出")
 
@@ -201,6 +207,7 @@ def safe_calculate(expression: str) -> float:
 
     # 检查结果是否合理
     import math
+
     if math.isnan(result) or math.isinf(result):
         raise _ParseError("计算结果不是有效数字")
 
@@ -208,6 +215,7 @@ def safe_calculate(expression: str) -> float:
 
 
 # ============ LangChain Tool ============
+
 
 class CalculatorInput(BaseModel):
     expression: str = Field(description="数学表达式，如 '2 + 2'、'(10 + 5) * 3'、'2 ** 10'")

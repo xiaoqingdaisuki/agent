@@ -15,8 +15,8 @@ export interface TextChunk {
 }
 
 export interface SplitterOptions {
-  chunkSize: number;      // 每块最大字符数，默认 1000
-  chunkOverlap: number;   // 块间重叠字符数，默认 200
+  chunkSize: number; // 每块最大字符数，默认 1000
+  chunkOverlap: number; // 块间重叠字符数，默认 200
 }
 
 export class TextSplitter {
@@ -24,7 +24,9 @@ export class TextSplitter {
   private chunkOverlap: number;
 
   // 初始化文本切分器，设置块大小和重叠长度
-  constructor(options: SplitterOptions = { chunkSize: 1000, chunkOverlap: 200 }) {
+  constructor(
+    options: SplitterOptions = { chunkSize: 1000, chunkOverlap: 200 },
+  ) {
     this.chunkSize = options.chunkSize;
     this.chunkOverlap = options.chunkOverlap;
   }
@@ -32,7 +34,10 @@ export class TextSplitter {
   /**
    * 切分文档内容
    */
-  split(doc: { content: string; metadata: { source: string; filename: string } }): TextChunk[] {
+  split(doc: {
+    content: string;
+    metadata: { source: string; filename: string };
+  }): TextChunk[] {
     const chunks = this.recursiveSplit(doc.content);
     return chunks.map((text, index) => ({
       text,

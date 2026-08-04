@@ -39,7 +39,7 @@ async def chat(request: ChatRequest):
             try:
                 from src.profile.service import ProfileService
 
-# 获取用户画像，不存在时自动创建
+                # 获取用户画像，不存在时自动创建
                 ProfileService.get_or_create(request.user_id)
             except Exception:
                 # Profile storage is optional; the agent loads memory when available.

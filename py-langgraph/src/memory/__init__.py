@@ -26,14 +26,13 @@ def get_checkpointer(checkpoint_type: str = "memory"):
             from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
             from src.config.settings import settings
+
             return AsyncPostgresSaver.from_conn_string(
                 settings.postgres_uri,
                 pipeline=False,
             )
         except ImportError:
-            raise ImportError(
-                "Postgres checkpointer requires: pip install langgraph[postgres]"
-            )
+            raise ImportError("Postgres checkpointer requires: pip install langgraph[postgres]")
     return MemorySaver()
 
 

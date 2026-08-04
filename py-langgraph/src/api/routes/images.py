@@ -22,9 +22,7 @@ MAX_IMAGE_REQUEST_ATTEMPTS = 3
 
 
 # 带重试的图片生成请求，退避时间带随机抖动避免惊群
-async def _request_with_retry(
-    url: str, api_key: str, prompt: str
-) -> httpx.Response:
+async def _request_with_retry(url: str, api_key: str, prompt: str) -> httpx.Response:
     """带重试的图片生成请求，退避时间带随机抖动避免惊群。"""
     last_error: Exception | None = None
     for attempt in range(1, MAX_IMAGE_REQUEST_ATTEMPTS + 1):

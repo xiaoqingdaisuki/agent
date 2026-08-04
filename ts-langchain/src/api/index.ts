@@ -28,9 +28,12 @@ export async function buildApp() {
   });
 
   // External API v1（前端 UI 使用）— 带 /api/v1 前缀
-  await app.register(async (fastify) => {
-    await registerV1Routes(fastify);
-  }, { prefix: "/api/v1" });
+  await app.register(
+    async (fastify) => {
+      await registerV1Routes(fastify);
+    },
+    { prefix: "/api/v1" },
+  );
 
   // 旧路由（保留兼容，后续迁移）
   app.get("/health", async () => ({ status: "ok", version: "0.2.0" }));

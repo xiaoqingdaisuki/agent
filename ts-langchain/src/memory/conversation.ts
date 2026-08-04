@@ -17,11 +17,17 @@ export function appendMessage(threadId: string, message: BaseMessage): void {
   const history = getHistory(threadId);
   history.push(message);
   const role = message._getType() === "human" ? "user" : "assistant";
-  const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+  const content =
+    typeof message.content === "string"
+      ? message.content
+      : JSON.stringify(message.content);
   sessionStore.add(threadId, role, content);
   if (history.length > MAX_HISTORY_MESSAGES) {
     let keepFrom = history.length - MAX_HISTORY_MESSAGES;
-    while (keepFrom < history.length && history[keepFrom]._getType() !== "human") {
+    while (
+      keepFrom < history.length &&
+      history[keepFrom]._getType() !== "human"
+    ) {
       keepFrom++;
     }
     history.splice(0, keepFrom);

@@ -13,7 +13,11 @@ function wait(milliseconds: number): Promise<void> {
 }
 
 // 带重试的图片生成请求，最多尝试 MAX_IMAGE_REQUEST_ATTEMPTS 次
-async function requestImageGeneration(url: string, apiKey: string, prompt: string): Promise<Response> {
+async function requestImageGeneration(
+  url: string,
+  apiKey: string,
+  prompt: string,
+): Promise<Response> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= MAX_IMAGE_REQUEST_ATTEMPTS; attempt++) {
@@ -57,35 +61,56 @@ function getImageApiUrl(): string | null {
 }
 
 export async function registerImageRoutes(app: FastifyInstance) {
-  app.post<{ Body: { prompt?: string } }>("/images/generations", async (request, reply) => {
-    const prompt = request.body?.prompt?.trim();
-    if (!prompt || prompt.length > 2000) {
-      return reply.status(400).send({ error: "prompt must be between 1 and 2000 characters" });
-    }
-
-    const imageApiUrl = getImageApiUrl();
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!imageApiUrl || !apiKey) {
-      return reply.status(503).send({ error: "Image model is not configured" });
-    }
-
-    try {
-      const response = await requestImageGeneration(imageApiUrl, apiKey, prompt);
-      const payload = (await response.json().catch(() => null)) as StepFunImageResponse | null;
-
-      if (!response.ok) {
-        return reply.status(response.status).send({ error: payload?.error?.message || "Image generation failed" });
+  app.post<{ Body: { prompt?: string } }>(
+    "/images/generations",
+    async (request, reply) => {
+      const prompt = request.body?.prompt?.trim();
+      if (!prompt || prompt.length > 2000) {
+        return reply
+          .status(400)
+          .send({ error: "prompt must be between 1 and 2000 characters" });
       }
 
-      const imageBase64 = payload?.data?.[0]?.b64_json;
-      if (!imageBase64) {
-        return reply.status(502).send({ error: "Image service returned no image" });
+      const imageApiUrl = getImageApiUrl();
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!imageApiUrl || !apiKey) {
+        return reply
+          .status(503)
+          .send({ error: "Image model is not configured" });
       }
 
-      return { image_data_url: `data:image/png;base64,${imageBase64}` };
-    } catch (error) {
-      request.log.error(error, "Image generation request failed");
-      return reply.status(502).send({ error: "Unable to reach the image service" });
-    }
-  });
+      try {
+        const response = await requestImageGeneration(
+          imageApiUrl,
+          apiKey,
+          prompt,
+        );
+        const payload = (await response
+          .json()
+          .catch(() => null)) as StepFunImageResponse | null;
+
+        if (!response.ok) {
+          return reply
+            .status(response.status)
+            .send({
+              error: payload?.error?.message || "Image generation failed",
+            });
+        }
+
+        const imageBase64 = payload?.data?.[0]?.b64_json;
+        if (!imageBase64) {
+          return reply
+            .status(502)
+            .send({ error: "Image service returned no image" });
+        }
+
+        return { image_data_url: `data:image/png;base64,${imageBase64}` };
+      } catch (error) {
+        request.log.error(error, "Image generation request failed");
+        return reply
+          .status(502)
+          .send({ error: "Unable to reach the image service" });
+      }
+    },
+  );
 }

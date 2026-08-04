@@ -1,11 +1,23 @@
 import { weatherTool, weatherDescriptor } from "./weather.js";
 import { webSearchTool, webSearchDescriptor } from "./web-search.js";
 import { webReadTool, webReadDescriptor } from "./web-read.js";
-import { calculatorTool, calculatorDescriptor, safeCalculate } from "./calculator.js";
+import {
+  calculatorTool,
+  calculatorDescriptor,
+  safeCalculate,
+} from "./calculator.js";
 import { knowledgeSearchTool, knowledgeSearchDescriptor } from "./knowledge.js";
 import { fileReadTool, fileReadDescriptor } from "./file-read.js";
-import { memorySessionSearchTool, sessionMemoryDescriptor } from "./memory-session.js";
-import { memoryUserSearchTool, memoryUserSaveTool, userMemorySearchDescriptor, userMemorySaveDescriptor } from "./memory-user.js";
+import {
+  memorySessionSearchTool,
+  sessionMemoryDescriptor,
+} from "./memory-session.js";
+import {
+  memoryUserSearchTool,
+  memoryUserSaveTool,
+  userMemorySearchDescriptor,
+  userMemorySaveDescriptor,
+} from "./memory-user.js";
 
 export { registry, getToolsForUser, getToolMetadata } from "./registry.js";
 
@@ -47,7 +59,10 @@ export const tools = [
 /**
  * 工具名称 → ToolDescriptor 映射，用于 invokeTool 管线的权限/审计检查。
  */
-export const toolDescriptors: Record<string, import("./contracts.js").ToolDescriptor> = {
+export const toolDescriptors: Record<
+  string,
+  import("./contracts.js").ToolDescriptor
+> = {
   [weatherTool.name]: weatherDescriptor,
   [webSearchTool.name]: webSearchDescriptor,
   [webReadTool.name]: webReadDescriptor,
@@ -62,7 +77,10 @@ export const toolDescriptors: Record<string, import("./contracts.js").ToolDescri
 /**
  * 工具名称 → Zod schema 映射，用于 invokeTool 管线的参数校验。
  */
-export const toolSchemas: Record<string, { parse: (input: unknown) => unknown }> = {
+export const toolSchemas: Record<
+  string,
+  { parse: (input: unknown) => unknown }
+> = {
   [weatherTool.name]: weatherTool.schema as any,
   [webSearchTool.name]: webSearchTool.schema as any,
   [webReadTool.name]: webReadTool.schema as any,
