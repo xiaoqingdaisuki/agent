@@ -12,6 +12,7 @@ class Document:
     content: str
     metadata: dict = field(default_factory=dict)
 
+    # 从文件加载文档
     @classmethod
     def from_file(cls, file_path: str) -> "Document":
         """从文件加载文档"""
@@ -34,6 +35,7 @@ class Document:
             },
         )
 
+    # 从字节流加载文档（用于上传场景）
     @classmethod
     def from_bytes(cls, content: bytes, filename: str) -> "Document":
         """从字节流加载（用于上传场景）"""

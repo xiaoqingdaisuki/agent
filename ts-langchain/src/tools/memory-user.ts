@@ -25,6 +25,7 @@ interface UserMemory {
 class UserMemoryStore {
   private memories = new Map<string, UserMemory[]>();
 
+  // 添加一条用户长期记忆
   add(userId: string, content: string, category: string = "fact", importance: number = 3): UserMemory {
     const memory: UserMemory = {
       id: `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -44,6 +45,7 @@ class UserMemoryStore {
     return memory;
   }
 
+  // 搜索用户记忆，支持关键词、类别过滤和数量限制
   search(userId: string, query: string = "", category: string = "", maxResults: number = 10): UserMemory[] {
     let memories = this.memories.get(userId) || [];
 
@@ -61,6 +63,7 @@ class UserMemoryStore {
     return memories.slice(0, maxResults);
   }
 
+  // 删除指定记忆，返回是否删除成功
   delete(userId: string, memoryId: string): boolean {
     const memories = this.memories.get(userId) || [];
     const index = memories.findIndex((m) => m.id === memoryId);

@@ -20,6 +20,7 @@ _transcript_message_pattern = re.compile(
 )
 
 
+# 从内容中提取所有用户消息
 def _get_transcript_user_messages(content: str) -> list[str]:
     return [
         message.strip()
@@ -28,6 +29,7 @@ def _get_transcript_user_messages(content: str) -> list[str]:
     ]
 
 
+# 设置指定线程的大公鸡模式开关状态
 def _set_dark_mode(thread_id: str, enabled: bool) -> None:
     if enabled:
         _dark_mode_threads.add(thread_id)
@@ -35,6 +37,7 @@ def _set_dark_mode(thread_id: str, enabled: bool) -> None:
         _dark_mode_threads.discard(thread_id)
 
 
+# 切换指定线程的大公鸡模式，返回切换后的状态结果
 def _toggle_dark_mode(thread_id: str) -> AgentCommandResult:
     if thread_id in _dark_mode_threads:
         _dark_mode_threads.remove(thread_id)
@@ -49,6 +52,7 @@ _command_handlers: dict[str, Callable[[str], AgentCommandResult]] = {
 }
 
 
+# 执行内建 Agent 命令（如大公鸡模式切换），返回结果或 None
 def execute_agent_command(content: str, thread_id: str) -> AgentCommandResult | None:
     transcript_messages = _get_transcript_user_messages(content)
     command_content = transcript_messages[-1] if transcript_messages else content.strip()
@@ -66,6 +70,7 @@ def execute_agent_command(content: str, thread_id: str) -> AgentCommandResult | 
     return AgentCommandResult("toggle_dark_mode", reply)
 
 
+# 根据线程和内容判断是否需要覆盖系统 prompt
 def get_agent_prompt_override(thread_id: str, content: str | None = None) -> str | None:
     if content:
         transcript_messages = _get_transcript_user_messages(content)
@@ -76,5 +81,6 @@ def get_agent_prompt_override(thread_id: str, content: str | None = None) -> str
     return DARK_MODE_PROMPT if thread_id in _dark_mode_threads else None
 
 
+# 清除指定线程的命令状态（如大公鸡模式）
 def clear_agent_command_state(thread_id: str) -> None:
     _dark_mode_threads.discard(thread_id)

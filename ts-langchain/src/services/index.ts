@@ -52,6 +52,7 @@ class ToolProgressChannel {
   private readonly events: Array<Extract<AgentStreamEvent, { type: "tool" }>> = [];
   private readonly waiters = new Set<(event: Extract<AgentStreamEvent, { type: "tool" }>) => void>();
 
+  // 推送一个工具进度事件，等待中的消费者优先消费
   push(event: Extract<AgentStreamEvent, { type: "tool" }>): void {
     const waiter = this.waiters.values().next().value as
       | ((nextEvent: Extract<AgentStreamEvent, { type: "tool" }>) => void)
@@ -63,6 +64,7 @@ class ToolProgressChannel {
     this.events.push(event);
   }
 
+  // 取出一个待消费的工具进度事件，无事件时返回等待 Promise
   take(): { promise: Promise<Extract<AgentStreamEvent, { type: "tool" }>>; cancel: () => void } {
     const queued = this.events.shift();
     if (queued) return { promise: Promise.resolve(queued), cancel: () => undefined };
@@ -79,6 +81,7 @@ class ToolProgressChannel {
     return { promise, cancel: () => this.waiters.delete(waiter) };
   }
 
+  // 清空所有未消费的工具进度事件
   drain(): Array<Extract<AgentStreamEvent, { type: "tool" }>> {
     return this.events.splice(0);
   }
@@ -139,6 +142,7 @@ export class BusinessError extends Error {
     this.name = "BusinessError";
   }
 
+  // 序列化错误详情为 JSON 格式
   toJSON() {
     return {
       error: {
@@ -155,6 +159,7 @@ const conversations = new Map<string, Conversation>();
 const conversationMessages = new Map<string, Message[]>();
 
 export class ConversationService {
+  // 创建新会话，分配唯一 ID 并初始化消息列表
   static create(title: string, mode: "chat" | "knowledge" | "mixed" = "chat"): Conversation {
     const id = crypto.randomUUID();
     const conversation: Conversation = {
@@ -169,16 +174,19 @@ export class ConversationService {
     return conversation;
   }
 
+  // 根据 ID 获取会话，不存在时返回 undefined
   static get(id: string): Conversation | undefined {
     return conversations.get(id);
   }
 
+  // 列出所有会话，按创建时间倒序排列
   static list(): Conversation[] {
     return Array.from(conversations.values()).sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
   }
 
+  // 删除会话及其关联的消息和命令状态
   static delete(id: string): boolean {
     clearHistory(id);
     clearAgentCommandState(id);
@@ -186,6 +194,7 @@ export class ConversationService {
     return conversations.delete(id);
   }
 
+  // 向会话追加一条用户消息，增加消息计数
   static appendUserMessage(conversationId: string, content: string): Message {
     const conv = conversations.get(conversationId);
     if (!conv) throw new BusinessError(BusinessErrorCode.NOT_FOUND, "Conversation not found", 404);
@@ -203,15 +212,18 @@ export class ConversationService {
     return msg;
   }
 
+  // 向会话追加一条助手消息
   static appendAssistantMessage(conversationId: string, message: Message): void {
     const messages = conversationMessages.get(conversationId);
     if (messages) messages.push(message);
   }
 
+  // 获取会话的全部消息列表
   static getMessages(conversationId: string): Message[] {
     return [...(conversationMessages.get(conversationId) ?? [])];
   }
 
+  // 清空会话消息列表和关联状态
   static clearMessages(conversationId: string): void {
     conversationMessages.set(conversationId, []);
     const conversation = conversations.get(conversationId);
@@ -224,6 +236,7 @@ export class ConversationService {
 // ============ Agent Service ============
 
 export class AgentService {
+  // 执行单轮对话，处理工具调用、记忆提取和错误转换
   static async chat(conversationId: string, content: string, userId?: string): Promise<Message> {
     try {
       const command = executeAgentCommand(content, conversationId);
@@ -338,6 +351,7 @@ export class AgentService {
     }
   }
 
+  // 流式对话，逐字返回 AI 回复和工具调用事件
   static async *chatStream(
     conversationId: string,
     content: string,
@@ -484,6 +498,7 @@ export class KnowledgeService {
   private static ragAgent: RAGAgent | null = null;
   private static splitter = new TextSplitter();
 
+  // 懒加载或获取已有 RAG Agent 实例
   private static getRAGAgent() {
     if (!this.ragAgent) {
       this.ragAgent = new RAGAgent({
@@ -609,6 +624,7 @@ export class KnowledgeService {
 // ============ Capabilities Service ============
 
 export class CapabilitiesService {
+  // 获取系统能力描述（支持的模式、知识库、可用工具等）
   static getCapabilities(): Capabilities {
     return {
       modes: ["chat", "knowledge", "mixed"],

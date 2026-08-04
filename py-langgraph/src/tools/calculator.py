@@ -40,6 +40,7 @@ class _ParseError(Exception):
     pass
 
 
+# 将数学表达式分解为 token 流
 def _tokenize(expr: str) -> list[dict]:
     """将表达式分解为 token 流"""
     tokens: list[dict] = []
@@ -68,6 +69,7 @@ def _tokenize(expr: str) -> list[dict]:
     return tokens
 
 
+# 递归下降解析器：处理运算符优先级
 def _eval_tokens(tokens: list[dict]) -> float:
     """递归下降解析器：处理运算符优先级"""
 

@@ -37,6 +37,7 @@ class BusinessError(Exception):
         self.status_code = status_code
         super().__init__(message)
 
+    # 将错误序列化为字典响应
     def to_dict(self):
         return {"error": {"code": self.code.value, "message": self.message}}
 
@@ -53,6 +54,7 @@ class Conversation:
         self.message_count = 0
         self.messages: list[Message] = []
 
+    # 将会话对象序列化为字典
     def to_dict(self):
         return {
             "id": self.id,
@@ -70,6 +72,7 @@ class Message:
         self.content = content
         self.created_at = datetime.now().isoformat()
 
+    # 将消息对象序列化为字典
     def to_dict(self):
         return {
             "id": self.id,
@@ -89,6 +92,7 @@ class Document:
         self.category = category
         self.created_at = datetime.now().isoformat()
 
+    # 将文档对象序列化为字典
     def to_dict(self):
         return {
             "id": self.id,
@@ -123,6 +127,7 @@ _conversations: dict[str, Conversation] = {}
 
 
 class ConversationService:
+    # 创建新会话并注册到内存存储
     @staticmethod
     def create(title: str, mode: str = "chat") -> Conversation:
         conv = Conversation(title, mode)
@@ -130,10 +135,12 @@ class ConversationService:
         return conv
 
     @staticmethod
+    # 根据 ID 获取会话详情
     def get(conv_id: str) -> Conversation | None:
         return _conversations.get(conv_id)
 
     @staticmethod
+    # 列出所有会话，按创建时间倒序排列
     def list() -> list[dict]:
         return sorted(
             [c.to_dict() for c in _conversations.values()],
@@ -142,6 +149,7 @@ class ConversationService:
         )
 
     @staticmethod
+    # 删除会话及其关联的消息和命令状态
     def delete(conv_id: str) -> bool:
         if conv_id in _conversations:
             from src.commands import clear_agent_command_state
@@ -152,6 +160,7 @@ class ConversationService:
         return False
 
     @staticmethod
+    # 向会话追加一条用户消息
     def append_user_message(conv_id: str, content: str) -> Message:
         conv = _conversations.get(conv_id)
         if not conv:
@@ -162,17 +171,20 @@ class ConversationService:
         return message
 
     @staticmethod
+    # 向会话追加一条助手消息
     def append_assistant_message(conv_id: str, message: Message) -> None:
         conv = _conversations.get(conv_id)
         if conv:
             conv.messages.append(message)
 
     @staticmethod
+    # 获取会话的全部消息列表
     def get_messages(conv_id: str) -> list[dict]:
         conv = _conversations.get(conv_id)
         return [message.to_dict() for message in conv.messages] if conv else []
 
     @staticmethod
+    # 清空会话消息列表和关联状态
     def clear_messages(conv_id: str) -> None:
         conv = _conversations.get(conv_id)
         if conv:
@@ -190,6 +202,7 @@ _document_contents: dict[str, tuple[bytes, str]] = {}
 
 
 class KnowledgeService:
+    # 上传并索引文档到向量库
     @staticmethod
     async def upload_document(buffer: bytes, filename: str, category: str = None) -> Document:
         """上传并索引文档"""
@@ -242,6 +255,7 @@ class KnowledgeService:
             )
 
     @staticmethod
+    # 列出所有已索引文档
     def list_documents() -> list[dict]:
         return sorted(
             [d.to_dict() for d in _documents.values()],
@@ -250,10 +264,12 @@ class KnowledgeService:
         )
 
     @staticmethod
+    # 获取指定文档详情
     def get_document(doc_id: str) -> Document | None:
         return _documents.get(doc_id)
 
     @staticmethod
+    # 删除指定文档及其向量索引
     async def delete_document(doc_id: str) -> bool:
         if doc_id not in _documents:
             return False
@@ -267,6 +283,7 @@ class KnowledgeService:
         return True
 
     @staticmethod
+    # 重新索引指定文档
     async def reindex_document(doc_id: str) -> Document:
         doc = _documents.get(doc_id)
         if not doc:
@@ -300,6 +317,7 @@ class KnowledgeService:
         return doc
 
     @staticmethod
+    # 在知识库中搜索相关内容
     async def search(query: str, top_k: int = 5) -> list[dict]:
         """知识检索"""
         try:
@@ -336,6 +354,7 @@ class KnowledgeService:
 
 
 class AgentService:
+    # 执行对话，调用 Agent 并处理错误转换
     @staticmethod
     async def chat(conversation_id: str, content: str, user_id: str = None) -> Message:
         try:
@@ -437,6 +456,7 @@ class AgentService:
                 500,
             )
 
+    # 流式对话，逐字返回 AI 回复和工具调用事件
     @staticmethod
     async def chat_stream(conversation_id: str, content: str, user_id: str = None):
         try:

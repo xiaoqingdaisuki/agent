@@ -21,6 +21,7 @@ interface KnowledgeHit {
   chunk_index?: number;
 }
 
+// 将知识库检索命中结果格式化为展示文本
 function hitsToText(hits: KnowledgeHit[], query: string): string {
   if (hits.length === 0) {
     return `📚 知识库中未找到与"${query}"相关的内容。`;

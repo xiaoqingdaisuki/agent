@@ -28,6 +28,7 @@ export interface RAGOptions {
  * 创建检索器工具
  * 将 RAG 检索包装成 LangChain Tool，Agent 可以自主调用
  */
+// 创建检索器工具，将 RAG 检索包装为 LangChain Tool
 function createRetrieverTool(retriever: Retriever) {
   return new DynamicStructuredTool({
     name: "search_knowledge_base",
@@ -65,6 +66,7 @@ export class RAGAgent {
   private vectorStore: VectorStore;
   private agent: Promise<AgentExecutor>;
 
+  // 初始化 RAG Agent，创建底层检索器和声明式 Agent 实例
   constructor(options: RAGOptions) {
     this.retriever = new Retriever({
       qdrantUrl: options.qdrantUrl,
@@ -128,6 +130,7 @@ Be concise and accurate in your responses.`,
   /**
    * 索引文档
    */
+  // 索引文档到向量库：加载 → 切分 → 向量化 → 存储
   async indexDocument(
     content: string,
     filename: string,
@@ -148,6 +151,7 @@ Be concise and accurate in your responses.`,
     return { chunks: chunks.length };
   }
 
+  // 从向量库删除指定文档
   async deleteDocument(documentId: string): Promise<void> {
     await this.vectorStore.deleteDocuments(documentId);
   }
@@ -155,6 +159,7 @@ Be concise and accurate in your responses.`,
   /**
    * 对话
    */
+  // 执行对话，将用户问题提交给 RAG Agent 处理
   async chat(message: string, history: any[] = []) {
     const agent = await this.agent;
     const result = await agent.invoke(

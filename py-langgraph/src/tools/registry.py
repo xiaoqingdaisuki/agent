@@ -33,6 +33,7 @@ class ToolRegistry:
         self._descriptors: dict[str, ToolDescriptor] = {}
         self._register_default_tools()
 
+    # 注册默认工具集到注册表
     def _register_default_tools(self) -> None:
         """注册默认工具集"""
         default_tools = [
@@ -50,27 +51,33 @@ class ToolRegistry:
         for tool_fn, descriptor in default_tools:
             self.register(tool_fn, descriptor)
 
+    # 注册单个工具及其描述符
     def register(self, tool_fn: Any, descriptor: ToolDescriptor) -> None:
         """注册一个工具"""
         self._tools[descriptor.name] = tool_fn
         self._descriptors[descriptor.name] = descriptor
 
+    # 获取指定工具的描述符
     def get_descriptor(self, name: str) -> ToolDescriptor | None:
         """获取工具描述符"""
         return self._descriptors.get(name)
 
+    # 获取所有工具描述符列表
     def get_descriptors(self) -> list[ToolDescriptor]:
         """获取所有工具描述符"""
         return list(self._descriptors.values())
 
+    # 获取指定名称的工具函数
     def get_tool(self, name: str) -> Any | None:
         """获取工具函数"""
         return self._tools.get(name)
 
+    # 获取所有工具函数列表
     def get_all_tools(self) -> list[Any]:
         """获取所有工具函数列表"""
         return list(self._tools.values())
 
+    # 根据用户权限返回可见工具列表，R0 工具始终可见
     def get_visible_tools(self, user_permissions: list[str]) -> list[Any]:
         """
         根据用户权限返回可见工具列表。
@@ -97,6 +104,7 @@ class ToolRegistry:
                 visible.append(tool_fn)
         return visible
 
+    # 获取当前用户可见的工具元数据列表（供 API 返回）
     def get_visible_descriptors(self, user_permissions: list[str]) -> list[dict[str, Any]]:
         """获取当前用户可见的工具元数据列表（用于 API 返回）"""
         result = []
@@ -133,6 +141,7 @@ class ToolRegistry:
                 })
         return result
 
+    # 按类别分组返回工具元数据
     def get_categories(self) -> dict[str, list[dict[str, Any]]]:
         """按类别分组返回工具"""
         categories: dict[str, list[dict[str, Any]]] = {}
@@ -153,11 +162,13 @@ class ToolRegistry:
 _registry = ToolRegistry()
 
 
+# 获取全局注册表单例
 def get_registry() -> ToolRegistry:
     """获取全局注册表单例"""
     return _registry
 
 
+# 根据用户权限获取可用工具列表（供 Agent 使用）
 def get_tools_for_user(user_permissions: list[str] | None = None) -> list[Any]:
     """根据用户权限获取可用工具列表（供 Agent 使用）"""
     if user_permissions is None:
@@ -165,6 +176,7 @@ def get_tools_for_user(user_permissions: list[str] | None = None) -> list[Any]:
     return _registry.get_visible_tools(user_permissions)
 
 
+# 获取工具元数据（供 /tools API 使用）
 def get_tool_metadata_for_user(user_permissions: list[str] | None = None) -> list[dict[str, Any]]:
     """获取工具元数据（供 /tools API 使用）"""
     if user_permissions is None:

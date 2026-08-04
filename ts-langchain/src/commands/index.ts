@@ -13,6 +13,7 @@ const darkModeThreads = new Set<string>();
 
 const TRANSCRIPT_MESSAGE_PATTERN = /(?:^|\n\n)(user|assistant|system): ([\s\S]*?)(?=\n\n(?:user|assistant|system): |$)/g;
 
+// 从内容中提取所有用户消息（解析 transcript 格式）
 function getTranscriptUserMessages(content: string): string[] {
   const messages: string[] = [];
   for (const match of content.matchAll(TRANSCRIPT_MESSAGE_PATTERN)) {
@@ -21,11 +22,13 @@ function getTranscriptUserMessages(content: string): string[] {
   return messages;
 }
 
+// 设置指定线程的大公鸡模式开关状态
 function setDarkMode(threadId: string, enabled: boolean): void {
   if (enabled) darkModeThreads.add(threadId);
   else darkModeThreads.delete(threadId);
 }
 
+// 切换指定线程的大公鸡模式，返回切换后的状态结果
 function toggleDarkMode(threadId: string): AgentCommandResult {
   if (darkModeThreads.has(threadId)) {
     darkModeThreads.delete(threadId);

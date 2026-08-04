@@ -4,6 +4,7 @@ import { sessionStore } from "../tools/memory-session.js";
 const conversations = new Map<string, BaseMessage[]>();
 export const MAX_HISTORY_MESSAGES = 50;
 
+// 获取指定线程的对话历史，不存在则返回空数组
 export function getHistory(threadId: string): BaseMessage[] {
   if (!conversations.has(threadId)) {
     conversations.set(threadId, []);
@@ -11,6 +12,7 @@ export function getHistory(threadId: string): BaseMessage[] {
   return conversations.get(threadId)!;
 }
 
+// 向指定线程追加一条消息，超出上限时裁剪旧消息
 export function appendMessage(threadId: string, message: BaseMessage): void {
   const history = getHistory(threadId);
   history.push(message);
@@ -26,6 +28,7 @@ export function appendMessage(threadId: string, message: BaseMessage): void {
   }
 }
 
+// 清空指定线程的全部对话历史和会话存储
 export function clearHistory(threadId: string): void {
   conversations.delete(threadId);
   sessionStore.clear(threadId);

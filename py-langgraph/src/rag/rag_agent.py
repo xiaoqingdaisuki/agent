@@ -25,6 +25,7 @@ class RAGState(TypedDict):
     should_retrieve: bool
 
 
+# 构建 RAG Agent — 显式图编排
 def build_rag_agent(
     qdrant_url: str = None,
     collection_name: str = "documents",

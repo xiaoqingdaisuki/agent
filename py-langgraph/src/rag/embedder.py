@@ -10,6 +10,7 @@ from langchain_openai import OpenAIEmbeddings
 class Embedder:
     """OpenAI Embedding 向量化器"""
 
+    # 初始化 Embedding 客户端
     def __init__(
         self,
         model: str = "text-embedding-3-small",

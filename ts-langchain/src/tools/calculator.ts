@@ -150,6 +150,7 @@ function parsePrimary(tokens: Token[], pos: number): { value: number; pos: numbe
   throw new ParseError(`意外的 token: ${JSON.stringify(token)}`);
 }
 
+// 安全计算数学表达式（四则运算、幂运算、括号）
 export function safeCalculate(expression: string): number {
   const cleaned = expression.trim();
   if (!cleaned) throw new ParseError("空表达式");

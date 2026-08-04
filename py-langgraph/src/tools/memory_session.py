@@ -43,6 +43,7 @@ _SESSION_DESCRIPTOR = ToolDescriptor(
 class SessionMemoryStore:
     """会话记忆存储 — 基于内存 Map（生产环境可替换为 Redis/数据库）"""
 
+    # 初始化会话记忆存储
     def __init__(self):
         self._sessions: dict[str, list[dict]] = {}
 
@@ -76,6 +77,7 @@ class SessionMemoryStore:
 _session_store = SessionMemoryStore()
 
 
+# 获取全局会话存储实例
 def get_session_store() -> SessionMemoryStore:
     return _session_store
 
@@ -88,6 +90,7 @@ class SessionSearchInput(BaseModel):
     max_results: int = Field(default=5, description="最多返回几条结果", ge=1, le=20)
 
 
+# 在当前会话中搜索之前的对话内容
 @tool(args_schema=SessionSearchInput)
 def memory_session_search(
     conversation_id: str,

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 # 外层服务超时长于 Agent deadline，确保业务层先返回明确的 504。
 DEFAULT_REQUEST_TIMEOUT = settings.server_request_timeout_ms / 1000
 
+# 请求级超时中间件：非流式路由默认超时返回 504
 async def _timeout_middleware(request: Request, call_next):
     """请求级超时中间件：非流式路由默认 60s 超时。"""
     path = request.url.path
@@ -40,6 +41,7 @@ async def _timeout_middleware(request: Request, call_next):
         )
 
 
+# 创建并配置 FastAPI 应用，注册所有路由和中间件
 def create_app() -> FastAPI:
     app = FastAPI(title="py-langgraph-agent", version="0.2.0")
 
@@ -96,6 +98,7 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
+# 启动开发 API 服务器
 def run() -> None:
     """Start the development API server through the ``agent`` console command."""
     import uvicorn

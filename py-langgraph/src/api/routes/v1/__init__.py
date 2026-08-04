@@ -82,6 +82,7 @@ async def health():
 
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
+# 创建新会话
 async def create_conversation(req: CreateConversationRequest):
     try:
         conv = ConversationService.create(req.title, req.mode)
@@ -94,11 +95,13 @@ async def create_conversation(req: CreateConversationRequest):
 
 
 @router.get("/conversations")
+# 列出所有会话
 async def list_conversations():
     return ConversationService.list()
 
 
 @router.get("/conversations/{conv_id}")
+# 获取指定会话详情
 async def get_conversation(conv_id: str):
     conv = ConversationService.get(conv_id)
     if not conv:
@@ -110,6 +113,7 @@ async def get_conversation(conv_id: str):
 
 
 @router.delete("/conversations/{conv_id}")
+# 删除指定会话及其消息
 async def delete_conversation(conv_id: str):
     deleted = ConversationService.delete(conv_id)
     if not deleted:
@@ -124,6 +128,7 @@ async def delete_conversation(conv_id: str):
 
 
 @router.get("/conversations/{conv_id}/messages")
+# 获取指定会话的消息列表
 async def get_messages(conv_id: str):
     conv = ConversationService.get(conv_id)
     if not conv:
@@ -135,6 +140,7 @@ async def get_messages(conv_id: str):
 
 
 @router.post("/conversations/{conv_id}/messages", response_model=MessageResponse)
+# 向会话发送用户消息并获取 AI 回复
 async def send_message(conv_id: str, req: SendMessageRequest):
     try:
         conv = ConversationService.get(conv_id)
@@ -160,6 +166,7 @@ async def send_message(conv_id: str, req: SendMessageRequest):
 
 
 @router.post("/conversations/{conv_id}/messages/stream")
+# 向会话发送消息并流式返回 AI 回复
 async def stream_message(conv_id: str, req: SendMessageRequest):
     conversation = ConversationService.get(conv_id)
     if not conversation:
@@ -199,6 +206,7 @@ async def stream_message(conv_id: str, req: SendMessageRequest):
 
 
 @router.delete("/conversations/{conv_id}/messages")
+# 清空指定会话的全部消息
 async def clear_messages(conv_id: str):
     conv = ConversationService.get(conv_id)
     if not conv:
@@ -217,6 +225,7 @@ async def clear_messages(conv_id: str):
 
 
 @router.post("/knowledge/documents", response_model=DocumentResponse, status_code=201)
+# 上传文档并自动索引到向量库
 async def upload_document(request: Request):
     """上传文档（multipart/form-data）"""
     try:
@@ -264,11 +273,13 @@ async def upload_document(request: Request):
 
 
 @router.get("/knowledge/documents")
+# 列出所有已索引文档
 async def list_documents():
     return KnowledgeService.list_documents()
 
 
 @router.get("/knowledge/documents/{doc_id}")
+# 获取指定文档详情
 async def get_document(doc_id: str):
     doc = KnowledgeService.get_document(doc_id)
     if not doc:
@@ -280,6 +291,7 @@ async def get_document(doc_id: str):
 
 
 @router.delete("/knowledge/documents/{doc_id}")
+# 删除指定文档及其向量索引
 async def delete_document(doc_id: str):
     deleted = await KnowledgeService.delete_document(doc_id)
     if not deleted:
@@ -291,6 +303,7 @@ async def delete_document(doc_id: str):
 
 
 @router.post("/knowledge/documents/{doc_id}/reindex")
+# 重新索引指定文档
 async def reindex_document(doc_id: str):
     try:
         doc = await KnowledgeService.reindex_document(doc_id)
@@ -307,6 +320,7 @@ async def reindex_document(doc_id: str):
 
 
 @router.post("/knowledge/search")
+# 在知识库中搜索相关内容
 async def search_knowledge(req: SearchRequest):
     try:
         results = await KnowledgeService.search(req.query, req.top_k)
@@ -324,6 +338,7 @@ async def search_knowledge(req: SearchRequest):
 
 
 @router.get("/capabilities")
+# 获取系统能力描述
 async def get_capabilities():
     return Capabilities.get()
 
@@ -337,6 +352,7 @@ class ProfileQuery(BaseModel):
 
 
 @router.get("/profile")
+# 获取指定用户的画像信息
 async def get_profile(user_id: str, name: str = ""):
     try:
         from src.profile.service import ProfileService
@@ -359,6 +375,7 @@ class ProfileUpdate(BaseModel):
 
 
 @router.patch("/profile")
+# 更新指定用户的画像信息
 async def update_profile(user_id: str, update: ProfileUpdate):
     try:
         from src.profile.service import ProfileService
@@ -388,6 +405,7 @@ async def update_profile(user_id: str, update: ProfileUpdate):
 
 
 @router.get("/memory")
+# 获取指定用户的记忆列表
 async def get_memories(user_id: str, category: str = None):
     try:
         from src.profile.service import MemoryService
@@ -413,6 +431,7 @@ class MemoryCreate(BaseModel):
 
 
 @router.post("/memory", status_code=201)
+# 为指定用户添加一条新记忆
 async def create_memory(user_id: str, memory: MemoryCreate):
     try:
         from src.profile.service import MemoryService
@@ -430,6 +449,7 @@ async def create_memory(user_id: str, memory: MemoryCreate):
 
 
 @router.delete("/memory")
+# 删除指定用户的记忆
 async def delete_memory(user_id: str, memory_id: str):
     try:
         from src.profile.service import MemoryService
@@ -454,6 +474,7 @@ async def delete_memory(user_id: str, memory_id: str):
 
 
 @router.get("/history")
+# 获取指定用户的问答历史记录
 async def get_history(user_id: str, conversation_id: str = None, limit: int = 50):
     try:
         from src.profile.service import HistoryService

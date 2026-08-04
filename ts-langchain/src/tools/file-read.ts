@@ -41,6 +41,7 @@ const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
 
 // ============ 安全路径解析 ============
 
+// 安全解析文件路径，防止路径穿越和工作区逃逸
 export function resolveSafePath(filepath: string, rootDir: string): { path: string | null; error?: string } {
   const cleanPath = filepath.trim();
 
@@ -69,6 +70,7 @@ export function resolveSafePath(filepath: string, rootDir: string): { path: stri
   return { path: fullPath };
 }
 
+// 对文本内容进行敏感信息脱敏处理
 export function maskSensitive(content: string): string {
   let masked = content;
   for (const { pattern, replacement } of SENSITIVE_PATTERNS) {

@@ -18,6 +18,7 @@ class StreamRequest(BaseModel):
     user_id: str | None = None
 
 
+# 流式对话接口 — 使用 Server-Sent Events 逐字返回 AI 回复
 @router.post("")
 async def stream(request: StreamRequest):
     """流式对话 — 使用 Server-Sent Events"""
@@ -27,7 +28,7 @@ async def stream(request: StreamRequest):
     command = execute_agent_command(request.message, thread_id)
 
     if command:
-
+        # 生成命令响应的 SSE 事件流
         async def command_event_generator():
             payload = json.dumps({"text": command.reply}, ensure_ascii=False)
             yield f"data: {payload}\n\n"
@@ -56,6 +57,7 @@ async def stream(request: StreamRequest):
         "user_id": request.user_id,
     }
 
+    # 生成 SSE 事件流：文本增量 + 工具调用事件
     async def event_generator():
         metadata = json.dumps({"thread_id": thread_id}, ensure_ascii=False)
         yield f"data: {metadata}\n\n"

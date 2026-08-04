@@ -228,6 +228,7 @@ export function budgetGuard(): ToolRuntimeResult<null> | null {
 
 // ============ 审计记录 ============
 
+// 记录一条审计日志，同时同步写入可观测性指标
 export function recordAudit(entry: Omit<AuditEntry, "timestamp">): void {
   auditLog.push({
     ...entry,
@@ -254,6 +255,7 @@ export function recordAudit(entry: Omit<AuditEntry, "timestamp">): void {
 
 // ============ 辅助函数 ============
 
+// 生成工具调用元数据，包含唯一 ID 和默认值
 function createMeta(source: string) {
   return {
     tool_call_id: `call_${source}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -467,6 +469,7 @@ export async function invokeTool<TInput, TOutput>(
 
 // ============ Per-Request 上下文管理 ============
 
+// 获取当前异步上下文中的工具调用上下文信息
 export function getToolCallContext(): ToolCallContext | undefined {
   return runtimeStorage.getStore()?.context;
 }
@@ -474,6 +477,7 @@ export function getToolCallContext(): ToolCallContext | undefined {
 /**
  * 在独立异步上下文中运行一次 Agent 请求，隔离用户身份与工具预算。
  */
+// 在独立异步上下文中运行一次请求，隔离用户身份与工具预算
 export function runWithToolCallContext<T>(
   context: ToolCallContext,
   callback: () => T,
@@ -482,6 +486,7 @@ export function runWithToolCallContext<T>(
   return createToolCallScope(context, options).run(callback);
 }
 
+// 创建一个工具调用作用域，用于隔离请求上下文
 export function createToolCallScope(
   context: ToolCallContext,
   options: { onToolProgress?: (event: ToolProgressEvent) => void } = {},

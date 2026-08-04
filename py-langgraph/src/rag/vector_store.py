@@ -12,6 +12,7 @@ from src.rag.embedder import Embedder
 class VectorStore:
     """Qdrant 向量存储"""
 
+    # 初始化 Qdrant 客户端和集合名称
     def __init__(
         self,
         url: str = "http://localhost:6333",

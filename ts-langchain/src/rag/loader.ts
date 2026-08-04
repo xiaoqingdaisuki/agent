@@ -22,6 +22,7 @@ export class DocumentLoader {
   /**
    * 根据文件类型选择加载器
    */
+  // 根据文件类型选择合适的加载器读取文档
   static async load(filePath: string, filename: string): Promise<Document> {
     const ext = path.extname(filename).toLowerCase();
     const content = await fs.readFile(filePath, "utf-8");
@@ -45,6 +46,7 @@ export class DocumentLoader {
   /**
    * 从 Buffer 加载（用于上传场景）
    */
+  // 从 Buffer 加载文档（用于上传场景）
   static async loadFromBuffer(buffer: Buffer, filename: string): Promise<Document> {
     const ext = path.extname(filename).toLowerCase();
     const content = buffer.toString("utf-8");

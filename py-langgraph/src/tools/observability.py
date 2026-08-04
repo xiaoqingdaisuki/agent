@@ -50,15 +50,18 @@ class MetricsSnapshot:
 class MetricsCollector:
     """指标收集器 — 内存实现"""
 
+    # 初始化指标收集器，设置最大事件数
     def __init__(self, max_events: int = 10_000):
         self._metrics: list[ToolCallMetric] = []
         self._max_events = max_events
 
+    # 记录一条工具调用指标
     def record(self, metric: ToolCallMetric) -> None:
         self._metrics.append(metric)
         if len(self._metrics) > self._max_events:
             self._metrics = self._metrics[-self._max_events:]
 
+    # 生成当前指标快照（汇总统计）
     def snapshot(self) -> MetricsSnapshot:
         snap = MetricsSnapshot()
         for m in self._metrics:
@@ -86,6 +89,7 @@ class MetricsCollector:
 
         return snap
 
+    # 获取最近的指标事件列表
     def get_events(self, limit: int = 100) -> list[dict]:
         """获取最近的事件"""
         events = []
@@ -102,6 +106,7 @@ class MetricsCollector:
             })
         return events
 
+    # 清空所有已记录的指标事件
     def clear(self) -> None:
         self._metrics.clear()
 
@@ -115,6 +120,7 @@ def get_metrics_collector() -> MetricsCollector:
     return _metrics
 
 
+# 记录一次工具调用指标到全局收集器
 def record_tool_metric(
     tool_name: str,
     tool_version: str,

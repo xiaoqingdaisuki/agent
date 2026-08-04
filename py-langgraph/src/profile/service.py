@@ -37,10 +37,12 @@ class ProfileService:
         return profile
 
     @staticmethod
+    # 获取已有用户画像，不存在时返回 None
     def get(user_id: str) -> UserProfile | None:
         return store.get_profile(user_id)
 
     @staticmethod
+    # 更新用户画像字段
     def update(user_id: str, **updates) -> UserProfile | None:
         return store.update_profile(user_id, **updates)
 
@@ -49,6 +51,7 @@ class MemoryService:
     """长期记忆管理"""
 
     @staticmethod
+    # 存储一条新的用户记忆
     def add(user_id: str, content: str, category: str = "fact", importance: int = 3) -> Memory:
         """存储一条新记忆"""
         memory = Memory(
@@ -72,10 +75,12 @@ class MemoryService:
         return store.get_memories(user_id, category=category)
 
     @staticmethod
+    # 删除指定记忆，返回是否删除成功
     def delete(user_id: str, memory_id: str) -> bool:
         return store.delete_memory(user_id, memory_id)
 
     @staticmethod
+    # 获取用户所有记忆列表
     def list_all(user_id: str) -> list[dict]:
         return [m.to_dict() for m in store.get_memories(user_id)]
 
@@ -218,6 +223,7 @@ class HistoryService:
     """问答历史管理"""
 
     @staticmethod
+    # 记录一条问答历史
     def record(user_id: str, conversation_id: str, question: str, answer: str) -> QARecord:
         record = QARecord(
             id=f"qa_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
@@ -229,6 +235,7 @@ class HistoryService:
         return store.add_qa_record(record)
 
     @staticmethod
+    # 获取用户问答历史，支持按会话过滤
     def get_history(user_id: str, conversation_id: str = None, limit: int = 50) -> list[dict]:
         records = store.get_qa_history(user_id, conversation_id, limit)
         return [r.to_dict() for r in records]

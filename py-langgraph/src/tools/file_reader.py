@@ -90,6 +90,7 @@ _DESCRIPTOR = ToolDescriptor(
 
 # ============ 安全路径解析 ============
 
+# 安全解析文件路径，防止路径穿越和逃逸
 def _resolve_safe_path(filepath: str, root_dir: str) -> tuple[Path | None, str | None]:
     """
     安全解析文件路径，防止路径穿越和逃逸。
@@ -124,6 +125,7 @@ def _resolve_safe_path(filepath: str, root_dir: str) -> tuple[Path | None, str |
     return target, None
 
 
+# 检查符号链接是否指向工作区外
 def _check_symlink(path: Path) -> tuple[bool, str | None]:
     """检查符号链接是否指向工作区外"""
     if path.is_symlink():
@@ -137,6 +139,7 @@ def _check_symlink(path: Path) -> tuple[bool, str | None]:
     return True, None
 
 
+# 简单编码检测：依次尝试 UTF-8、GBK、Latin-1
 def _detect_encoding(content: bytes) -> str:
     """简单编码检测"""
     # 尝试 UTF-8
@@ -163,6 +166,7 @@ def _detect_encoding(content: bytes) -> str:
     return "utf-8"  # fallback
 
 
+# 对文件内容进行敏感信息脱敏处理
 def _mask_sensitive(content: str) -> str:
     """对文件内容进行敏感信息脱敏"""
     masked = content
@@ -179,6 +183,7 @@ class FileReadInput(BaseModel):
     limit: int = Field(default=100, description="最多读取行数，默认 100，最大 500", ge=1, le=500)
 
 
+# 安全读取工作区内的指定文件，自动进行路径安全和脱敏检查
 @tool(args_schema=FileReadInput)
 def file_read(filepath: str, offset: int = 0, limit: int = 100) -> str:
     """安全读取工作区内的指定文件内容。自动进行路径安全检查，防止访问工作区外的文件。"""

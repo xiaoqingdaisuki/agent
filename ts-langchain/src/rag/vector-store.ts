@@ -20,6 +20,7 @@ export class VectorStore {
   private apiKey?: string;
   private collectionName: string;
 
+  // 初始化 Qdrant 向量存储客户端
   constructor(config: QdrantConfig) {
     this.baseUrl = config.url.replace(/\/$/, "");
     this.apiKey = config.apiKey;

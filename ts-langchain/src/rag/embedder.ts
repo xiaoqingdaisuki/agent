@@ -15,6 +15,7 @@ export class Embedder {
   private model: string;
   private dimensions: number;
 
+  // 初始化 OpenAI Embedding 客户端
   constructor(options: EmbeddingOptions = {}) {
     this.client = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,

@@ -97,6 +97,7 @@ function normalizeUrl(rawUrl: string): string | null {
   }
 }
 
+// 向 Tavily API 发送搜索请求并返回原始响应
 async function fetchTavily(settings: SearchSettings, query: string): Promise<Response> {
   const attempts = 2;
   let lastError: unknown;
@@ -134,6 +135,7 @@ async function fetchTavily(settings: SearchSettings, query: string): Promise<Res
   throw lastError instanceof Error ? lastError : new Error("Tavily request failed");
 }
 
+// 调用 Tavily 搜索并将结果解析为结构化格式
 async function searchTavily(query: string, settings: SearchSettings): Promise<SearchResultItem[]> {
   const response = await fetchTavily(settings, query);
   const data = (await response.json()) as {
@@ -159,6 +161,7 @@ async function searchTavily(query: string, settings: SearchSettings): Promise<Se
   return results;
 }
 
+// 执行搜索，处理缓存、熔断和重试逻辑
 async function executeSearch(query: string, cacheKey: string, settings: SearchSettings): Promise<SearchOutcome> {
   const now = Date.now();
   const cached = cache.get(cacheKey);
@@ -231,6 +234,7 @@ export function searchResultsToText(outcome: SearchOutcome, query: string): stri
   return lines.join("\n");
 }
 
+// 重置搜索状态（缓存、飞行中请求、熔断器），供测试使用
 export function resetSearchStateForTests(): void {
   cache.clear();
   inFlight.clear();

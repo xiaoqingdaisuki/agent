@@ -23,6 +23,7 @@ export class TextSplitter {
   private chunkSize: number;
   private chunkOverlap: number;
 
+  // 初始化文本切分器，设置块大小和重叠长度
   constructor(options: SplitterOptions = { chunkSize: 1000, chunkOverlap: 200 }) {
     this.chunkSize = options.chunkSize;
     this.chunkOverlap = options.chunkOverlap;

@@ -27,6 +27,7 @@ class AgentState(TypedDict, total=False):
     user_id: str | None
 
 
+# 修剪对话历史，限制消息数量并保持用户轮次边界
 def trim_history(state: AgentState) -> dict[str, list[RemoveMessage]]:
     """Bound checkpoint growth while keeping a complete user turn boundary."""
     messages = state["messages"]
@@ -42,6 +43,7 @@ def trim_history(state: AgentState) -> dict[str, list[RemoveMessage]]:
     return {"messages": removals} if removals else {}
 
 
+# 根据配置获取 LLM 实例（OpenAI 或 Anthropic）
 def get_llm(provider: str = "openai"):
     """根据配置获取 LLM"""
     if provider == "anthropic":
@@ -97,6 +99,7 @@ def build_chat_agent(checkpointer=None):
     return builder.compile(checkpointer=cp)
 
 
+# 获取默认 checkpointer 实例，避免循环导入
 def _get_default_checkpointer():
     """获取默认 checkpointer，避免循环导入"""
     from src.memory import get_default_checkpointer
@@ -104,6 +107,7 @@ def _get_default_checkpointer():
     return get_default_checkpointer()
 
 
+# 将 XML 格式工具调用转换为 LangGraph 可识别的标准格式
 def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
     """Handle XML tool call format for non-OpenAI models.
 
@@ -169,6 +173,7 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
     )
 
 
+# 计算当前轮次（自最近一条用户消息以来）的工具调用总数
 def _current_turn_tool_call_count(messages: list[BaseMessage]) -> int:
     """Count requested tools since the most recent user message."""
     count = 0
@@ -181,6 +186,7 @@ def _current_turn_tool_call_count(messages: list[BaseMessage]) -> int:
     return count
 
 
+# 将模型提供的参数替换为服务端注入的 ownership ID（user_id, conversation_id）
 def _scope_memory_tool_call(request: ToolCallRequest, execute):
     """Replace model-supplied ownership IDs with server-side graph context."""
     name = request.tool_call["name"]
@@ -197,6 +203,7 @@ def _scope_memory_tool_call(request: ToolCallRequest, execute):
     return execute(request.override(tool_call=scoped_call))
 
 
+# 判断 Agent 是否需要调用工具，或已达到调用上限
 def should_continue(state: AgentState) -> Literal["tools", "limit", END]:
     """判断是否需要调用工具"""
     last_message = state["messages"][-1]
@@ -314,6 +321,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
     )
 
 
+# 生成缓存键，确保不同 checkpointer 实例不共享编译图
 def _get_cache_key(base_prompt: str, checkpointer) -> tuple:
     """生成缓存键，确保不同 checkpointer 实例不共享同一个编译图。"""
     if checkpointer is None:
@@ -321,6 +329,7 @@ def _get_cache_key(base_prompt: str, checkpointer) -> tuple:
     return (base_prompt, id(checkpointer))
 
 
+# 使用 checkpointer 的 id 作为缓存键的一部分，编译并缓存工具调用图
 @lru_cache(maxsize=10)
 def _build_cached_tool_agent(base_prompt: str, checkpointer_id: int | None):
     """使用 checkpointer 的 id 作为缓存键的一部分。"""
@@ -328,11 +337,13 @@ def _build_cached_tool_agent(base_prompt: str, checkpointer_id: int | None):
     return _compile_tool_agent(cp, base_prompt)
 
 
+# 根据 checkpointer 的 id 获取实例，用于缓存重建
 def _resolve_checkpointer(checkpointer_id: int):
     """根据 id 从当前默认 checkpointer 获取实例（用于缓存重建）。"""
     return _get_default_checkpointer()
 
 
+# 构建工具调用 Agent，复用已编译图以提升性能
 def build_tool_agent(checkpointer=None, system_prompt_override=None):
     """Build a tool agent, reusing compiled graphs for the common checkpointer."""
     from src.prompts.system import TOOL_CALLING_PROMPT
@@ -343,5 +354,6 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
     return _compile_tool_agent(checkpointer, base_prompt)
 
 
+# 清空工具调用 Agent 的 LRU 缓存
 def invalidate_tool_agent_cache() -> None:
     _build_cached_tool_agent.cache_clear()

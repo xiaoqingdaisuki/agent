@@ -7,10 +7,12 @@ interface StepFunImageResponse {
 
 const MAX_IMAGE_REQUEST_ATTEMPTS = 3;
 
+// 异步延迟辅助函数
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+// 带重试的图片生成请求，最多尝试 MAX_IMAGE_REQUEST_ATTEMPTS 次
 async function requestImageGeneration(url: string, apiKey: string, prompt: string): Promise<Response> {
   let lastError: unknown;
 
@@ -40,6 +42,7 @@ async function requestImageGeneration(url: string, apiKey: string, prompt: strin
   throw lastError;
 }
 
+// 从环境变量拼接图片生成 API 的完整 URL
 function getImageApiUrl(): string | null {
   const baseUrl = process.env.OPENAI_BASE_URL;
   if (!baseUrl) return null;

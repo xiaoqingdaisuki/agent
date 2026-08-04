@@ -38,10 +38,12 @@ TOutput = TypeVar("TOutput")
 _audit_log: list[dict[str, Any]] = []
 
 
+# 返回审计日志的只读副本
 def get_audit_log() -> list[dict[str, Any]]:
     return list(_audit_log)
 
 
+# 清空审计日志
 def clear_audit_log() -> None:
     _audit_log.clear()
 
@@ -52,6 +54,7 @@ _permission_cache: dict[str, tuple[bool, float]] = {}
 _PERMISSION_CACHE_TTL = 5.0  # seconds
 
 
+# 检查用户是否拥有指定权限（当前为最小 RBAC 实现）
 def permission_check(
     context: ToolCallContext,
     descriptor: ToolDescriptor,
@@ -90,6 +93,7 @@ def permission_check(
 
 # ============ 参数校验 ============
 
+# 使用 Pydantic model 校验输入参数
 def validate_input(
     schema: Callable[[Any], Any],
     raw_input: Any,
@@ -119,6 +123,7 @@ _SENSITIVE_KEYS = frozenset({
 })
 
 
+# 递归过滤结果中的敏感字段（密钥、Token、密码等）
 def sanitize_result(data: Any) -> Any:
     """对工具返回结果进行基本脱敏 — 递归过滤常见敏感键。"""
     if isinstance(data, dict):
@@ -148,10 +153,12 @@ class _BudgetState:
 _budget = _BudgetState()
 
 
+# 重置当前轮次的工具调用预算计数器
 def reset_round_budget() -> None:
     _budget.tool_calls_this_round = 0
 
 
+# 检查工具调用预算，返回 None 表示通过，否则返回错误结果
 def budget_guard() -> ToolRuntimeResult[None] | None:
     """检查预算限制，返回 None 表示通过，否则返回错误结果。"""
     if _budget.tool_calls_this_round >= _budget.max_per_round:
@@ -177,6 +184,7 @@ def budget_guard() -> ToolRuntimeResult[None] | None:
 
 # ============ 审计记录 ============
 
+# 记录审计日志条目，同时同步写入可观测性指标
 def record_audit(entry: dict[str, Any]) -> None:
     _audit_log.append(entry)
     # 保留最近 1000 条
@@ -194,6 +202,7 @@ class ToolExecutor(Generic[TInput, TOutput]):
       validate → permission_check → budget_guard → execute → sanitize → audit
     """
 
+    # 初始化工具执行器
     def __init__(
         self,
         descriptor: ToolDescriptor,
@@ -205,6 +214,7 @@ class ToolExecutor(Generic[TInput, TOutput]):
         self.schema = schema
 
 
+# 统一执行入口：所有工具必须通过此函数调用，不得绕过
 async def invoke_tool(
     executor: ToolExecutor[TInput, TOutput],
     raw_input: Any,
@@ -285,6 +295,7 @@ async def invoke_tool(
     )
 
 
+# 构造工具执行错误响应信封
 def _error_envelope(
     call_id: str,
     tool_name: str,
@@ -305,6 +316,7 @@ def _error_envelope(
     )
 
 
+# 记录审计日志并同步写入可观测性指标
 def _record_audit(
     tool_name: str,
     tool_version: str,

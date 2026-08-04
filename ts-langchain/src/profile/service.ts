@@ -34,10 +34,12 @@ export class ProfileService {
     return profile;
   }
 
+  // 根据用户 ID 获取已有画像，不存在时返回 undefined
   static get(userId: string): UserProfile | undefined {
     return profileStore.getProfile(userId);
   }
 
+  // 更新用户画像，支持部分字段更新
   static update(userId: string, updates?: Partial<UserProfile>): UserProfile | undefined {
     return profileStore.updateProfile(userId, updates ?? {});
   }
@@ -46,28 +48,34 @@ export class ProfileService {
 // ============ Memory Service ============
 
 export class MemoryService {
+  // 存储一条新的用户记忆
   static add(userId: string, content: string, category: string = "fact", importance: number = 3): Memory {
     const memory = createMemory(userId, content, category, importance);
     return profileStore.addMemory(memory);
   }
 
+  // 获取用户的高优先级记忆列表，按重要性排序
   static getRelevant(userId: string, maxItems: number = 10): Memory[] {
     const memories = profileStore.getMemories(userId);
     return memories.slice(0, maxItems);
   }
 
+  // 按类别获取用户记忆
   static getByCategory(userId: string, category: string): Memory[] {
     return profileStore.getMemories(userId, category);
   }
 
+  // 删除指定记忆，返回是否删除成功
   static delete(userId: string, memoryId: string): boolean {
     return profileStore.deleteMemory(userId, memoryId);
   }
 
+  // 获取用户的所有记忆列表
   static listAll(userId: string): Memory[] {
     return profileStore.getMemories(userId);
   }
 
+  // 将记忆组装成 prompt 片段，注入 System Prompt
   static buildMemoryContext(userId: string): string {
     const memories = profileStore.getMemories(userId).slice(0, 10);
     if (memories.length === 0) return "";
@@ -196,11 +204,13 @@ JSON 输出（无其他内容）：`;
 // ============ History Service ============
 
 export class HistoryService {
+  // 记录一条问答历史记录
   static record(userId: string, conversationId: string, question: string, answer: string): QARecord {
     const record = createQARecord(userId, conversationId, question, answer);
     return profileStore.addQARecord(record);
   }
 
+  // 获取用户问答历史，支持按会话过滤
   static getHistory(userId: string, conversationId?: string, limit: number = 50): QARecord[] {
     return profileStore.getQAHistory(userId, conversationId, limit);
   }

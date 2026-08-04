@@ -40,6 +40,7 @@ _BLOCKED_HOSTS = {
 }
 
 
+# 检查 URL 是否安全，防止 SSRF 攻击
 def _is_safe_url(url: str) -> tuple[bool, str | None]:
     """检查 URL 是否安全，防止 SSRF 攻击"""
     try:
@@ -89,6 +90,7 @@ def _is_safe_url(url: str) -> tuple[bool, str | None]:
 
 # ============ 正文清洗 ============
 
+# 清洗 HTML 文本，去除 script/style 标签并提取正文
 def _clean_html(html: str) -> str:
     """提取网页正文，去除 script/style/标签"""
     text = re.sub(r"<script[^>]*>[\s\S]*?</script>", "", html, flags=re.IGNORECASE | re.DOTALL)
@@ -108,6 +110,7 @@ _TEXT_CONTENT_TYPES = {
 }
 
 
+# 判断内容类型是否为可读文本类型
 def _is_text_content(content_type: str) -> bool:
     ct = content_type.split(";")[0].strip().lower()
     return ct in _TEXT_CONTENT_TYPES or ct.startswith("text/")
@@ -137,6 +140,7 @@ class WebReadInput(BaseModel):
     url: str = Field(description="要读取的网页 URL，必须是完整的 URL（https:// 或 http://）")
 
 
+# 读取指定 URL 的网页正文内容，通常在 web_search 之后使用
 @tool(args_schema=WebReadInput)
 def web_read(url: str) -> str:
     """读取指定 URL 的网页正文内容。通常在 web_search 之后使用来获取详细信息。"""
@@ -221,6 +225,7 @@ def web_read(url: str) -> str:
         return f"获取网页出错：{e!s}"
 
 
+# 从 HTML 中提取 <title> 标签的文本
 def _extract_title(html: str) -> str | None:
     match = re.search(r"<title[^>]*>([\s\S]*?)</title>", html, re.IGNORECASE | re.DOTALL)
     if match:

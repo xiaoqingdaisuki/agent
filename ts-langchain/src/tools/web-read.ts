@@ -24,6 +24,7 @@ const BLOCKED_HOSTS = new Set([
   "metadata.google.internal", // GCP metadata
 ]);
 
+// 检查 URL 是否安全，防止 SSRF 攻击
 export function isSafeUrl(url: string): { safe: boolean; reason?: string } {
   try {
     const parsed = new URL(url);
@@ -67,6 +68,7 @@ export function isSafeUrl(url: string): { safe: boolean; reason?: string } {
   }
 }
 
+// 检查 IP 地址是否为内网/保留地址
 function isBlockedIp(address: string): boolean {
   if (isIP(address) === 4) {
     return !isSafeUrl(`http://${address}`).safe;
@@ -85,6 +87,7 @@ function isBlockedIp(address: string): boolean {
   return true;
 }
 
+// 对 URL 进行 DNS 解析并验证所有解析结果的安全性
 async function validateNetworkUrl(url: string): Promise<{ safe: boolean; reason?: string }> {
   const syntaxCheck = isSafeUrl(url);
   if (!syntaxCheck.safe) return syntaxCheck;
@@ -107,6 +110,7 @@ async function validateNetworkUrl(url: string): Promise<{ safe: boolean; reason?
   return { safe: true };
 }
 
+// 流式读取响应体，限制最大字节数并返回截断标记
 async function readTextWithLimit(
   response: Response,
   maxBytes: number,
@@ -290,6 +294,7 @@ export const webReadTool: DynamicStructuredTool = new DynamicStructuredTool({
   },
 });
 
+// 从 HTML 中提取 <title> 标签的文本内容
 function extractTitle(html: string): string | undefined {
   const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   if (match) {

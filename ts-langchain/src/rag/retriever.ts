@@ -17,6 +17,7 @@ export class Retriever {
   private vectorStore: VectorStore;
   private topK: number;
 
+  // 初始化检索器，配置嵌入器和向量存储
   constructor(options: RetrieverOptions) {
     this.embedder = new Embedder();
     this.vectorStore = new VectorStore({

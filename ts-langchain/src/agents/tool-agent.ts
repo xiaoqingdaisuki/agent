@@ -12,6 +12,7 @@ import { config } from "../config/index.js";
 // Keep tool loops inside the end-to-end request budget, aligned with Python.
 export const MAX_AGENT_ITERATIONS = config.MAX_AGENT_ITERATIONS;
 
+// 将非 OpenAI 模型的 XML 格式工具调用转换为标准 AIMessage 格式
 export function convertXmlToolCalls(message: BaseMessage): BaseMessage {
   const content = typeof message.content === "string" ? message.content : "";
   const F_O = "<func" + "tion=";
@@ -68,6 +69,7 @@ export function convertXmlToolCalls(message: BaseMessage): BaseMessage {
   return new AIMessage({ content: clean.trim(), tool_calls: toolCalls });
 }
 
+// 在模型 invoke 方法外层包裹 XML 工具调用转换逻辑
 function createModelWithXmlFix(model: ChatOpenAI): ChatOpenAI {
   const ob = model.bindTools.bind(model);
   (model as any).bindTools = (tools: any[]) => {
@@ -88,6 +90,7 @@ function createModelWithXmlFix(model: ChatOpenAI): ChatOpenAI {
 const agentCache = new Map<string, Promise<AgentExecutor>>();
 const MAX_CACHE_SIZE = 10;
 
+// 创建或获取缓存的工具调用 Agent，相同 prompt 复用编译结果
 export async function createToolAgent(systemPromptOverride?: string): Promise<AgentExecutor> {
   const prompt = systemPromptOverride || TOOL_CALLING_PROMPT;
 
@@ -106,6 +109,7 @@ export async function createToolAgent(systemPromptOverride?: string): Promise<Ag
   return promise;
 }
 
+// 清空 Agent 缓存，下次调用将重新编译
 export function invalidateToolAgentCache(): void {
   agentCache.clear();
 }

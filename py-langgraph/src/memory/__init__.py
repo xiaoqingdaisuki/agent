@@ -13,6 +13,7 @@ from typing import Optional
 from langgraph.checkpoint.memory import MemorySaver
 
 
+# 根据配置类型获取 checkpointer 实例
 def get_checkpointer(checkpoint_type: str = "memory"):
     """
     根据配置获取 checkpointer
@@ -40,6 +41,7 @@ def get_checkpointer(checkpoint_type: str = "memory"):
 _default_checkpointer: MemorySaver | None = None
 
 
+# 获取默认内存 checkpointer 单例
 def get_default_checkpointer():
     """获取默认 checkpointer（单例）"""
     global _default_checkpointer

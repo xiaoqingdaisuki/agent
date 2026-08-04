@@ -59,6 +59,7 @@ _USER_SAVE_DESCRIPTOR = ToolDescriptor(
 class UserMemoryStore:
     """用户记忆存储 — 基于内存（生产环境可替换为数据库）"""
 
+    # 初始化用户记忆存储
     def __init__(self):
         self._memories: dict[str, list[dict]] = {}
 
@@ -117,6 +118,7 @@ class UserMemoryStore:
 _user_memory_store = UserMemoryStore()
 
 
+# 获取全局用户记忆存储实例
 def get_user_memory_store() -> UserMemoryStore:
     return _user_memory_store
 
@@ -130,6 +132,7 @@ class UserSearchInput(BaseModel):
     max_results: int = Field(default=10, description="最多返回条数", ge=1, le=50)
 
 
+# 搜索当前用户的长期记忆
 @tool(args_schema=UserSearchInput)
 def memory_user_search(
     user_id: str,
@@ -166,6 +169,7 @@ class UserSaveInput(BaseModel):
     importance: int = Field(default=3, description="重要性 1-5，越高越重要", ge=1, le=5)
 
 
+# 保存一条关于用户的重要信息到长期记忆
 @tool(args_schema=UserSaveInput)
 def memory_user_save(
     user_id: str,

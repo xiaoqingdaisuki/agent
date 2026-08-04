@@ -5,6 +5,7 @@ import { appendMessage, getHistory } from "../memory/conversation.js";
 
 let chatAgent: ChatOpenAI | null = null;
 
+// 将 LangChain BaseMessage 转换为 OpenAI API 消息格式
 function toOpenAIMessage(message: BaseMessage) {
   const type = message._getType();
   const role = type === "human" ? "user" : type === "system" ? "system" : "assistant";

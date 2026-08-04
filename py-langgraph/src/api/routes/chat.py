@@ -22,6 +22,7 @@ class ChatResponse(BaseModel):
 
 
 @router.post("", response_model=ChatResponse)
+# 旧版对话接口 — 强制走 tool agent，保证工具调用能力
 async def chat(request: ChatRequest):
     """旧版对话接口 — 强制走 tool agent，保证工具调用能力
 
@@ -38,6 +39,7 @@ async def chat(request: ChatRequest):
             try:
                 from src.profile.service import ProfileService
 
+# 获取用户画像，不存在时自动创建
                 ProfileService.get_or_create(request.user_id)
             except Exception:
                 # Profile storage is optional; the agent loads memory when available.

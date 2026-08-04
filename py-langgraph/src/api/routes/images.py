@@ -21,6 +21,7 @@ class ImageGenerationResponse(BaseModel):
 MAX_IMAGE_REQUEST_ATTEMPTS = 3
 
 
+# 带重试的图片生成请求，退避时间带随机抖动避免惊群
 async def _request_with_retry(
     url: str, api_key: str, prompt: str
 ) -> httpx.Response:
@@ -53,6 +54,7 @@ async def _request_with_retry(
     raise last_error or RuntimeError("Image generation failed after retries")
 
 
+# 生成图片并返回 base64 编码的 data URL
 @router.post("/generations", response_model=ImageGenerationResponse)
 async def generate_image(request: ImageGenerationRequest):
     if not settings.openai_api_key or not settings.openai_base_url:

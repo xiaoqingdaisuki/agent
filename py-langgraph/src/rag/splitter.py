@@ -16,6 +16,7 @@ class TextChunk:
 class TextSplitter:
     """递归字符切分器"""
 
+    # 初始化文本切分器，设置块大小和重叠长度
     def __init__(
         self,
         chunk_size: int = 1000,

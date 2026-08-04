@@ -19,6 +19,7 @@ import {
 import { ProfileService, MemoryService, HistoryService } from "../../../profile/service.js";
 import type { Conversation, Document, Message } from "../../../services/index.js";
 
+// 将 Conversation 对象序列化为前端 API 响应格式
 function serializeConversation(conversation: Conversation) {
   return {
     id: conversation.id,
@@ -29,6 +30,7 @@ function serializeConversation(conversation: Conversation) {
   };
 }
 
+// 将 Message 对象序列化为前端 API 响应格式
 function serializeMessage(message: Message) {
   return {
     id: message.id,
@@ -38,6 +40,7 @@ function serializeMessage(message: Message) {
   };
 }
 
+// 将 Document 对象序列化为前端 API 响应格式
 function serializeDocument(document: Document) {
   return {
     id: document.id,

@@ -83,6 +83,7 @@ class _NonRetryableSearchError(RuntimeError):
     pass
 
 
+# 将字符串安全地限制在整数范围内
 def _bounded_integer(raw: str | None, fallback: int, minimum: int, maximum: int) -> int:
     try:
         return min(maximum, max(minimum, int(raw or "")))
@@ -90,6 +91,7 @@ def _bounded_integer(raw: str | None, fallback: int, minimum: int, maximum: int)
         return fallback
 
 
+# 从环境变量和 settings 构建搜索配置
 def _get_settings() -> SearchSettings:
     return SearchSettings(
         api_key=os.getenv("TAVILY_API_KEY", "").strip() or app_settings.tavily_api_key,
@@ -123,6 +125,7 @@ def _get_settings() -> SearchSettings:
     )
 
 
+# 清洗 HTML 文本，去除标签并解码实体
 def _clean_html(text: str) -> str:
     text = re.sub(r"<script[^>]*>[\s\S]*?</script>", "", text, flags=re.IGNORECASE)
     text = re.sub(r"<style[^>]*>[\s\S]*?</style>", "", text, flags=re.IGNORECASE)
@@ -130,6 +133,7 @@ def _clean_html(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# 规范化 URL：清理追踪参数，返回 None 表示无效 URL
 def _normalize_url(raw_url: str) -> str | None:
     try:
         parsed = urlparse(raw_url)
@@ -145,6 +149,7 @@ def _normalize_url(raw_url: str) -> str | None:
         return None
 
 
+# 向 Tavily API 发送搜索请求并返回原始响应
 def _request_tavily(settings: SearchSettings, query: str) -> httpx.Response:
     last_error: Exception | None = None
     for attempt in range(settings.max_attempts):
@@ -181,6 +186,7 @@ def _request_tavily(settings: SearchSettings, query: str) -> httpx.Response:
     raise last_error or RuntimeError("Tavily request failed")
 
 
+# 调用 Tavily 搜索并将结果解析为结构化格式
 def _search_tavily(query: str, settings: SearchSettings) -> list[SearchResultItem]:
     data = _request_tavily(settings, query).json()
     results: list[SearchResultItem] = []
@@ -203,6 +209,7 @@ def _search_tavily(query: str, settings: SearchSettings) -> list[SearchResultIte
     return results
 
 
+# 执行搜索，处理缓存、熔断和重试逻辑
 def _execute_search(
     query: str, cache_key: str, settings: SearchSettings, cached: CacheEntry | None
 ) -> SearchOutcome:
@@ -277,6 +284,7 @@ def _execute_search(
         return SearchOutcome([], [], [f"tavily:{error}"])
 
 
+# 多源搜索入口：处理缓存、去重和并发合并
 def multi_source_search(query: str) -> SearchOutcome:
     normalized_query = re.sub(r"\s+", " ", query.strip())
     cache_key = normalized_query.casefold()
@@ -313,6 +321,7 @@ def multi_source_search(query: str) -> SearchOutcome:
             _in_flight.pop(cache_key, None)
 
 
+# 将搜索结果显示格式化为可读文本
 def search_results_to_text(outcome: SearchOutcome, query: str) -> str:
     if not outcome.results:
         reason = ", ".join(outcome.failed_providers)
@@ -334,6 +343,7 @@ def search_results_to_text(outcome: SearchOutcome, query: str) -> str:
     return "\n".join(lines)
 
 
+# 重置搜索状态（缓存、飞行中请求、熔断器），供测试使用
 def reset_search_state_for_tests() -> None:
     with _state_lock:
         _cache.clear()
@@ -362,6 +372,7 @@ class SearchInput(BaseModel):
     query: str = Field(min_length=1, max_length=400, description="简洁明确的搜索关键词")
 
 
+# 使用 Tavily 搜索实时互联网信息并返回来源链接
 @tool(args_schema=SearchInput)
 def web_search(query: str) -> str:
     """使用 Tavily 搜索实时互联网信息并返回来源链接。"""

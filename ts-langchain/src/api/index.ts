@@ -8,6 +8,7 @@ import { registerImageRoutes } from "./routes/images.js";
 import { registerErrorMiddleware } from "./middleware/error.js";
 import { config } from "../config/index.js";
 
+// 构建并配置 Fastify 应用实例，注册所有路由和中间件
 export async function buildApp() {
   const app = fastify({
     logger: { level: "info" },

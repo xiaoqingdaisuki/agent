@@ -20,6 +20,7 @@ class UserProfile:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_active_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
+    # 将用户画像序列化为字典
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -43,6 +44,7 @@ class Memory:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
+    # 将记忆记录序列化为字典
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -67,6 +69,7 @@ class QARecord:
     answer: str
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
+    # 将问答记录序列化为字典
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -90,13 +93,16 @@ class ProfileStore:
 
     # ---- Profile ----
 
+    # 根据用户 ID 获取已有画像，不存在时返回 None
     def get_profile(self, user_id: str) -> UserProfile | None:
         return self._profiles.get(user_id)
 
+    # 创建或覆盖用户画像
     def create_profile(self, profile: UserProfile) -> UserProfile:
         self._profiles[profile.id] = profile
         return profile
 
+    # 更新用户画像字段
     def update_profile(self, user_id: str, **updates) -> UserProfile | None:
         profile = self._profiles.get(user_id)
         if not profile:
@@ -109,18 +115,21 @@ class ProfileStore:
 
     # ---- Memory ----
 
+    # 添加一条记忆记录
     def add_memory(self, memory: Memory) -> Memory:
         if memory.user_id not in self._memories:
             self._memories[memory.user_id] = []
         self._memories[memory.user_id].append(memory)
         return memory
 
+    # 获取用户的所有记忆，可按类别过滤并按重要性排序
     def get_memories(self, user_id: str, category: str = None) -> list[Memory]:
         memories = self._memories.get(user_id, [])
         if category:
             memories = [m for m in memories if m.category == category]
         return sorted(memories, key=lambda m: -m.importance)
 
+    # 删除指定记忆，返回是否删除成功
     def delete_memory(self, user_id: str, memory_id: str) -> bool:
         memories = self._memories.get(user_id, [])
         for i, m in enumerate(memories):
@@ -131,12 +140,14 @@ class ProfileStore:
 
     # ---- Q&A History ----
 
+    # 添加一条问答记录
     def add_qa_record(self, record: QARecord) -> QARecord:
         if record.user_id not in self._qa_records:
             self._qa_records[record.user_id] = []
         self._qa_records[record.user_id].append(record)
         return record
 
+    # 获取用户问答历史，支持按会话过滤和数量限制
     def get_qa_history(self, user_id: str, conversation_id: str = None, limit: int = 50) -> list[QARecord]:
         records = self._qa_records.get(user_id, [])
         if conversation_id:

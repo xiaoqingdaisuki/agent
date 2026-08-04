@@ -19,20 +19,24 @@ interface SessionMessage {
 class SessionMemoryStore {
   private sessions = new Map<string, SessionMessage[]>();
 
+  // 获取指定会话的消息列表
   get(conversationId: string): SessionMessage[] {
     return this.sessions.get(conversationId) || [];
   }
 
+  // 向指定会话追加一条消息
   add(conversationId: string, role: "user" | "assistant", content: string): void {
     const messages = this.sessions.get(conversationId) || [];
     messages.push({ role, content });
     this.sessions.set(conversationId, messages);
   }
 
+  // 清空指定会话的所有消息
   clear(conversationId: string): void {
     this.sessions.delete(conversationId);
   }
 
+  // 在会话中搜索匹配关键词的消息，最多返回 maxResults 条
   search(conversationId: string, query: string, maxResults: number = 5): SessionMessage[] {
     const messages = this.sessions.get(conversationId) || [];
     if (!query) return messages.slice(-maxResults);

@@ -10,6 +10,7 @@ from src.rag.vector_store import VectorStore
 class Retriever:
     """RAG 检索器"""
 
+    # 初始化检索器，配置向量存储和返回条数
     def __init__(
         self,
         qdrant_url: str = "http://localhost:6333",

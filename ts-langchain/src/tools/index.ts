@@ -31,6 +31,7 @@ export {
   userMemorySaveDescriptor,
 };
 
+// 所有可用工具的聚合列表，供 Agent 使用
 export const tools = [
   weatherTool,
   webSearchTool,
