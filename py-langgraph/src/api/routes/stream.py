@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
 from src.agents.deadline import AgentDeadline
+from src.agents.response_handler import maybe_append_continuation_hint
 from src.commands import execute_agent_command, get_agent_prompt_override
 
 router = APIRouter()
@@ -62,6 +63,7 @@ async def stream(request: StreamRequest):
         metadata = json.dumps({"thread_id": thread_id}, ensure_ascii=False)
         yield f"data: {metadata}\n\n"
         try:
+            full_answer = ""
             async with AgentDeadline():
                 async for event in agent.astream_events(
                     input_data,
@@ -102,18 +104,46 @@ async def stream(request: StreamRequest):
                     elif kind == "on_chat_model_stream":
                         chunk = event["data"]["chunk"]
                         if isinstance(chunk.content, str) and chunk.content:
+                            full_answer += chunk.content
                             payload = json.dumps({"text": chunk.content}, ensure_ascii=False)
                             yield f"data: {payload}\n\n"
+
+            # 正常完成：保存完整回答
+            if full_answer:
+                from src.services import ConversationService
+                ConversationService.append_assistant_message(
+                    thread_id,
+                    type("Message", (), {"role": "assistant", "content": maybe_append_continuation_hint(full_answer)})(),
+                )
         except TimeoutError:
-            payload = json.dumps(
-                {"error": {"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"}},
-                ensure_ascii=False,
-            )
-            yield f"data: {payload}\n\n"
+            if full_answer:
+                # 超时但有部分结果 → 返回部分内容 + 继续提示
+                partial = maybe_append_continuation_hint(full_answer)
+                from src.services import ConversationService
+                ConversationService.append_assistant_message(
+                    thread_id,
+                    type("Message", (), {"role": "assistant", "content": partial})(),
+                )
+                yield f"data: {json.dumps({'text': partial, 'partial': True}, ensure_ascii=False)}\n\n"
+            else:
+                payload = json.dumps(
+                    {"error": {"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"}},
+                    ensure_ascii=False,
+                )
+                yield f"data: {payload}\n\n"
         except Exception:
             logging.getLogger("agent.stream").exception("Stream failed")
-            payload = json.dumps({"error": "Internal server error"}, ensure_ascii=False)
-            yield f"data: {payload}\n\n"
+            if full_answer:
+                partial = maybe_append_continuation_hint(full_answer)
+                from src.services import ConversationService
+                ConversationService.append_assistant_message(
+                    thread_id,
+                    type("Message", (), {"role": "assistant", "content": partial})(),
+                )
+                yield f"data: {json.dumps({'text': partial, 'partial': True}, ensure_ascii=False)}\n\n"
+            else:
+                payload = json.dumps({"error": "Internal server error"}, ensure_ascii=False)
+                yield f"data: {payload}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

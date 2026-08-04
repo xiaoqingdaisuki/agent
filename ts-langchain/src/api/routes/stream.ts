@@ -13,6 +13,7 @@ import {
   getAgentPromptOverride,
 } from "../../commands/index.js";
 import { AgentDeadline, isAgentDeadlineError } from "../../agents/deadline.js";
+import { maybeAppendContinuationHint } from "../../agents/response-handler.js";
 
 export async function registerStreamRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
@@ -66,6 +67,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       reply.raw.flushHeaders();
       reply.raw.write(`data: ${JSON.stringify({ thread_id: threadId })}\n\n`);
 
+      let fullAnswer = "";
       const deadline = new AgentDeadline();
       try {
         const scope = createToolCallScope(toolContext, {
@@ -86,7 +88,6 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         );
         const iterator = stream[Symbol.asyncIterator]();
 
-        let fullAnswer = "";
         while (true) {
           const next = scope.run(() => iterator.next());
           const { value: chunk, done } = await deadline.run(next);
@@ -99,23 +100,35 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         }
 
         if (fullAnswer) {
+          const finalAnswer = maybeAppendContinuationHint(fullAnswer);
           appendMessage(threadId, new HumanMessage(message));
-          appendMessage(threadId, new AIMessage(fullAnswer));
+          appendMessage(threadId, new AIMessage(finalAnswer));
         }
 
         reply.raw.write("data: [DONE]\n\n");
         reply.raw.end();
       } catch (error) {
         console.error("Stream error:", error);
-        const message = isAgentDeadlineError(error)
-          ? "AI助手响应超时，请稍后重试。"
-          : "Internal server error";
-        const code = isAgentDeadlineError(error)
-          ? "AGENT_TIMEOUT"
-          : "INTERNAL_ERROR";
-        reply.raw.write(
-          `data: ${JSON.stringify({ error: { code, message } })}\n\n`,
-        );
+        if (fullAnswer) {
+          // 流被中断但有部分结果 → 返回部分内容 + 继续提示，而非报错
+          const partialHint = maybeAppendContinuationHint(fullAnswer);
+          reply.raw.write(
+            `data: ${JSON.stringify({ text: partialHint, partial: true })}\n\n`,
+          );
+          appendMessage(threadId, new HumanMessage(message));
+          appendMessage(threadId, new AIMessage(partialHint));
+        } else {
+          // 无任何输出 → 返回错误
+          const errMessage = isAgentDeadlineError(error)
+            ? "AI助手响应超时，请稍后重试。"
+            : "处理请求时发生错误";
+          const errCode = isAgentDeadlineError(error)
+            ? "AGENT_TIMEOUT"
+            : "INTERNAL_ERROR";
+          reply.raw.write(
+            `data: ${JSON.stringify({ error: { code: errCode, message: errMessage } })}\n\n`,
+          );
+        }
         reply.raw.write("data: [DONE]\n\n");
         reply.raw.end();
       } finally {

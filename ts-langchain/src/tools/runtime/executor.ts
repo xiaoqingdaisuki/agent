@@ -147,23 +147,31 @@ const SENSITIVE_KEYS = new Set([
 ]);
 
 export function sanitizeResult<T>(data: T): T {
-  if (typeof data !== "object" || data === null) return data;
+  if (data === null || data === undefined) return data;
 
   if (Array.isArray(data)) {
     return data.map(sanitizeResult) as T;
   }
 
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-    if (SENSITIVE_KEYS.has(key.toLowerCase())) {
-      result[key] = "[REDACTED]";
-    } else if (typeof value === "object" && value !== null) {
-      result[key] = sanitizeResult(value);
-    } else {
-      result[key] = value;
-    }
+  if (typeof data === "string") {
+    return redactTextContent(data) as T;
   }
-  return result as T;
+
+  if (typeof data === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+      if (SENSITIVE_KEYS.has(key.toLowerCase())) {
+        result[key] = "[REDACTED]";
+      } else if (typeof value === "string") {
+        result[key] = redactTextContent(value);
+      } else {
+        result[key] = sanitizeResult(value);
+      }
+    }
+    return result as T;
+  }
+
+  return data;
 }
 
 // ============ 预算守卫 ============
@@ -527,6 +535,7 @@ export function createToolCallScope(
 // ============ 工具 Runtime 包装 ============
 
 import { DynamicStructuredTool } from "langchain/tools";
+import { redactTextContent, redactStructuredData } from "./data-redaction.js";
 
 /**
  * 将 LangChain DynamicStructuredTool 包装为走 invokeTool 管线的版本。

@@ -16,6 +16,11 @@ import {
   isAgentDeadlineError,
   runWithAgentDeadline,
 } from "../../agents/deadline.js";
+import {
+  getFinishReason,
+  isLikelyTruncated,
+  maybeAppendContinuationHint,
+} from "../../agents/response-handler.js";
 
 export async function registerChatRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
@@ -83,15 +88,21 @@ export async function registerChatRoutes(app: FastifyInstance) {
             ),
         );
 
-        const reply_text =
+        let replyText =
           typeof result.output === "string"
             ? result.output
             : "抱歉，我没有理解您的问题。";
 
-        appendMessage(threadId, new HumanMessage(message));
-        appendMessage(threadId, new AIMessage(reply_text));
+        // 检测 LLM 输出截断（finish_reason=length 或文本 abrupt ending）
+        const finishReason = getFinishReason(result as any);
+        if (isLikelyTruncated(replyText, finishReason)) {
+          replyText = maybeAppendContinuationHint(replyText, finishReason);
+        }
 
-        return { reply: reply_text, thread_id: threadId };
+        appendMessage(threadId, new HumanMessage(message));
+        appendMessage(threadId, new AIMessage(replyText));
+
+        return { reply: replyText, thread_id: threadId };
       } catch (error: any) {
         console.error("Chat error:", error);
         if (isAgentDeadlineError(error)) {

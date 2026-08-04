@@ -29,6 +29,7 @@ from src.tools.contracts import (
     ToolRuntimeResult,
 )
 from src.tools.observability import record_tool_metric
+from src.tools.runtime.data_redaction import redact_text_content
 
 TInput = TypeVar("TInput")
 TOutput = TypeVar("TOutput")
@@ -133,21 +134,29 @@ _SENSITIVE_KEYS = frozenset(
 )
 
 
-# 递归过滤结果中的敏感字段（密钥、Token、密码等）
+# 递归过滤结果中的敏感字段（密钥、Token、密码等），并对文本内容做内容级脱敏
 def sanitize_result(data: Any) -> Any:
-    """对工具返回结果进行基本脱敏 — 递归过滤常见敏感键。"""
+    """对工具返回结果进行脱敏 — key 过滤 + 字符串内容正则脱敏。"""
+    if data is None or isinstance(data, (bool, int, float)):
+        return data
+
+    if isinstance(data, str):
+        return redact_text_content(data)
+
+    if isinstance(data, list):
+        return [sanitize_result(item) for item in data]
+
     if isinstance(data, dict):
         result: dict[str, Any] = {}
         for key, value in data.items():
             if key.lower() in _SENSITIVE_KEYS:
                 result[key] = "[REDACTED]"
-            elif isinstance(value, (dict, list)):
-                result[key] = sanitize_result(value)
+            elif isinstance(value, str):
+                result[key] = redact_text_content(value)
             else:
-                result[key] = value
+                result[key] = sanitize_result(value)
         return result
-    elif isinstance(data, list):
-        return [sanitize_result(item) for item in data]
+
     return data
 
 

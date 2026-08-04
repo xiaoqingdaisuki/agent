@@ -41,6 +41,11 @@ import {
   isAgentDeadlineError,
   runWithAgentDeadline,
 } from "../agents/deadline.js";
+import {
+  getFinishReason,
+  isLikelyTruncated,
+  maybeAppendContinuationHint,
+} from "../agents/response-handler.js";
 
 // ============ 类型定义 ============
 
@@ -60,7 +65,7 @@ export interface Message {
 }
 
 export type AgentStreamEvent =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; partial?: boolean }
   | {
       type: "tool";
       toolName: string;
@@ -356,6 +361,12 @@ export class AgentService {
         createdAt: new Date().toISOString(),
       };
 
+      // 检测 LLM 输出截断（finish_reason=length 或文本 abrupt ending）
+      const finishReason = getFinishReason(result as any);
+      if (isLikelyTruncated(reply.content, finishReason)) {
+        reply.content = maybeAppendContinuationHint(reply.content, finishReason);
+      }
+
       appendMessage(conversationId, new HumanMessage(content));
       appendMessage(conversationId, new AIMessage(reply.content));
       ConversationService.appendAssistantMessage(conversationId, reply);
@@ -416,6 +427,7 @@ export class AgentService {
     content: string,
     userId?: string,
   ): AsyncGenerator<AgentStreamEvent, void, unknown> {
+    let fullAnswer = "";
     try {
       const command = executeAgentCommand(content, conversationId);
       if (command) {
@@ -469,7 +481,6 @@ export class AgentService {
           });
         },
       });
-      let fullAnswer = "";
       try {
         const stream = await deadline.run<any>(
           scope.run(() =>
@@ -522,12 +533,13 @@ export class AgentService {
       }
 
       if (fullAnswer) {
+        const finalAnswer = maybeAppendContinuationHint(fullAnswer);
         appendMessage(conversationId, new HumanMessage(content));
-        appendMessage(conversationId, new AIMessage(fullAnswer));
+        appendMessage(conversationId, new AIMessage(finalAnswer));
         ConversationService.appendAssistantMessage(conversationId, {
           id: crypto.randomUUID(),
           role: "assistant",
-          content: fullAnswer,
+          content: finalAnswer,
           createdAt: new Date().toISOString(),
         });
       }
@@ -549,6 +561,30 @@ export class AgentService {
     } catch (error: any) {
       if (error instanceof BusinessError) throw error;
       if (isAgentDeadlineError(error)) {
+        // 超时但有部分结果 → 返回部分内容 + 继续提示
+        if (fullAnswer) {
+          const partial = maybeAppendContinuationHint(fullAnswer);
+          appendMessage(conversationId, new HumanMessage(content));
+          appendMessage(conversationId, new AIMessage(partial));
+          ConversationService.appendAssistantMessage(conversationId, {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: partial,
+            createdAt: new Date().toISOString(),
+          });
+          yield { type: "text", text: partial, partial: true };
+          // 记录问答历史
+          if (userId) {
+            try {
+              HistoryService.record(userId, conversationId, content, partial);
+              MemoryService.extractMemoriesFromConversation(userId, content, partial);
+              ProfileService.update(userId);
+            } catch {
+              // silent
+            }
+          }
+          return;
+        }
         throw new BusinessError(
           BusinessErrorCode.AGENT_TIMEOUT,
           "AI助手响应超时，请稍后重试。",

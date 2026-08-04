@@ -14,6 +14,8 @@ from typing_extensions import TypedDict
 
 from src.config.settings import settings
 from src.agents.deadline import enable_tool_budget
+from src.agents.response_handler import maybe_append_continuation_hint
+from src.tools.runtime.data_redaction import redact_text_content
 
 MAX_TOOL_CALLS = settings.max_agent_iterations
 AGENT_RECURSION_LIMIT = MAX_TOOL_CALLS * 2 + 4
@@ -289,6 +291,13 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
                     )
                 ),
             ]
+        )
+        # 内容级脱敏：limit_node 的回答基于工具结果生成，可能包含敏感数据
+        response.content = redact_text_content(response.content or "")
+        # 检测 limit_node 生成的最终回答是否也被截断
+        response.content = maybe_append_continuation_hint(
+            response.content,
+            getattr(response, "response_metadata", {}).get("finish_reason"),
         )
         pending_message = state["messages"][-1]
         return {

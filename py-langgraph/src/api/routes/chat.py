@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
 from src.agents.deadline import AgentDeadline
+from src.agents.response_handler import get_finish_reason, is_likely_truncated, maybe_append_continuation_hint
 from src.commands import execute_agent_command, get_agent_prompt_override
 
 router = APIRouter()
@@ -67,6 +68,11 @@ async def chat(request: ChatRequest):
 
         last_msg = result["messages"][-1]
         reply_text = last_msg.content or "抱歉，我没有理解您的问题。"
+
+        # 检测 LLM 输出截断（finish_reason=length 或文本 abrupt ending）
+        finish_reason = get_finish_reason(last_msg)
+        if is_likely_truncated(reply_text, finish_reason):
+            reply_text = maybe_append_continuation_hint(reply_text, finish_reason)
 
         return ChatResponse(reply=reply_text, thread_id=thread_id)
     except TimeoutError:

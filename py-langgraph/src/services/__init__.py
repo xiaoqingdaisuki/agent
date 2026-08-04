@@ -360,6 +360,11 @@ class AgentService:
         try:
             from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
             from src.agents.deadline import AgentDeadline
+            from src.agents.response_handler import (
+                get_finish_reason,
+                is_likely_truncated,
+                maybe_append_continuation_hint,
+            )
             from src.commands import execute_agent_command, get_agent_prompt_override
             from src.profile.service import HistoryService, MemoryService, ProfileService
 
@@ -412,6 +417,13 @@ class AgentService:
                     )
 
             reply_content = result["messages"][-1].content or "抱歉，我没有理解您的问题。"
+
+            # 检测 LLM 输出截断
+            last_ai_msg = result["messages"][-1]
+            finish_reason = get_finish_reason(last_ai_msg)
+            if is_likely_truncated(reply_content, finish_reason):
+                reply_content = maybe_append_continuation_hint(reply_content, finish_reason)
+
             reply = Message("assistant", reply_content)
             ConversationService.append_assistant_message(conversation_id, reply)
 
@@ -462,6 +474,7 @@ class AgentService:
         try:
             from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
             from src.agents.deadline import AgentDeadline
+            from src.agents.response_handler import maybe_append_continuation_hint
             from src.commands import execute_agent_command, get_agent_prompt_override
             from src.profile.service import HistoryService, MemoryService, ProfileService
 
@@ -525,9 +538,10 @@ class AgentService:
                             yield {"type": "text", "text": chunk.content}
 
             if full_answer:
+                final_answer = maybe_append_continuation_hint(full_answer)
                 ConversationService.append_assistant_message(
                     conversation_id,
-                    Message("assistant", full_answer),
+                    Message("assistant", final_answer),
                 )
 
             # Record Q&A + extract memories
@@ -540,11 +554,19 @@ class AgentService:
                     pass
 
         except TimeoutError:
-            raise BusinessError(
-                BusinessErrorCode.AGENT_TIMEOUT,
-                "AI助手响应超时，请稍后重试。",
-                504,
-            )
+            if full_answer:
+                partial = maybe_append_continuation_hint(full_answer)
+                ConversationService.append_assistant_message(
+                    conversation_id,
+                    Message("assistant", partial),
+                )
+                yield {"type": "text", "text": partial, "partial": True}
+            else:
+                raise BusinessError(
+                    BusinessErrorCode.AGENT_TIMEOUT,
+                    "AI助手响应超时，请稍后重试。",
+                    504,
+                )
         except BusinessError:
             raise
         except Exception as error:
