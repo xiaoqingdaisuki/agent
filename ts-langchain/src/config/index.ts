@@ -11,27 +11,27 @@ const envSchema = z.object({
   AGENT_DEADLINE_MS: z.coerce
     .number()
     .int()
-    .min(5_000)
-    .max(40_000)
-    .default(30_000),
+    .min(30_000)
+    .max(300_000)
+    .default(120_000),
   AGENT_DEADLINE_WITH_TOOLS_MS: z.coerce
     .number()
     .int()
-    .min(35_000)
-    .max(120_000)
-    .default(90_000),
+    .min(60_000)
+    .max(600_000)
+    .default(300_000),
   SERVER_REQUEST_TIMEOUT_MS: z.coerce
     .number()
     .int()
-    .min(10_000)
-    .max(130_000)
-    .default(100_000),
+    .min(60_000)
+    .max(600_000)
+    .default(310_000),
   LLM_TIMEOUT_MS: z.coerce
     .number()
     .int()
-    .min(1_000)
-    .max(30_000)
-    .default(12_000),
+    .min(5_000)
+    .max(120_000)
+    .default(30_000),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(2).default(1),
   MAX_AGENT_ITERATIONS: z.coerce.number().int().min(1).max(8).default(6),
   PORT: z.coerce.number().default(6001),

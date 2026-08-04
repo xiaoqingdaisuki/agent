@@ -6,10 +6,10 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str | None = None
     image_model: str = "step-image-edit-2"
-    agent_deadline_ms: int = 30000
-    agent_deadline_with_tools_ms: int = 90000
-    server_request_timeout_ms: int = 100000
-    llm_timeout_ms: int = 12000
+    agent_deadline_ms: int = 120000
+    agent_deadline_with_tools_ms: int = 300000
+    server_request_timeout_ms: int = 310000
+    llm_timeout_ms: int = 30000
     llm_max_retries: int = 1
     max_agent_iterations: int = 6
     anthropic_api_key: str = ""
