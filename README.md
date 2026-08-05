@@ -22,7 +22,13 @@ agent/
 │   ├── src/
 │   │   ├── agents/
 │   │   │   ├── chat-agent.ts       # 对话 Agent（ChatOpenAI 封装）
-│   │   │   └── tool-agent.ts       # 工具调用 Agent
+│   │   │   ├── tool-agent.ts       # 工具调用 Agent
+│   │   │   ├── deadline.ts         # Agent 执行超时控制
+│   │   │   └── response-handler.ts # 响应格式化处理
+│   │   ├── services/
+│   │   │   └── index.ts            # Service Layer（业务编排）
+│   │   ├── commands/
+│   │   │   └── index.ts            # CLI 命令入口
 │   │   ├── rag/
 │   │   │   ├── loader.ts           # 文档加载（TXT, MD）
 │   │   │   ├── splitter.ts         # 文本切分（递归字符切分）
@@ -30,14 +36,14 @@ agent/
 │   │   │   ├── vector-store.ts     # Qdrant 向量存储
 │   │   │   ├── retriever.ts        # 检索器
 │   │   │   └── rag-agent.ts        # RAG Agent
-│   │   ├── services/
-│   │   │   └── index.ts            # Service Layer（业务编排）
 │   │   ├── tools/
 │   │   │   ├── registry.ts         # 工具注册中心
 │   │   │   ├── contracts.ts        # ToolDescriptor / ToolCategory 定义
+│   │   │   ├── index.ts            # 工具统一导出
 │   │   │   ├── runtime/
 │   │   │   │   ├── index.ts        # 运行时导出
-│   │   │   │   └── executor.ts     # ToolExecutor 安全执行器
+│   │   │   │   ├── executor.ts     # ToolExecutor 安全执行器
+│   │   │   │   └── data-redaction.ts # 数据脱敏
 │   │   │   ├── weather.ts          # 天气查询
 │   │   │   ├── web-search.ts       # 联网搜索
 │   │   │   ├── web-read.ts         # 网页读取
@@ -75,9 +81,12 @@ agent/
 │   ├── src/
 │   │   ├── agents/
 │   │   │   ├── base.py            # 通用图构建基类（AgentState, get_llm）
-│   │   │   ├── chat_agent.py      # 对话 Agent（StateGraph: node=model）
-│   │   │   ├── tool_agent.py      # 工具调用 Agent（StateGraph + ToolNode + 条件边）
-│   │   │   └── rag_agent.py       # RAG Agent（StateGraph: retrieve → grade → generate）
+│   │   │   ├── deadline.py        # Agent 执行超时控制
+│   │   │   └── response_handler.py # 响应格式化处理
+│   │   ├── services/
+│   │   │   └── __init__.py        # Service Layer（业务编排）
+│   │   ├── commands/
+│   │   │   └── __init__.py        # CLI 命令入口
 │   │   ├── rag/
 │   │   │   ├── loader.py          # 文档加载（TXT, MD）
 │   │   │   ├── splitter.py        # 文本切分（递归字符切分）
@@ -85,11 +94,10 @@ agent/
 │   │   │   ├── vector_store.py    # Qdrant 向量存储
 │   │   │   ├── retriever.py       # 检索器
 │   │   │   └── rag_agent.py       # RAG Agent（LangGraph 图）
-│   │   ├── services/
-│   │   │   └── __init__.py        # Service Layer（业务编排）
 │   │   ├── tools/
 │   │   │   ├── registry.py        # 工具注册中心（ToolRegistry + 权限裁剪）
 │   │   │   ├── contracts.py       # ToolDescriptor / ToolCategory / ToolRisk 定义
+│   │   │   ├── __init__.py        # 工具统一导出
 │   │   │   ├── weather.py         # 天气查询
 │   │   │   ├── search.py          # 联网搜索
 │   │   │   ├── fetcher.py         # 网页读取
@@ -101,7 +109,8 @@ agent/
 │   │   │   ├── observability.py   # 可观测性（审计日志）
 │   │   │   └── runtime/
 │   │   │       ├── __init__.py    # 运行时导出
-│   │   │       └── executor.py    # ToolExecutor 安全执行器
+│   │   │       ├── executor.py    # ToolExecutor 安全执行器
+│   │   │       └── data_redaction.py # 数据脱敏
 │   │   ├── profile/
 │   │   │   ├── models.py          # UserProfile / Memory / QARecord / ProfileStore
 │   │   │   └── service.py         # ProfileService（画像 + 记忆 + 问答历史）
@@ -122,6 +131,10 @@ agent/
 │   │       └── settings.py        # 环境变量配置（Pydantic Settings）
 │   ├── pyproject.toml
 │   ├── requirements.txt
+│   ├── Dockerfile
+│   ├── .dockerignore
+│   ├── .editorconfig
+│   ├── .gitignore
 │   └── .env.example
 │
 ├── contracts/
