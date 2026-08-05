@@ -14,7 +14,6 @@ import {
   clearHistory,
   appendMessage,
 } from "../memory/conversation.js";
-import { RAGAgent } from "../rag/rag-agent.js";
 import { DocumentLoader } from "../rag/loader.js";
 import { TextSplitter } from "../rag/splitter.js";
 import {
@@ -22,6 +21,7 @@ import {
   ProfileService,
   HistoryService,
 } from "../profile/service.js";
+import { CloudflareMemoryClient } from "../clients/memory_gateway.js";
 import {
   AIMessage,
   HumanMessage,
@@ -137,6 +137,7 @@ export interface SearchResult {
   content: string;
   score: number;
   page?: number;
+  chunk_index?: number;
 }
 
 export interface Capabilities {
@@ -615,24 +616,29 @@ const documentContents = new Map<
   { content: string; filename: string }
 >();
 
+// 共享知识库用户 ID（服务间共享文档）
+const KNOWLEDGE_USER_ID = "default";
+
+/**
+ * 将 base64 内容解码为字符串（Cloudflare Workers 兼容）
+ */
+function decodeBase64Content(base64: string): { text: string; bytes: number } {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  const text = new TextDecoder().decode(bytes);
+  return { text, bytes: bytes.length };
+}
+
 export class KnowledgeService {
-  private static ragAgent: RAGAgent | null = null;
+  private static client = new CloudflareMemoryClient({
+    baseUrl: process.env.CLOUDFLARE_MEMORY_BASE_URL || "http://localhost:8787",
+    secret: process.env.CLOUDFLARE_MEMORY_SECRET || "",
+  });
+
   private static splitter = new TextSplitter();
-
-  // 懒加载或获取已有 RAG Agent 实例
-  private static getRAGAgent() {
-    if (!this.ragAgent) {
-      this.ragAgent = new RAGAgent({
-        qdrantUrl: process.env.QDRANT_URL || "http://localhost:6333",
-        collectionName: "documents",
-      });
-    }
-    return this.ragAgent;
-  }
-
-  static async chat(content: string, history: any[] = []) {
-    return this.getRAGAgent().chat(content, history);
-  }
 
   /**
    * 上传文档
@@ -643,17 +649,23 @@ export class KnowledgeService {
     category?: string,
   ): Promise<Document> {
     try {
+      const base64 = buffer.toString("base64");
+      const result = await this.client.uploadDocument(
+        KNOWLEDGE_USER_ID,
+        filename,
+        base64,
+        undefined,
+        category || "general",
+      );
+
       const doc = await DocumentLoader.loadFromBuffer(buffer, filename);
       const chunks = this.splitter.split(doc);
 
-      // 索引到向量库
-      await this.getRAGAgent().indexDocument(doc.content, filename, doc.id);
-
       const document: Document = {
-        id: doc.id,
+        id: result.id,
         name: filename,
         size: doc.metadata.size,
-        status: "indexed",
+        status: result.status === "failed" ? "failed" : "indexed",
         chunks: chunks.length,
         category,
         createdAt: new Date().toISOString(),
@@ -693,7 +705,11 @@ export class KnowledgeService {
    */
   static async deleteDocument(id: string): Promise<boolean> {
     if (!documents.has(id)) return false;
-    await this.getRAGAgent().deleteDocument(id);
+    try {
+      await this.client.deleteDocument(id);
+    } catch {
+      // 忽略 Gateway 错误，清理本地缓存
+    }
     documentContents.delete(id);
     return documents.delete(id);
   }
@@ -719,16 +735,45 @@ export class KnowledgeService {
         404,
       );
     }
-    doc.status = "indexing";
-    await this.getRAGAgent().deleteDocument(id);
-    const result = await this.getRAGAgent().indexDocument(
-      source.content,
-      source.filename,
-      id,
-    );
-    doc.status = "indexed";
-    doc.chunks = result.chunks;
-    return doc;
+
+    try {
+      // 先删除旧索引
+      await this.client.deleteDocument(id);
+
+      // 重新上传
+      const buffer = Buffer.from(source.content);
+      return this.uploadDocument(buffer, source.filename, doc.category);
+    } catch (error: any) {
+      throw new BusinessError(
+        BusinessErrorCode.INTERNAL_ERROR,
+        `文档重新索引失败: ${error.message}`,
+        500,
+      );
+    }
+  }
+
+  /**
+   * 知识模式对话（搜索文档 + 生成回答）
+   */
+  static async chat(content: string, _history: any[] = []): Promise<any> {
+    const results = await this.search(content, 5);
+
+    if (results.length === 0) {
+      return {
+        output: "📚 知识库中未找到与您问题相关的内容。请尝试换一种方式提问，或联系管理员更新知识库。",
+      };
+    }
+
+    const context = results
+      .map(
+        (r, i) =>
+          `[文档 ${i + 1}] ${r.document_name} (相关度: ${r.score.toFixed(2)})\n${r.content}`,
+      )
+      .join("\n\n");
+
+    return {
+      output: `📚 根据知识库检索结果：\n\n${context}`,
+    };
   }
 
   /**
@@ -739,17 +784,18 @@ export class KnowledgeService {
     topK: number = 5,
   ): Promise<SearchResult[]> {
     try {
-      const results = await this.getRAGAgent()["retriever"].retrieve(
+      const result = await this.client.searchDocuments(
+        KNOWLEDGE_USER_ID,
         query,
-        topK,
+        { limit: topK },
       );
 
-      return results.map((r) => ({
-        document_id: r.metadata.source,
-        document_name: r.metadata.filename,
+      return result.results.map((r) => ({
+        document_id: r.document_id,
+        document_name: (r.metadata.document_name as string) || (r.metadata.filename as string) || "未知文档",
         content: r.content,
         score: r.score,
-        page: r.metadata.chunkIndex,
+        chunk_index: r.chunk_index,
       }));
     } catch (error: any) {
       throw new BusinessError(

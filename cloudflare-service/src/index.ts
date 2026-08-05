@@ -15,6 +15,7 @@ import { registerProfileRoutes } from "./routes/profile.js";
 import { registerConversationRoutes } from "./routes/conversation.js";
 import { registerMessageRoutes } from "./routes/message.js";
 import { registerMemoryRoutes } from "./routes/memory.js";
+import { registerDocumentRoutes } from "./routes/document.js";
 import { registerOpenApiRoute } from "./routes/openapi.js";
 
 // 扩展 Hono Context 类型
@@ -77,6 +78,7 @@ registerProfileRoutes(app);
 registerConversationRoutes(app);
 registerMessageRoutes(app);
 registerMemoryRoutes(app);
+registerDocumentRoutes(app);
 registerOpenApiRoute(app);
 
 // 根路径

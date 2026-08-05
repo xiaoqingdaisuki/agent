@@ -1,105 +1,76 @@
 """
-RAG 向量存储 — Qdrant
+RAG 向量存储 — Cloudflare Service（通过 Memory Gateway）
 """
 
-from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    Distance,
-    FieldCondition,
-    Filter,
-    MatchValue,
-    PointStruct,
-    VectorParams,
-)
+from typing import Any
 
-from src.rag.embedder import Embedder
+from src.clients.memory_gateway import CloudflareMemoryClient
+from src.config.settings import settings
 
 
 class VectorStore:
-    """Qdrant 向量存储"""
+    """通过 Cloudflare Service Gateway 操作文档向量"""
 
-    # 初始化 Qdrant 客户端和集合名称
     def __init__(
         self,
-        url: str = "http://localhost:6333",
+        url: str = "",
         api_key: str | None = None,
         collection_name: str = "documents",
     ):
-        self.client = QdrantClient(url=url, api_key=api_key)
-        self.collection_name = collection_name
-        self.embedder = Embedder()
+        # 保持接口兼容，实际参数来自 CloudflareMemoryClient
+        self._client = CloudflareMemoryClient(
+            base_url=url or settings.memory_gateway_base_url,
+            secret=api_key or settings.memory_gateway_secret,
+        )
+        self._collection_name = collection_name
 
     async def ensure_collection(self, dimensions: int = 1536) -> None:
-        """确保 collection 存在"""
-        collections = self.client.get_collections().collections
-        exists = any(c.name == self.collection_name for c in collections)
-
-        if not exists:
-            self.client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(size=dimensions, distance=Distance.COSINE),
-            )
+        """确保 collection 存在（Cloudflare Vectorize 无需手动创建）"""
+        return
 
     async def add_documents(self, chunks: list[dict], content_field: str = "content") -> None:
-        """添加文档到向量库"""
-        await self.ensure_collection()
+        """上传文档到 Cloudflare Service"""
+        import base64
+        import hashlib
 
-        texts = [chunk[content_field] for chunk in chunks]
-        embeddings = await self.embedder.embed_batch(texts)
+        # 将块内容合并为完整文档
+        full_content = "\n\n".join(chunk[content_field] for chunk in chunks)
+        content_hash = hashlib.sha256(full_content.encode()).hexdigest()
 
-        points = []
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-            points.append(
-                PointStruct(
-                    id=hash(chunk.get("id", f"chunk_{i}")) % (2**63),
-                    vector=embedding,
-                    payload={
-                        "content": chunk[content_field],
-                        "metadata": chunk.get("metadata", {}),
-                    },
-                )
-            )
+        # 取第一个 chunk 的 metadata 中的 document_id 作为文件名
+        doc_id = chunks[0].get("metadata", {}).get("document_id", content_hash[:16])
 
-        self.client.upsert(collection_name=self.collection_name, points=points)
+        # 使用默认用户上传（共享知识库）
+        await self._client.upload_document(
+            user_id="default",
+            filename=f"{self._collection_name}_{doc_id}",
+            content=base64.b64encode(full_content.encode()).decode(),
+            category="general",
+        )
 
     async def search(
         self,
         query: str,
         top_k: int = 5,
     ) -> list[dict]:
-        """向量搜索"""
-        query_embedding = await self.embedder.embed(query)
-
-        results = self.client.search(
-            collection_name=self.collection_name,
-            query_vector=query_embedding,
+        """向量搜索文档"""
+        result = await self._client.search_documents(
+            user_id="default",
+            query=query,
             limit=top_k,
         )
-
         return [
             {
-                "content": r.payload.get("content", ""),
-                "score": r.score,
-                "metadata": r.payload.get("metadata", {}),
+                "content": r["content"],
+                "score": r["score"],
+                "metadata": r.get("metadata", {}),
             }
-            for r in results
+            for r in result.get("results", [])
         ]
 
     async def delete_document(self, document_id: str) -> None:
-        """删除一份文档的全部向量。"""
-        self.client.delete(
-            collection_name=self.collection_name,
-            points_selector=Filter(
-                must=[
-                    FieldCondition(
-                        key="metadata.document_id",
-                        match=MatchValue(value=document_id),
-                    )
-                ]
-            ),
-            wait=True,
-        )
+        """删除一份文档的全部向量"""
+        await self._client.delete_document(document_id)
 
     def delete_collection(self) -> None:
-        """删除 collection"""
-        self.client.delete_collection(self.collection_name)
+        """删除 collection（Cloudflare Vectorize 不支持前端删除）"""

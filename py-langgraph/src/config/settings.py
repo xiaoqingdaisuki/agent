@@ -24,8 +24,6 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 6002
     cors_origin: str = ""
-    postgres_uri: str = "postgresql://agent:agent@localhost:5432/agent"
-    qdrant_url: str = "http://localhost:6333"
 
     # ============ Cloudflare Service 配置 ============
     memory_gateway_base_url: str = ""

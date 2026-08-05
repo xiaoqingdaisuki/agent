@@ -143,7 +143,7 @@ export async function saveMemory(
     indexed = true;
   } catch (err) {
     // Vectorize 失败，创建补偿任务
-    await createIndexJob(db, memoryId, "upsert", err);
+    await createIndexJob(db, memoryId, "upsert", "memory", err);
     await db.prepare("UPDATE memories SET index_status = 'failed' WHERE id = ?").bind(memoryId).run();
   }
 
@@ -339,7 +339,7 @@ export async function deleteMemory(db: D1Database, index: VectorizeIndex, id: st
     await index.deleteByIds([id]);
   } catch (err) {
     // Vectorize 删除失败，创建补偿任务
-    await createIndexJob(db, id, "delete", err);
+    await createIndexJob(db, id, "delete", "memory", err);
   }
 
   return true;

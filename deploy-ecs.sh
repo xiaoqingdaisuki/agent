@@ -29,7 +29,7 @@ fi
 
 if [ ! -f "$ENV_FILE" ]; then
   cp .env.ecs.example "$ENV_FILE"
-  echo "Created $ENV_FILE. Fill in OPENAI_API_KEY, POSTGRES_PASSWORD and CORS_ORIGIN, then run this command again."
+  echo "Created $ENV_FILE. Fill in OPENAI_API_KEY and CORS_ORIGIN, then run this command again."
   exit 1
 fi
 
@@ -41,14 +41,6 @@ OPENAI_KEY="$(read_env OPENAI_API_KEY)"
 if [ -z "$OPENAI_KEY" ] || [ "$OPENAI_KEY" = "change-me" ]; then
   echo "OPENAI_API_KEY is not configured in $ENV_FILE."
   exit 1
-fi
-
-if [ "$TARGET" = "python" ] || [ "$TARGET" = "all" ]; then
-  POSTGRES_SECRET="$(read_env POSTGRES_PASSWORD)"
-  if [ -z "$POSTGRES_SECRET" ] || [ "$POSTGRES_SECRET" = "change-me-use-letters-and-numbers" ]; then
-    echo "POSTGRES_PASSWORD is not configured in $ENV_FILE."
-    exit 1
-  fi
 fi
 
 case "$TARGET" in

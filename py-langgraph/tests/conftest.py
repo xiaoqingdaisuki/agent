@@ -350,6 +350,36 @@ class FakeCloudflareMemoryClient:
     async def clear_user_memories(self, user_id: str):
         return self._repos.memory.clear_user(user_id)
 
+    # Document
+    async def upload_document(self, user_id: str, filename: str, content: str, file_type: str = None, category: str = "general") -> dict:
+        doc_id = f"doc_{hash(filename) % 10**8}"
+        return {
+            "id": doc_id,
+            "user_id": user_id,
+            "name": filename,
+            "filename": filename,
+            "file_type": file_type,
+            "size": len(content),
+            "category": category,
+            "status": "indexed",
+            "chunk_count": 3,
+            "created_at": __import__("datetime").datetime.now().isoformat(),
+            "updated_at": __import__("datetime").datetime.now().isoformat(),
+            "deleted_at": None,
+        }
+
+    def list_documents(self, user_id: str, limit: int = 20, offset: int = 0, category: str = None) -> dict:
+        return {"documents": [], "total": 0}
+
+    async def get_document(self, document_id: str) -> dict | None:
+        return None
+
+    async def delete_document(self, document_id: str) -> bool:
+        return True
+
+    async def search_documents(self, user_id: str, query: str, limit: int = 5, min_score: float = 0.6) -> dict:
+        return {"results": [], "degraded": False}
+
 
 # ============ 全局 fake 实例 ============
 
@@ -375,8 +405,6 @@ def mock_settings(monkeypatch):
         anthropic_model="claude-3-5-haiku-20241022",
         host="0.0.0.0",
         port=6002,
-        postgres_uri="postgresql://test:test@localhost:5432/test",
-        qdrant_url="http://localhost:6333",
     ))
 
 

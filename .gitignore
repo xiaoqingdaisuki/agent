@@ -22,4 +22,4 @@ Thumbs.db
 
 .claude
 *.md
-!ECS_DEPLOYMENT.md
+.dev.vars

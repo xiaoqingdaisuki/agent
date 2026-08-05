@@ -2,7 +2,7 @@
 knowledge.search — 企业知识库检索 Tool
 
 将现有 RAG 检索封装为统一 Tool，接入 Runtime 管线。
-检索前通过 ACL 过滤，返回带文档引用的结构化结果。
+通过 Cloudflare Memory Gateway 访问文档向量。
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from src.tools.contracts import (
     ToolResultMeta,
     SideEffect,
 )
-
 
 from dataclasses import dataclass, field
 
@@ -88,18 +87,18 @@ class KnowledgeSearchInput(BaseModel):
 async def knowledge_search(query: str, top_k: int = 5) -> str:
     """在企业知识库中搜索相关信息。适用于需要从公司文档、产品手册、技术文档等内部资料中查找答案的场景。"""
     try:
-        # 动态导入，避免循环依赖
-        from src.rag.retriever import Retriever
-        from src.config.settings import settings
+        from src.clients.memory_gateway import CloudflareMemoryClient
 
-        retriever = Retriever(
-            qdrant_url=getattr(settings, "qdrant_url", "http://localhost:6333"),
-            collection_name="documents",
-            top_k=top_k,
+        client = CloudflareMemoryClient()
+
+        # 使用默认用户搜索（服务间共享知识库）
+        result = await client.search_documents(
+            user_id="default",
+            query=query,
+            limit=top_k,
         )
 
-        # 直接 await 异步检索（LangGraph 运行在 event loop 内，不可用 asyncio.run）
-        results = await retriever.retrieve_with_context(query)
+        results = result.get("results", [])
 
         if not results:
             return f'📚 知识库中未找到与"{query}"相关的内容。'
@@ -107,13 +106,14 @@ async def knowledge_search(query: str, top_k: int = 5) -> str:
         hits: list[KnowledgeHit] = []
         for r in results:
             meta = r.get("metadata", {})
+            doc_name = meta.get("document_name") or meta.get("filename") or "未知文档"
             hits.append(
                 KnowledgeHit(
-                    doc_id=meta.get("source", "unknown"),
-                    doc_name=meta.get("filename", "未知文档"),
+                    doc_id=r.get("document_id", "unknown"),
+                    doc_name=doc_name,
                     content=r.get("content", ""),
                     score=r.get("score", 0),
-                    chunk_index=meta.get("chunk_index"),
+                    chunk_index=r.get("chunk_index"),
                 )
             )
 

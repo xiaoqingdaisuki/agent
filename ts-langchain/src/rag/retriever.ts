@@ -1,30 +1,34 @@
 /**
- * RAG 检索器
- * 封装向量搜索，对外提供统一接口
+ * RAG 检索器 — Cloudflare Service（通过 Memory Gateway）
+ *
+ * 封装文档向量搜索，对外提供统一接口。
+ * 所有向量操作通过 Cloudflare Service Gateway 进行。
  */
 
-import { Embedder } from "./embedder.js";
 import { VectorStore, SearchResult } from "./vector-store.js";
 
 export interface RetrieverOptions {
-  qdrantUrl: string;
-  collectionName: string;
+  /** Cloudflare Memory Gateway 地址（可选） */
+  baseUrl?: string;
+  /** Gateway 认证密钥 */
+  secret?: string;
+  /** 返回条数 */
   topK?: number;
 }
 
 export class Retriever {
-  private embedder: Embedder;
   private vectorStore: VectorStore;
   private topK: number;
+  private userId: string;
 
-  // 初始化检索器，配置嵌入器和向量存储
-  constructor(options: RetrieverOptions) {
-    this.embedder = new Embedder();
+  // 初始化检索器
+  constructor(options: RetrieverOptions, userId: string) {
     this.vectorStore = new VectorStore({
-      url: options.qdrantUrl,
-      collectionName: options.collectionName,
+      baseUrl: options.baseUrl,
+      secret: options.secret,
     });
     this.topK = options.topK || 5;
+    this.userId = userId;
   }
 
   /**
@@ -34,8 +38,7 @@ export class Retriever {
     query: string,
     topK: number = this.topK,
   ): Promise<SearchResult[]> {
-    const queryEmbedding = await this.embedder.embed(query);
-    return this.vectorStore.search(queryEmbedding, topK);
+    return this.vectorStore.search(this.userId, query, topK);
   }
 
   /**

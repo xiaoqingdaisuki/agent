@@ -32,12 +32,18 @@ import {
   type MessagesPageData,
   type MemoryData,
   type SearchResponseData,
+  type DocumentData,
+  type ChunkData,
+  type DocumentSearchResponseData,
   GatewayResponseSchema,
   UserProfileSchema,
   ConversationSchema,
   MessagesPageSchema,
   MemorySchema,
   SearchResponseSchema,
+  DocumentSchema,
+  ChunkSchema,
+  DocumentSearchResponseSchema,
 } from "./schemas.js";
 
 /**
@@ -496,5 +502,111 @@ export class CloudflareMemoryClient {
       body,
     )) as { data: unknown };
     return validateSearchResponse(result.data);
+  }
+
+  // ============ Document API ==========
+
+  /**
+   * 上传文档
+   */
+  async uploadDocument(
+    userId: string,
+    filename: string,
+    content: string, // base64 encoded
+    fileType?: string,
+    category = "general",
+  ): Promise<DocumentData> {
+    const body: Record<string, unknown> = {
+      user_id: userId,
+      filename,
+      content,
+      category,
+    };
+    if (fileType) body.file_type = fileType;
+
+    const result = validateGatewayResponse(await this.request(
+      "POST",
+      "/internal/v1/documents",
+      body,
+    )) as { data: unknown };
+    return (result.data as { document: DocumentData }).document;
+  }
+
+  /**
+   * 列出用户文档
+   */
+  async listDocuments(
+    userId: string,
+    options: { limit?: number; offset?: number; category?: string } = {},
+  ): Promise<{ documents: DocumentData[]; total: number }> {
+    const params = new URLSearchParams();
+    params.set("user_id", userId);
+    if (options.category) params.set("category", options.category);
+    params.set("limit", String(options.limit ?? 20));
+    params.set("offset", String(options.offset ?? 0));
+
+    const result = validateGatewayResponse(await this.request(
+      "GET",
+      `/internal/v1/documents?${params.toString()}`,
+    )) as { data: unknown };
+    return result.data as { documents: DocumentData[]; total: number };
+  }
+
+  /**
+   * 获取文档详情
+   */
+  async getDocument(documentId: string): Promise<{ document: DocumentData; chunks: ChunkData[] } | null> {
+    try {
+      const result = validateGatewayResponse(await this.request(
+        "GET",
+        `/internal/v1/documents/${encodeURIComponent(documentId)}`,
+      )) as { data: unknown };
+      return result.data as { document: DocumentData; chunks: ChunkData[] };
+    } catch (error) {
+      if ((error as MemoryGatewayError).code === "DOCUMENT_NOT_FOUND") {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * 删除文档
+   */
+  async deleteDocument(documentId: string): Promise<boolean> {
+    try {
+      await this.request(
+        "DELETE",
+        `/internal/v1/documents/${encodeURIComponent(documentId)}`,
+      );
+      return true;
+    } catch (error) {
+      if ((error as MemoryGatewayError).code === "DOCUMENT_NOT_FOUND") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * 语义搜索文档
+   */
+  async searchDocuments(
+    userId: string,
+    query: string,
+    options: { limit?: number; minScore?: number } = {},
+  ): Promise<DocumentSearchResponseData> {
+    const body: Record<string, unknown> = {
+      user_id: userId,
+      query,
+      limit: options.limit ?? 5,
+      min_score: options.minScore ?? 0.6,
+    };
+    const result = validateGatewayResponse(await this.request(
+      "POST",
+      "/internal/v1/documents:search",
+      body,
+    )) as { data: unknown };
+    return result.data as DocumentSearchResponseData;
   }
 }

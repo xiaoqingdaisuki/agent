@@ -57,7 +57,7 @@ class TestHitsToText:
 class TestKnowledgeSearchTool:
     @pytest.mark.asyncio
     async def test_tool_returns_string(self):
-        """知识库搜索在没有真实 Qdrant 时返回错误或空结果"""
+        """知识库搜索在没有真实 Gateway 时返回错误或空结果"""
         result = await knowledge_search.ainvoke({"query": "test", "top_k": 3})
         assert isinstance(result, str)
         assert len(result) > 0

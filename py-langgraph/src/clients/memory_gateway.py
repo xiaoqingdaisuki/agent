@@ -26,6 +26,10 @@ from src.clients.schemas import (
     MemorySearchResultData,
     MessagesPageData,
     SearchResponseData,
+    DocumentData,
+    ChunkData,
+    DocumentSearchResultData,
+    DocumentSearchResponseData,
 )
 
 
@@ -233,3 +237,65 @@ class CloudflareMemoryClient:
             body["category"] = category
         result = await self._request("POST", f"/internal/v1/users/{user_id}/memories:search", body)
         return SearchResponseData.model_validate(result.get("data", {})).model_dump()
+
+    # ============ Document ============
+
+    async def upload_document(self, user_id: str, filename: str, content: str, file_type: str | None = None, category: str = "general") -> dict:
+        """上传文档（content 为 base64 编码）"""
+        body: dict[str, Any] = {
+            "user_id": user_id,
+            "filename": filename,
+            "content": content,
+            "category": category,
+        }
+        if file_type:
+            body["file_type"] = file_type
+        result = await self._request("POST", "/internal/v1/documents", body)
+        return DocumentData.model_validate(result.get("data", {}).get("document")).model_dump()
+
+    async def list_documents(self, user_id: str, limit: int = 20, offset: int = 0, category: str | None = None) -> dict:
+        """列出用户文档"""
+        params = f"?user_id={user_id}&limit={limit}&offset={offset}"
+        if category:
+            params += f"&category={category}"
+        result = await self._request("GET", f"/internal/v1/documents{params}")
+        data = result.get("data", {})
+        return {
+            "documents": [DocumentData.model_validate(d).model_dump() for d in data.get("documents", [])],
+            "total": data.get("total", 0),
+        }
+
+    async def get_document(self, document_id: str) -> dict | None:
+        """获取文档详情"""
+        try:
+            result = await self._request("GET", f"/internal/v1/documents/{document_id}")
+            data = result.get("data", {})
+            return {
+                "document": DocumentData.model_validate(data.get("document")).model_dump(),
+                "chunks": [ChunkData.model_validate(c).model_dump() for c in data.get("chunks", [])],
+            }
+        except MemoryGatewayError as e:
+            if e.code == "DOCUMENT_NOT_FOUND":
+                return None
+            raise
+
+    async def delete_document(self, document_id: str) -> bool:
+        """删除文档"""
+        try:
+            await self._request("DELETE", f"/internal/v1/documents/{document_id}")
+            return True
+        except MemoryGatewayError as e:
+            if e.code == "DOCUMENT_NOT_FOUND":
+                return False
+            raise
+
+    async def search_documents(self, user_id: str, query: str, limit: int = 5, min_score: float = 0.6) -> dict:
+        """语义搜索文档"""
+        body: dict[str, Any] = {
+            "user_id": user_id,
+            "query": query,
+            "limit": limit,
+            "min_score": min_score,
+        }
+        result = await self._request("POST", "/internal/v1/documents:search", body)
+        return DocumentSearchResponseData.model_validate(result.get("data", {})).model_dump()

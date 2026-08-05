@@ -1,22 +1,32 @@
 /**
  * IndexJobService — 索引补偿任务
  *
- * 处理 D1 ↔ Vectorize 之间非原子写入的补偿
+ * 处理 D1 ↔ Vectorize 之间非原子写入的补偿。
+ * 支持两种实体类型：memory（长期记忆）和 document_chunk（文档块）。
  */
 
 import { getConfig, DEFAULTS, RETRY_BACKOFF_SECONDS } from "../config/index.js";
-import { getEmbedding } from "./embedding.js";
+import { getEmbedding, getEmbeddingBatch } from "./embedding.js";
+
+// 实体类型
+export type EntityType = "memory" | "document_chunk";
 
 // 创建索引任务
-export async function createIndexJob(db: D1Database, memoryId: string, operation: "upsert" | "delete", lastError?: any): Promise<void> {
+export async function createIndexJob(
+  db: D1Database,
+  entityId: string,
+  operation: "upsert" | "delete",
+  entityType: EntityType = "memory",
+  lastError?: any,
+): Promise<void> {
   const now = new Date().toISOString();
   const errorMessage = lastError instanceof Error ? lastError.message : String(lastError ?? "");
 
   await db
     .prepare(
-      "INSERT INTO memory_index_jobs (id, memory_id, operation, status, retry_count, next_retry_at, last_error, created_at, updated_at) VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?)",
+      "INSERT INTO memory_index_jobs (id, memory_id, operation, entity_type, status, retry_count, next_retry_at, last_error, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)",
     )
-    .bind(crypto.randomUUID(), memoryId, operation, now, errorMessage || null, now, now)
+    .bind(crypto.randomUUID(), entityId, operation, entityType, now, errorMessage || null, now, now)
     .run();
 }
 
@@ -38,31 +48,16 @@ export async function processPendingJobs(db: D1Database, index: VectorizeIndex, 
     try {
       await db.prepare("UPDATE memory_index_jobs SET status = 'processing', updated_at = ? WHERE id = ?").bind(new Date().toISOString(), job.id).run();
 
-      if (job.operation === "upsert") {
-        const memory = await db.prepare("SELECT * FROM memories WHERE id = ?").bind(job.memory_id).first<any>();
-        if (!memory || memory.status === "deleted") {
-          await db.prepare("UPDATE memory_index_jobs SET status = 'done', updated_at = ? WHERE id = ?").bind(new Date().toISOString(), job.id).run();
-          processed++;
-          continue;
-        }
+      const entityType = job.entity_type || "memory";
 
-        const embedding = await getEmbedding(ai, memory.content);
-        await index.upsert([
-          {
-            id: memory.id,
-            values: embedding,
-            metadata: { user_id: memory.user_id, category: memory.category, active: true, embedding_version: memory.embedding_version },
-          },
-        ]);
-
-        await db.prepare("UPDATE memories SET index_status = 'ready' WHERE id = ?").bind(memory.id).run();
-        await db.prepare("UPDATE memory_index_jobs SET status = 'done', updated_at = ? WHERE id = ?").bind(new Date().toISOString(), job.id).run();
-        processed++;
-      } else if (job.operation === "delete") {
-        await index.deleteByIds([job.memory_id]);
-        await db.prepare("UPDATE memory_index_jobs SET status = 'done', updated_at = ? WHERE id = ?").bind(new Date().toISOString(), job.id).run();
-        processed++;
+      if (entityType === "document_chunk") {
+        await processDocumentChunkJob(db, index, ai, job);
+      } else {
+        await processMemoryJob(db, index, ai, job);
       }
+
+      await db.prepare("UPDATE memory_index_jobs SET status = 'done', updated_at = ? WHERE id = ?").bind(new Date().toISOString(), job.id).run();
+      processed++;
     } catch (err) {
       const retryCount = job.retry_count + 1;
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -85,6 +80,90 @@ export async function processPendingJobs(db: D1Database, index: VectorizeIndex, 
   }
 
   return { processed, failed };
+}
+
+// 处理记忆索引任务
+async function processMemoryJob(db: D1Database, index: VectorizeIndex, ai: Ai, job: any): Promise<void> {
+  if (job.operation === "upsert") {
+    const memory = await db.prepare("SELECT * FROM memories WHERE id = ?").bind(job.memory_id).first<any>();
+    if (!memory || memory.status === "deleted") {
+      return;
+    }
+
+    const embedding = await getEmbedding(ai, memory.content);
+    await index.upsert([
+      {
+        id: memory.id,
+        values: embedding,
+        metadata: { user_id: memory.user_id, category: memory.category, active: true, embedding_version: memory.embedding_version },
+      },
+    ]);
+
+    await db.prepare("UPDATE memories SET index_status = 'ready' WHERE id = ?").bind(memory.id).run();
+  } else if (job.operation === "delete") {
+    await index.deleteByIds([job.memory_id]);
+  }
+}
+
+// 处理文档块索引任务
+async function processDocumentChunkJob(db: D1Database, index: VectorizeIndex, ai: Ai, job: any): Promise<void> {
+  // 从 memory_id 字段获取 document_id
+  const documentId = job.memory_id;
+
+  if (job.operation === "upsert") {
+    // 获取文档的所有块
+    const { results: chunks } = await db
+      .prepare("SELECT * FROM chunks WHERE document_id = ?")
+      .bind(documentId)
+      .all<any>();
+
+    const chunkList = (chunks as any[]) ?? [];
+    if (chunkList.length === 0) {
+      // 文档已被删除，标记完成
+      await db.prepare("UPDATE documents SET status = 'failed' WHERE id = ?").bind(documentId).run();
+      return;
+    }
+
+    // 重新生成 embedding
+    const texts = chunkList.map((c) => c.content);
+    const embeddings = await getEmbeddingBatch(ai, texts);
+
+    // 构建 Vectorize upsert 数据
+    const vectors = chunkList.map((chunk, i) => ({
+      id: `doc_${chunk.id}`,
+      values: embeddings[i],
+      metadata: {
+        entity_type: "document_chunk",
+        document_id: documentId,
+        user_id: chunk.user_id,
+        chunk_index: chunk.chunk_index,
+      },
+    }));
+
+    await index.upsert(vectors);
+
+    // 更新 vectorize_id
+    for (let i = 0; i < chunkList.length; i++) {
+      await db
+        .prepare("UPDATE chunks SET vectorize_id = ? WHERE id = ?")
+        .bind(`doc_${chunkList[i].id}`, chunkList[i].id)
+        .run();
+    }
+
+    await db.prepare("UPDATE documents SET status = 'indexed', updated_at = ? WHERE id = ?").bind(new Date().toISOString(), documentId).run();
+
+  } else if (job.operation === "delete") {
+    // 获取所有块的 vectorize_id
+    const { results: chunks } = await db
+      .prepare("SELECT vectorize_id FROM chunks WHERE document_id = ? AND vectorize_id IS NOT NULL")
+      .bind(documentId)
+      .all<any>();
+
+    const vectorizeIds = (chunks as any[]).map((c) => c.vectorize_id).filter(Boolean);
+    if (vectorizeIds.length > 0) {
+      await index.deleteByIds(vectorizeIds);
+    }
+  }
 }
 
 // 重试失败的任务

@@ -88,7 +88,53 @@ export const SearchResponseSchema = z.object({
   degraded: z.boolean(),
 });
 
-// ============ 统一响应格式 ==========
+// ============ 文档模型 ==========
+
+export const DocumentSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  name: z.string(),
+  filename: z.string(),
+  file_type: z.string().nullable(),
+  size: z.coerce.number().int().nonnegative(),
+  category: z.string(),
+  status: z.enum(["indexed", "failed"]),
+  chunk_count: z.coerce.number().int().nonnegative(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  deleted_at: z.string().nullable(),
+});
+
+export const ChunkSchema = z.object({
+  id: z.string(),
+  document_id: z.string(),
+  user_id: z.string(),
+  chunk_index: z.coerce.number().int().nonnegative(),
+  content: z.string(),
+  content_hash: z.string(),
+  token_count: z.coerce.number().int().nonnegative(),
+  embedding_model: z.string(),
+  embedding_version: z.coerce.number().int().min(1),
+  vectorize_id: z.string().nullable(),
+  created_at: z.string(),
+});
+
+export const DocumentSearchResultSchema = z.object({
+  id: z.string(),
+  document_id: z.string(),
+  chunk_index: z.coerce.number().int(),
+  content: z.string(),
+  score: z.coerce.number(),
+  metadata: z.record(z.string(), z.unknown()),
+  created_at: z.string(),
+});
+
+export const DocumentSearchResponseSchema = z.object({
+  results: z.array(DocumentSearchResultSchema),
+  degraded: z.boolean(),
+});
+
+// ============ 类型导出 ==========
 
 export const GatewayErrorSchema = z.object({
   code: z.string(),
@@ -117,3 +163,7 @@ export type MemoryData = z.infer<typeof MemorySchema>;
 export type MemorySearchResultData = z.infer<typeof MemorySearchResultSchema>;
 export type MessagesPageData = z.infer<typeof MessagesPageSchema>;
 export type SearchResponseData = z.infer<typeof SearchResponseSchema>;
+export type DocumentData = z.infer<typeof DocumentSchema>;
+export type ChunkData = z.infer<typeof ChunkSchema>;
+export type DocumentSearchResultData = z.infer<typeof DocumentSearchResultSchema>;
+export type DocumentSearchResponseData = z.infer<typeof DocumentSearchResponseSchema>;

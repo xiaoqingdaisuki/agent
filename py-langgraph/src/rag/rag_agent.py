@@ -5,6 +5,7 @@ RAG Agent — Python 版（LangGraph 显式图）
 - 显式定义图结构：retrieve → grade → generate
 - 每一步执行路径由你控制
 - 对比 TS 版：Agent 自主决定是否检索
+- 文档向量存储在 Cloudflare Service（Vectorize），通过 Memory Gateway 访问
 """
 
 import operator
@@ -14,7 +15,6 @@ from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
-from src.config.settings import settings
 from src.rag.retriever import Retriever
 
 
@@ -28,9 +28,9 @@ class RAGState(TypedDict):
 
 # 构建 RAG Agent — 显式图编排
 def build_rag_agent(
-    qdrant_url: str = None,
     collection_name: str = "documents",
     top_k: int = 5,
+    qdrant_url: str = "",
 ):
     """
     构建 RAG Agent — 显式图编排
@@ -40,9 +40,9 @@ def build_rag_agent(
                 ├── true  → retrieve → grade → generate → END
                 └── false → generate → END
     """
-    llm = ChatOpenAI(model=settings.openai_model)
+    llm = ChatOpenAI(model="gpt-4o-mini")
     retriever = Retriever(
-        qdrant_url=qdrant_url or settings.qdrant_url,
+        qdrant_url=qdrant_url,
         collection_name=collection_name,
         top_k=top_k,
     )

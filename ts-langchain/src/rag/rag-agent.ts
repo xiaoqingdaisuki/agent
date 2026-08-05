@@ -4,7 +4,7 @@
  * 特点：
  * - 检索器包装成 tool，Agent 自主决定何时检索
  * - createOpenAIToolsAgent 配置驱动，框架内部处理推理循环
- * - 对比 Python 版的显式图：retrieve → grade → generate
+ * - 文档向量存储在 Cloudflare Service（Vectorize），通过 Memory Gateway 访问
  */
 
 import { createOpenAIToolsAgent } from "langchain/agents";
@@ -15,15 +15,16 @@ import {
   MessagesPlaceholder,
 } from "@langchain/core/prompts";
 import { Retriever } from "./retriever.js";
-import { TextSplitter } from "./splitter.js";
-import { DocumentLoader } from "./loader.js";
 import { DynamicStructuredTool } from "langchain/tools";
-import { Embedder } from "./embedder.js";
-import { VectorStore } from "./vector-store.js";
 
 export interface RAGOptions {
-  qdrantUrl: string;
-  collectionName: string;
+  /** 用户 ID（用于文档搜索） */
+  userId: string;
+  /** Cloudflare Memory Gateway 地址 */
+  baseUrl?: string;
+  /** Gateway 认证密钥 */
+  secret?: string;
+  /** 模型名称 */
   model?: string;
 }
 
@@ -31,7 +32,6 @@ export interface RAGOptions {
  * 创建检索器工具
  * 将 RAG 检索包装成 LangChain Tool，Agent 可以自主调用
  */
-// 创建检索器工具，将 RAG 检索包装为 LangChain Tool
 function createRetrieverTool(retriever: Retriever) {
   return new DynamicStructuredTool({
     name: "search_knowledge_base",
@@ -56,7 +56,7 @@ function createRetrieverTool(retriever: Retriever) {
       return results
         .map(
           (r, i) =>
-            `[Document ${i + 1}] (score: ${r.score.toFixed(3)})\n${r.content}\nSource: ${r.metadata.filename}`,
+            `[Document ${i + 1}] (score: ${r.score.toFixed(3)})\n${r.content}\nSource: ${r.metadata.filename || r.metadata.document_name || "unknown"}`,
         )
         .join("\n\n");
     },
@@ -65,23 +65,16 @@ function createRetrieverTool(retriever: Retriever) {
 
 export class RAGAgent {
   private retriever: Retriever;
-  private splitter: TextSplitter;
-  private embedder: Embedder;
-  private vectorStore: VectorStore;
   private agent: Promise<AgentExecutor>;
 
-  // 初始化 RAG Agent，创建底层检索器和声明式 Agent 实例
   constructor(options: RAGOptions) {
-    this.retriever = new Retriever({
-      qdrantUrl: options.qdrantUrl,
-      collectionName: options.collectionName,
-    });
-    this.splitter = new TextSplitter();
-    this.embedder = new Embedder();
-    this.vectorStore = new VectorStore({
-      url: options.qdrantUrl,
-      collectionName: options.collectionName,
-    });
+    this.retriever = new Retriever(
+      {
+        baseUrl: options.baseUrl,
+        secret: options.secret,
+      },
+      options.userId,
+    );
     this.agent = this.createAgent(options);
   }
 
@@ -117,7 +110,6 @@ Be concise and accurate in your responses.`,
       new MessagesPlaceholder("agent_scratchpad"),
     ]);
 
-    // LangChain 声明式：prompt + createOpenAIToolsAgent + AgentExecutor
     const agent = await createOpenAIToolsAgent({
       llm: model as any,
       tools: [retrieverTool] as any,
@@ -132,43 +124,8 @@ Be concise and accurate in your responses.`,
   }
 
   /**
-   * 索引文档
-   */
-  // 索引文档到向量库：加载 → 切分 → 向量化 → 存储
-  async indexDocument(
-    content: string,
-    filename: string,
-    documentId?: string,
-  ): Promise<{ chunks: number }> {
-    const doc = await DocumentLoader.loadFromBuffer(
-      Buffer.from(content),
-      filename,
-    );
-    const chunks = this.splitter.split(doc);
-
-    const embeddings = await this.embedder.embedBatch(
-      chunks.map((chunk) => chunk.text),
-    );
-    await this.vectorStore.addDocuments(
-      chunks.map((chunk) => ({
-        content: chunk.text,
-        metadata: { ...chunk.metadata, document_id: documentId ?? doc.id },
-      })),
-      embeddings,
-    );
-
-    return { chunks: chunks.length };
-  }
-
-  // 从向量库删除指定文档
-  async deleteDocument(documentId: string): Promise<void> {
-    await this.vectorStore.deleteDocuments(documentId);
-  }
-
-  /**
    * 对话
    */
-  // 执行对话，将用户问题提交给 RAG Agent 处理
   async chat(message: string, history: any[] = []) {
     const agent = await this.agent;
     const result = await agent.invoke(

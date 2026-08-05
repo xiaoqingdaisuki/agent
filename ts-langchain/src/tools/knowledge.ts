@@ -2,13 +2,14 @@
  * knowledge.search — 企业知识库检索 Tool
  *
  * 将 RAG 检索封装为统一 Tool，接入 Runtime 管线。
- * 返回带文档引用（doc_id, page, score）的结构化结果。
+ * 通过 Cloudflare Memory Gateway 访问文档向量。
  */
 
 import { DynamicStructuredTool } from "langchain/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";
+import { CloudflareMemoryClient } from "../clients/memory_gateway.js";
 
 // ============ 检索结果模型 ============
 
@@ -78,29 +79,30 @@ export const knowledgeSearchTool: DynamicStructuredTool =
     schema: knowledgeSearchInputSchema,
     func: async ({ query, top_k }) => {
       try {
-        // 动态导入，避免循环依赖
-        const { Retriever } = await import("../rag/retriever.js");
-
-        const retriever = new Retriever({
-          qdrantUrl: process.env.QDRANT_URL || "http://localhost:6333",
-          collectionName: "documents",
-          topK: top_k || 5,
+        const client = new CloudflareMemoryClient({
+          baseUrl: process.env.CLOUDFLARE_MEMORY_BASE_URL || "http://localhost:8787",
+          secret: process.env.CLOUDFLARE_MEMORY_SECRET || "",
         });
 
-        const results = await retriever.retrieve(query);
+        // 使用默认用户搜索（服务间共享知识库）
+        const userId = "default";
+        const result = await client.searchDocuments(userId, query, {
+          limit: top_k || 5,
+        });
 
-        if (!results || results.length === 0) {
+        if (!result.results || result.results.length === 0) {
           return `📚 知识库中未找到与"${query}"相关的内容。`;
         }
 
-        const hits: KnowledgeHit[] = results.map((r) => {
+        const hits: KnowledgeHit[] = result.results.map((r) => {
           const meta = r.metadata || {};
+          const docName = typeof meta.document_name === "string" ? meta.document_name : (typeof meta.filename === "string" ? meta.filename : "未知文档");
           return {
-            doc_id: meta.source || "unknown",
-            doc_name: meta.filename || "未知文档",
+            doc_id: r.document_id,
+            doc_name: docName,
             content: r.content || "",
             score: r.score || 0,
-            chunk_index: meta.chunkIndex,
+            chunk_index: r.chunk_index,
           };
         });
 

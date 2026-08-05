@@ -202,46 +202,37 @@ _document_contents: dict[str, tuple[bytes, str]] = {}
 
 
 class KnowledgeService:
-    # 上传并索引文档到向量库
+    """文档知识库服务 — 通过 Cloudflare Service Gateway"""
+
     @staticmethod
     async def upload_document(buffer: bytes, filename: str, category: str = None) -> Document:
         """上传并索引文档"""
         try:
-            from src.rag.embedder import Embedder
-            from src.config.settings import settings
-            from src.rag.loader import Document as RAGDocument
-            from src.rag.splitter import TextSplitter
-            from src.rag.vector_store import VectorStore
+            import base64
+            import hashlib
 
-            # 加载文档
-            doc = RAGDocument.from_bytes(buffer, filename)
+            from src.clients.memory_gateway import CloudflareMemoryClient
 
-            # 切分
-            splitter = TextSplitter()
-            chunks = splitter.split(doc.content, filename, doc.metadata["source"])
+            client = CloudflareMemoryClient()
+            content_hash = hashlib.sha256(buffer).hexdigest()[:16]
 
-            # 向量化并存储
-            vector_store = VectorStore(
-                url=settings.qdrant_url,
-                collection_name="documents",
+            # 使用默认用户上传（共享知识库）
+            result = await client.upload_document(
+                user_id="default",
+                filename=filename,
+                content=base64.b64encode(buffer).decode(),
+                category=category or "general",
             )
 
             document = Document(
+                id=result["id"],
                 name=filename,
                 size=len(buffer),
-                chunks=len(chunks),
+                chunks=result.get("chunk_count", 0),
                 category=category,
+                status="indexed",
+                created_at=result.get("created_at", datetime.now().isoformat()),
             )
-            chunk_dicts = [
-                {
-                    "id": f"{document.id}:chunk_{i}",
-                    "content": chunk.text,
-                    "metadata": {**chunk.metadata, "document_id": document.id},
-                }
-                for i, chunk in enumerate(chunks)
-            ]
-
-            await vector_store.add_documents(chunk_dicts)
 
             _documents[document.id] = document
             _document_contents[document.id] = (buffer, filename)
@@ -255,8 +246,8 @@ class KnowledgeService:
             )
 
     @staticmethod
-    # 列出所有已索引文档
     def list_documents() -> list[dict]:
+        """列出所有已索引文档"""
         return sorted(
             [d.to_dict() for d in _documents.values()],
             key=lambda d: d["created_at"],
@@ -264,27 +255,30 @@ class KnowledgeService:
         )
 
     @staticmethod
-    # 获取指定文档详情
     def get_document(doc_id: str) -> Document | None:
+        """获取指定文档详情"""
         return _documents.get(doc_id)
 
     @staticmethod
-    # 删除指定文档及其向量索引
     async def delete_document(doc_id: str) -> bool:
+        """删除指定文档及其向量索引"""
         if doc_id not in _documents:
             return False
-        from src.config.settings import settings
-        from src.rag.vector_store import VectorStore
 
-        vector_store = VectorStore(url=settings.qdrant_url, collection_name="documents")
-        await vector_store.delete_document(doc_id)
+        try:
+            from src.clients.memory_gateway import CloudflareMemoryClient
+            client = CloudflareMemoryClient()
+            await client.delete_document(doc_id)
+        except Exception:
+            pass  # 忽略 Gateway 错误，继续清理本地缓存
+
         del _documents[doc_id]
         _document_contents.pop(doc_id, None)
         return True
 
     @staticmethod
-    # 重新索引指定文档
     async def reindex_document(doc_id: str) -> Document:
+        """重新索引指定文档"""
         doc = _documents.get(doc_id)
         if not doc:
             raise BusinessError(BusinessErrorCode.NOT_FOUND, "Document not found", 404)
@@ -292,55 +286,47 @@ class KnowledgeService:
         if source is None:
             raise BusinessError(BusinessErrorCode.NOT_FOUND, "Document content not found", 404)
 
-        from src.config.settings import settings
-        from src.rag.loader import Document as RAGDocument
-        from src.rag.splitter import TextSplitter
-        from src.rag.vector_store import VectorStore
+        try:
+            buffer, filename = source
+            # 先删除旧索引
+            try:
+                from src.clients.memory_gateway import CloudflareMemoryClient
+                client = CloudflareMemoryClient()
+                await client.delete_document(doc_id)
+            except Exception:
+                pass
 
-        buffer, filename = source
-        loaded = RAGDocument.from_bytes(buffer, filename)
-        chunks = TextSplitter().split(loaded.content, filename, loaded.metadata["source"])
-        vector_store = VectorStore(url=settings.qdrant_url, collection_name="documents")
-        await vector_store.delete_document(doc_id)
-        await vector_store.add_documents(
-            [
-                {
-                    "id": f"{doc_id}:chunk_{index}",
-                    "content": chunk.text,
-                    "metadata": {**chunk.metadata, "document_id": doc_id},
-                }
-                for index, chunk in enumerate(chunks)
-            ]
-        )
-        doc.chunks = len(chunks)
-        doc.status = "indexed"
-        return doc
+            # 重新上传
+            return await KnowledgeService.upload_document(buffer, filename, doc.category)
+        except Exception as e:
+            raise BusinessError(
+                BusinessErrorCode.INTERNAL_ERROR,
+                f"文档重新索引失败: {e!s}",
+                500,
+            )
 
     @staticmethod
-    # 在知识库中搜索相关内容
     async def search(query: str, top_k: int = 5) -> list[dict]:
         """知识检索"""
         try:
-            from src.config.settings import settings
-            from src.rag.retriever import Retriever
+            from src.clients.memory_gateway import CloudflareMemoryClient
 
-            retriever = Retriever(
-                qdrant_url=settings.qdrant_url,
-                collection_name="documents",
-                top_k=top_k,
+            client = CloudflareMemoryClient()
+            result = await client.search_documents(
+                user_id="default",
+                query=query,
+                limit=top_k,
             )
 
-            results = await retriever.retrieve(query)
             return [
                 {
-                    "document_id": result["metadata"].get("document_id")
-                    or result["metadata"].get("source", ""),
-                    "document_name": result["metadata"].get("filename", ""),
-                    "content": result["content"],
-                    "score": result["score"],
-                    "page": result["metadata"].get("chunk_index"),
+                    "document_id": r.get("document_id", ""),
+                    "document_name": r.get("metadata", {}).get("document_name", "") or r.get("metadata", {}).get("filename", ""),
+                    "content": r.get("content", ""),
+                    "score": r.get("score", 0),
+                    "page": r.get("chunk_index"),
                 }
-                for result in results
+                for r in result.get("results", [])
             ]
         except Exception:
             raise BusinessError(

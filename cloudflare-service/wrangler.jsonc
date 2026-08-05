@@ -1,53 +1,55 @@
 {
-  "name": "cloudflare-service",
-  "main": "src/index.ts",
-  "compatibility_flags": ["nodejs_compat"],
-  "compatibility_date": "2025-01-01",
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "agent-memory",
-      "database_id": "local-db"
-    }
-  ],
-  "vectorize": [
-    {
-      "binding": "MEMORY_INDEX",
-      "index_name": "memory-embeddings"
-    }
-  ],
-  "ai": {
-    "binding": "AI"
-  },
-  "vars": {
-    "SERVICE_SECRET": "change-me-in-production-use-strong-secret",
-    "EMBEDDING_MODEL": "@cf/baai/bge-m3",
-    "EMBEDDING_DIMENSIONS": 1024,
-    "MAX_MEMORIES_PER_USER": 50,
-    "INDEX_JOB_BATCH_SIZE": 20,
-    "INDEX_JOB_MAX_RETRIES": 5
-  },
-  "dev": {
-    "port": 6100
-  },
-  "staging": {
-    "vars": {
-      "SERVICE_SECRET": "${SERVICE_SECRET}",
-      "EMBEDDING_MODEL": "@cf/baai/bge-m3",
-      "EMBEDDING_DIMENSIONS": 1024,
-      "MAX_MEMORIES_PER_USER": 50,
-      "INDEX_JOB_BATCH_SIZE": 20,
-      "INDEX_JOB_MAX_RETRIES": 5
-    }
-  },
-  "production": {
-    "vars": {
-      "SERVICE_SECRET": "${SERVICE_SECRET}",
-      "EMBEDDING_MODEL": "@cf/baai/bge-m3",
-      "EMBEDDING_DIMENSIONS": 1024,
-      "MAX_MEMORIES_PER_USER": 50,
-      "INDEX_JOB_BATCH_SIZE": 20,
-      "INDEX_JOB_MAX_RETRIES": 5
-    }
-  }
+	"name": "cloudflare-service",
+	"main": "src/index.ts",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"compatibility_date": "2025-01-01",
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "agent-db",
+			"database_id": "0391d7cf-e7f8-4228-b168-d70e0a8fb3ae"
+		}
+	],
+	"vectorize": [
+		{
+			"binding": "MEMORY_INDEX",
+			"index_name": "memory-embeddings"
+		}
+	],
+	"ai": {
+		"binding": "AI"
+	},
+	"vars": {
+		"SERVICE_SECRET": "change-me-in-production-use-strong-secret",
+		"EMBEDDING_MODEL": "@cf/baai/bge-m3",
+		"EMBEDDING_DIMENSIONS": 1024,
+		"MAX_MEMORIES_PER_USER": 50,
+		"INDEX_JOB_BATCH_SIZE": 20,
+		"INDEX_JOB_MAX_RETRIES": 5
+	},
+	"dev": {
+		"port": 6100
+	},
+	"staging": {
+		"vars": {
+			"SERVICE_SECRET": "${SERVICE_SECRET}",
+			"EMBEDDING_MODEL": "@cf/baai/bge-m3",
+			"EMBEDDING_DIMENSIONS": 1024,
+			"MAX_MEMORIES_PER_USER": 50,
+			"INDEX_JOB_BATCH_SIZE": 20,
+			"INDEX_JOB_MAX_RETRIES": 5
+		}
+	},
+	"production": {
+		"vars": {
+			"SERVICE_SECRET": "${SERVICE_SECRET}",
+			"EMBEDDING_MODEL": "@cf/baai/bge-m3",
+			"EMBEDDING_DIMENSIONS": 1024,
+			"MAX_MEMORIES_PER_USER": 50,
+			"INDEX_JOB_BATCH_SIZE": 20,
+			"INDEX_JOB_MAX_RETRIES": 5
+		}
+	}
 }

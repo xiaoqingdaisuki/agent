@@ -9,7 +9,7 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate": "wrangler d1 migrations apply agent-memory --local",
+    "migrate": "wrangler d1 migrations apply agent-db --local",
     "deploy": "wrangler deploy"
   },
   "dependencies": {

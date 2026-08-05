@@ -6,7 +6,7 @@ Gateway 响应数据模型 Pydantic Schemas
 """
 
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -128,6 +128,60 @@ class MessagesPageData(BaseModel):
 
 class SearchResponseData(BaseModel):
     items: list[MemorySearchResultData]
+    degraded: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+# ============ 文档模型 ============
+
+class DocumentData(BaseModel):
+    id: str
+    user_id: str
+    name: str
+    filename: str
+    file_type: Optional[str] = None
+    size: int = 0
+    category: str = "general"
+    status: str  # indexed | failed
+    chunk_count: int = 0
+    created_at: str
+    updated_at: str
+    deleted_at: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ChunkData(BaseModel):
+    id: str
+    document_id: str
+    user_id: str
+    chunk_index: int
+    content: str
+    content_hash: str
+    token_count: int = 0
+    embedding_model: str
+    embedding_version: int = 1
+    vectorize_id: Optional[str] = None
+    created_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class DocumentSearchResultData(BaseModel):
+    id: str
+    document_id: str
+    chunk_index: int
+    content: str
+    score: float
+    metadata: dict[str, Any]
+    created_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class DocumentSearchResponseData(BaseModel):
+    results: list[DocumentSearchResultData]
     degraded: bool = False
 
     model_config = {"from_attributes": True}
