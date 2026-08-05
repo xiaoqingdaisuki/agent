@@ -1,7 +1,7 @@
 """Tests for profile module"""
 
 import pytest
-from src.profile.models import UserProfile, Memory, QARecord, ProfileStore, store
+from src.profile.models import UserProfile, Memory, QARecord
 from src.profile.service import ProfileService, MemoryService, HistoryService
 
 
@@ -14,10 +14,10 @@ class TestUserProfile:
         assert profile.preferences == {}
 
     def test_get_existing_profile(self):
-        """Should return existing profile without overwriting"""
+        """Should return existing profile and update name"""
         ProfileService.get_or_create("user_2", "Bob")
         profile = ProfileService.get_or_create("user_2", "Charlie")
-        assert profile.name == "Bob"  # name unchanged
+        assert profile.name == "Charlie"  # name updated via put
 
     def test_update_profile(self):
         """Should update profile fields"""
@@ -28,8 +28,10 @@ class TestUserProfile:
 
     def test_update_nonexistent_profile(self):
         """Should return None when updating non-existent profile"""
+        # 新行为：update 会创建不存在的 profile（与 get_or_create 一致）
         result = ProfileService.update("nonexistent", name="Test")
-        assert result is None
+        assert result is not None
+        assert result.name == "Test"
 
 
 class TestMemoryService:
@@ -128,9 +130,9 @@ class TestHistoryService:
         """Should record a Q&A pair"""
         ProfileService.get_or_create("user_14")
         record = HistoryService.record("user_14", "conv_1", "你好", "你好呀！")
-        assert record.question == "你好"
-        assert record.answer == "你好呀！"
-        assert record.conversation_id == "conv_1"
+        assert record["question"] == "你好"
+        assert record["answer"] == "你好呀！"
+        assert record["conversation_id"] == "conv_1"
 
     def test_get_history(self):
         """Should retrieve Q&A history"""

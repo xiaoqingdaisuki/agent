@@ -1,6 +1,7 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages";
 import { SYSTEM_PROMPT } from "../prompts/system.js";
+import { ProfileService, MemoryService } from "../profile/service.js";
 import { appendMessage, getHistory } from "../memory/conversation.js";
 
 let chatAgent: ChatOpenAI | null = null;
@@ -38,12 +39,10 @@ export async function chat(
   // 注入用户记忆
   if (userId) {
     try {
-      const { MemoryService, ProfileService } =
-        await import("../profile/service.js");
-      const profile = ProfileService.getOrCreate(userId);
-      const memoryContext = MemoryService.buildMemoryContext(userId);
-      if (memoryContext) {
-        systemPrompt = `${memoryContext}\n\n${SYSTEM_PROMPT}`;
+      const profile = await ProfileService.getOrCreate(userId);
+      const memoryContextStr = await MemoryService.buildMemoryContext(userId);
+      if (memoryContextStr) {
+        systemPrompt = `${memoryContextStr}\n\n${SYSTEM_PROMPT}`;
       }
     } catch {
       // 记忆模块不可用时静默降级

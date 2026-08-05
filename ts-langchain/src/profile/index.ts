@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 
-// ============ User Profile ============
+// ============ User Profile ==========
 
 export interface UserProfile {
   id: string;
@@ -16,7 +16,7 @@ export function createUserProfile(id: string, name: string = ""): UserProfile {
   return { id, name, preferences: {}, created_at: now, last_active_at: now };
 }
 
-// ============ Memory ============
+// ============ Memory ==========
 
 export interface Memory {
   id: string;
@@ -47,7 +47,7 @@ export function createMemory(
   };
 }
 
-// ============ Q&A History ============
+// ============ Q&A History ==========
 
 export interface QARecord {
   id: string;
@@ -75,83 +75,5 @@ export function createQARecord(
   };
 }
 
-// ============ In-Memory Store ============
-
-class ProfileStore {
-  private profiles = new Map<string, UserProfile>();
-  private memories = new Map<string, Memory[]>();
-  private qaRecords = new Map<string, QARecord[]>();
-
-  // 根据用户 ID 获取用户画像
-  getProfile(userId: string): UserProfile | undefined {
-    return this.profiles.get(userId);
-  }
-
-  // 创建或覆盖用户画像
-  createProfile(profile: UserProfile): UserProfile {
-    this.profiles.set(profile.id, profile);
-    return profile;
-  }
-
-  // 更新用户画像字段
-  updateProfile(
-    userId: string,
-    updates: Partial<UserProfile>,
-  ): UserProfile | undefined {
-    const profile = this.profiles.get(userId);
-    if (!profile) return undefined;
-    Object.assign(profile, updates, {
-      last_active_at: new Date().toISOString(),
-    });
-    return profile;
-  }
-
-  // 添加一条记忆
-  addMemory(memory: Memory): Memory {
-    const list = this.memories.get(memory.user_id) || [];
-    list.push(memory);
-    this.memories.set(memory.user_id, list);
-    return memory;
-  }
-
-  // 获取用户的所有记忆，可按类别过滤
-  getMemories(userId: string, category?: string): Memory[] {
-    let memories = this.memories.get(userId) || [];
-    if (category) {
-      memories = memories.filter((m) => m.category === category);
-    }
-    return memories.sort((a, b) => b.importance - a.importance);
-  }
-
-  // 删除指定记忆，返回是否删除成功
-  deleteMemory(userId: string, memoryId: string): boolean {
-    const list = this.memories.get(userId) || [];
-    const index = list.findIndex((m) => m.id === memoryId);
-    if (index === -1) return false;
-    list.splice(index, 1);
-    return true;
-  }
-
-  // 添加一条问答记录
-  addQARecord(record: QARecord): QARecord {
-    const list = this.qaRecords.get(record.user_id) || [];
-    list.push(record);
-    this.qaRecords.set(record.user_id, list);
-    return record;
-  }
-
-  // 获取用户问答历史，支持按会话过滤和数量限制
-  getQAHistory(
-    userId: string,
-    conversationId?: string,
-    limit = 50,
-  ): QARecord[] {
-    let records = this.qaRecords.get(userId) || [];
-    if (conversationId) {
-      records = records.filter((r) => r.conversation_id === conversationId);
-    }
-    return records.slice(-limit);
-  }
-}
-
-export const profileStore = new ProfileStore();
+// 数据模型已迁移到 Cloudflare Service，本文件仅保留类型定义与工厂函数。
+// ProfileStore 内存存储已移除。

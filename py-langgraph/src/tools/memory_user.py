@@ -2,7 +2,7 @@
 memory.user — 用户长期记忆管理
 
 提供用户记忆的搜索和保存能力。
-基于 Profile/Memory 服务。
+统一通过 Repository 层访问 Cloudflare Service。
 """
 
 from __future__ import annotations
@@ -19,9 +19,10 @@ from src.tools.contracts import (
     ToolDescriptor,
     SideEffect,
 )
+from src.repositories import get_repositories
 
 
-# ============ Tool Descriptor ============
+# ============ Tool Descriptor ==========
 
 _USER_SEARCH_DESCRIPTOR = ToolDescriptor(
     name="memory.user.search",
@@ -54,79 +55,7 @@ _USER_SAVE_DESCRIPTOR = ToolDescriptor(
 )
 
 
-# ============ 用户记忆存储 ============
-
-
-class UserMemoryStore:
-    """用户记忆存储 — 基于内存（生产环境可替换为数据库）"""
-
-    # 初始化用户记忆存储
-    def __init__(self):
-        self._memories: dict[str, list[dict]] = {}
-
-    def add(self, user_id: str, content: str, category: str = "fact", importance: int = 3) -> dict:
-        """添加一条记忆"""
-        memory = {
-            "id": f"mem_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
-            "user_id": user_id,
-            "content": content,
-            "category": category,
-            "importance": importance,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "source": "user_explicit",
-        }
-        if user_id not in self._memories:
-            self._memories[user_id] = []
-        self._memories[user_id].append(memory)
-        return memory
-
-    def search(
-        self, user_id: str, query: str = "", category: str = "", max_results: int = 10
-    ) -> list[dict]:
-        """搜索用户记忆"""
-        memories = self._memories.get(user_id, [])
-
-        # 按类别过滤
-        if category:
-            memories = [m for m in memories if m["category"] == category]
-
-        # 按重要性排序
-        memories = sorted(memories, key=lambda m: -m["importance"])
-
-        # 关键词过滤
-        if query:
-            query_lower = query.lower()
-            memories = [m for m in memories if query_lower in m["content"].lower()]
-
-        return memories[:max_results]
-
-    def delete(self, user_id: str, memory_id: str) -> bool:
-        """删除一条记忆"""
-        memories = self._memories.get(user_id, [])
-        for i, m in enumerate(memories):
-            if m["id"] == memory_id:
-                memories.pop(i)
-                return True
-        return False
-
-    def list_all(self, user_id: str, category: str = "") -> list[dict]:
-        """列出用户所有记忆"""
-        memories = self._memories.get(user_id, [])
-        if category:
-            memories = [m for m in memories if m["category"] == category]
-        return sorted(memories, key=lambda m: -m["importance"])
-
-
-_user_memory_store = UserMemoryStore()
-
-
-# 获取全局用户记忆存储实例
-def get_user_memory_store() -> UserMemoryStore:
-    return _user_memory_store
-
-
-# ============ LangChain Tool: memory.user.search ============
+# ============ LangChain Tool: memory.user.search ==========
 
 
 class UserSearchInput(BaseModel):
@@ -151,22 +80,32 @@ def memory_user_search(
     scoped_user_id = state.get("user_id") if state is not None else user_id
     if not scoped_user_id:
         return "🧠 未提供已认证的用户上下文，无法读取长期记忆。"
-    store = get_user_memory_store()
-    results = store.search(scoped_user_id, query, category, max_results)
 
-    if not results:
-        return "🧠 未找到相关记忆。"
+    repos = get_repositories()
 
-    lines = [f"🧠 用户记忆（{scoped_user_id}）— {len(results)} 条：\n"]
-    for i, m in enumerate(results, 1):
-        lines.append(f"[{i}] [{m['category']}] {m['content']}")
-        lines.append(f"    重要性：{m['importance']} | 来源：{m.get('source', 'unknown')}")
-        lines.append("")
+    try:
+        if category:
+            # 按类别精确查询
+            items = repos.list_memories(scoped_user_id, category=category, limit=max_results)
+        else:
+            # 语义搜索
+            result = repos.search_memories(scoped_user_id, query or " ", category=None, limit=max_results)
+            items = result.get("items", [])
 
-    return "\n".join(lines)
+        if not items:
+            return "🧠 未找到相关记忆。"
+
+        lines = [f"🧠 用户记忆（{scoped_user_id}）— {len(items)} 条：\n"]
+        for i, m in enumerate(items, 1):
+            lines.append(f"[{i}] [{m.get('category', '')}] {m.get('content', '')}")
+            lines.append(f"    重要性：{m.get('importance', 0)}")
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"🧠 记忆搜索失败：{e}"
 
 
-# ============ LangChain Tool: memory.user.save ============
+# ============ LangChain Tool: memory.user.save ==========
 
 
 class UserSaveInput(BaseModel):
@@ -191,28 +130,25 @@ def memory_user_save(
     scoped_user_id = state.get("user_id") if state is not None else user_id
     if not scoped_user_id:
         return "🧠 未提供已认证的用户上下文，无法保存长期记忆。"
-    store = get_user_memory_store()
 
-    # 检查是否已有相似记忆（用完整内容精确匹配）
-    existing = store.search(scoped_user_id, "", max_results=100)
-    content_lower = content.strip().lower()
-    for m in existing:
-        if content_lower == m["content"].lower().strip():
-            return f"🧠 记忆已存在（ID: {m['id']}），未重复保存。"
+    repos = get_repositories()
 
-    memory = store.add(scoped_user_id, content, category, importance)
-    return f"🧠 已保存记忆（ID: {memory['id']}）：{content}"
+    try:
+        data = repos.save_memory(scoped_user_id, content.strip(), category, importance)
+        if data is None:
+            return "🧠 记忆已存在（内容重复），未重复保存。"
+        return f"🧠 已保存记忆（ID: {data.get('id', '')}）：{content}"
+    except Exception as e:
+        return f"🧠 记忆保存失败：{e}"
 
 
-# ============ 导出 ============
+# ============ 导出 ==========
 
 __all__ = [
     "_USER_SAVE_DESCRIPTOR",
     "_USER_SEARCH_DESCRIPTOR",
-    "UserMemoryStore",
     "UserSaveInput",
     "UserSearchInput",
-    "get_user_memory_store",
     "memory_user_save",
     "memory_user_search",
 ]

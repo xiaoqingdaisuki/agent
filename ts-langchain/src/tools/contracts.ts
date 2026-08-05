@@ -3,7 +3,13 @@
  *
  * 所有工具实现必须引用此文件中的类型，
  * 确保与 JSON Schema 契约保持同步。
+ *
+ * Phase 4 迁移：input_schema 已从 Record<string, unknown> (JSON Schema 对象)
+ * 改为 z.ZodTypeAny，消除双重定义。每个工具文件只需定义一个 Zod schema，
+ * 同时用于 ToolDescriptor.input_schema 和 DynamicStructuredTool.schema。
  */
+
+import { z } from "zod";
 
 // ============ 风险等级 ============
 
@@ -60,8 +66,9 @@ export interface ToolDescriptor {
   timeout_ms: number;
   required_permissions?: string[];
   approval_policy?: ApprovalPolicy;
-  input_schema: Record<string, unknown>;
-  output_schema?: Record<string, unknown>;
+  /** Zod schema 实例（同时用于运行时参数校验） */
+  input_schema: z.ZodTypeAny;
+  output_schema?: z.ZodTypeAny;
   data_classification?: DataClassification[];
   owner?: string;
   tags?: string[];

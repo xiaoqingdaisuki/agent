@@ -2,75 +2,30 @@
  * memory.session — 会话记忆管理
  *
  * 提供当前会话/对话的上下文检索能力。
+ * 统一通过 Repository 层访问 Cloudflare Service。
  */
 
 import { DynamicStructuredTool } from "langchain/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";
+import { getRepositories } from "../repositories/index.js";
+import { config } from "../config/index.js";
 
-// ============ 会话记忆存储 ============
+// ============ Tool Descriptor ==========
 
-interface SessionMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-class SessionMemoryStore {
-  private sessions = new Map<string, SessionMessage[]>();
-
-  // 获取指定会话的消息列表
-  get(conversationId: string): SessionMessage[] {
-    return this.sessions.get(conversationId) || [];
-  }
-
-  // 向指定会话追加一条消息
-  add(
-    conversationId: string,
-    role: "user" | "assistant",
-    content: string,
-  ): void {
-    const messages = this.sessions.get(conversationId) || [];
-    messages.push({ role, content });
-    this.sessions.set(conversationId, messages);
-  }
-
-  // 清空指定会话的所有消息
-  clear(conversationId: string): void {
-    this.sessions.delete(conversationId);
-  }
-
-  // 在会话中搜索匹配关键词的消息，最多返回 maxResults 条
-  search(
-    conversationId: string,
-    query: string,
-    maxResults: number = 5,
-  ): SessionMessage[] {
-    const messages = this.sessions.get(conversationId) || [];
-    if (!query) return messages.slice(-maxResults);
-
-    const queryLower = query.toLowerCase();
-    const results: SessionMessage[] = [];
-    for (const msg of messages) {
-      if (msg.content.toLowerCase().includes(queryLower)) {
-        results.push(msg);
-        if (results.length >= maxResults) break;
-      }
-    }
-    return results;
-  }
-}
-
-export const sessionStore = new SessionMemoryStore();
-
-// ============ Tool Descriptor ============
+export const sessionMemorySearchInputSchema = z.object({
+  conversation_id: z.string().describe("会话 ID，用于标识当前对话"),
+  query: z.string().default("").describe("搜索关键词，留空则返回最近的对话"),
+  max_results: z.number().int().min(1).max(20).default(5).describe("最多返回几条结果"),
+});
 
 export const sessionMemoryDescriptor: ToolDescriptor = {
   name: "memory.session.search",
   version: "1.0.0",
   title: "会话记忆搜索",
   description:
-    "在当前会话中搜索之前的对话内容。当需要回顾用户之前说过的话、或查找之前的回答时使用。返回匹配的对话片段。",
+    "在当前会话中搜索之前的对话内容。当需要回顾用户之前说过的话或查找之前的回答时使用。返回匹配的对话片段。",
   category: "MEMORY",
   risk_level: "R1",
   side_effect: "read",
@@ -79,68 +34,65 @@ export const sessionMemoryDescriptor: ToolDescriptor = {
   data_classification: ["internal"],
   owner: "memory",
   tags: ["memory", "session", "conversation"],
-  input_schema: {
-    type: "object",
-    properties: {
-      conversation_id: {
-        type: "string",
-        description: "会话 ID，用于标识当前对话",
-      },
-      query: {
-        type: "string",
-        description: "搜索关键词，留空则返回最近的对话",
-        default: "",
-      },
-      max_results: {
-        type: "integer",
-        description: "最多返回几条结果",
-        default: 5,
-        maximum: 20,
-      },
-    },
-    required: ["conversation_id"],
-  },
+  input_schema: sessionMemorySearchInputSchema,
 };
 
-// ============ LangChain Tool ============
+// ============ LangChain Tool ==========
 
 export const memorySessionSearchTool: DynamicStructuredTool =
   new DynamicStructuredTool({
     name: "memory_session_search",
     description:
       "在当前会话中搜索之前的对话内容。当需要回顾用户之前说过的话或查找之前的回答时使用。",
-    schema: z.object({
-      conversation_id: z.string().describe("会话 ID"),
-      query: z.string().default("").describe("搜索关键词，留空返回最近对话"),
-      max_results: z
-        .number()
-        .int()
-        .min(1)
-        .max(20)
-        .default(5)
-        .describe("最多返回条数"),
-    }),
-    func: async ({ conversation_id, query, max_results }) => {
-      const results = sessionStore.search(
+    schema: sessionMemorySearchInputSchema,
+  func: async ({ conversation_id, query, max_results }) => {
+    const repos = getRepositories();
+    const maxResults = max_results || 5;
+
+    try {
+      // 从 Repository 获取会话消息
+      const result = await repos.message.getMessages(
         conversation_id,
-        query || "",
-        max_results || 5,
+        Math.min(maxResults * 5, 100),
+        0,
       );
 
-      if (results.length === 0) {
+      let messages = result.messages;
+
+      // 关键词过滤
+      if (query) {
+        const queryLower = query.toLowerCase();
+        messages = messages.filter((m: any) => {
+          const content = typeof m.content_json === "string"
+            ? m.content_json
+            : JSON.stringify(m.content_json);
+          return content.toLowerCase().includes(queryLower);
+        });
+      }
+
+      // 取最近 N 条
+      messages = messages.slice(-maxResults);
+
+      if (messages.length === 0) {
         return "📝 当前会话中未找到相关内容。";
       }
 
       const lines: string[] = [
-        `📝 会话记忆（${conversation_id}）— ${results.length} 条：\n`,
+        `📝 会话记忆（${conversation_id}）— ${messages.length} 条：\n`,
       ];
-      for (let i = 0; i < results.length; i++) {
-        const msg = results[i];
-        const role = msg.role === "user" ? "用户" : "助手";
-        lines.push(`[${i + 1}] ${role}：${msg.content.slice(0, 200)}`);
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        const content = typeof msg.content_json === "string"
+          ? msg.content_json
+          : JSON.stringify(msg.content_json);
+        const roleLabel = msg.role === "user" ? "用户" : msg.role === "assistant" ? "助手" : msg.role;
+        lines.push(`[${i + 1}] ${roleLabel}：${content.slice(0, 200)}`);
         lines.push("");
       }
 
       return lines.join("\n");
-    },
+    } catch {
+      return "📝 会话记忆查询失败。";
+    }
+  },
   });

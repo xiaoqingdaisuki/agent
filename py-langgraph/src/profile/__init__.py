@@ -1,9 +1,7 @@
 from .models import (
     Memory,
-    ProfileStore,
     QARecord,
     UserProfile,
-    store,
 )
 from .service import (
     HistoryService,
@@ -16,8 +14,6 @@ __all__ = [
     "Memory",
     "MemoryService",
     "ProfileService",
-    "ProfileStore",
     "QARecord",
     "UserProfile",
-    "store",
 ]

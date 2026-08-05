@@ -406,7 +406,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           },
         });
       }
-      const profile = ProfileService.getOrCreate(
+      const profile = await ProfileService.getOrCreate(
         userId,
         (request.query as any).name,
       );
@@ -433,10 +433,10 @@ export async function registerV1Routes(app: FastifyInstance) {
           },
         });
       }
-      const profile = ProfileService.update(user_id, {
-        name: body.name,
-        preferences: body.preferences,
-      });
+      const profile = await ProfileService.update(user_id,
+        body.name || "",
+        body.preferences,
+      );
       if (!profile) {
         return reply.status(404).send({
           error: {
@@ -467,7 +467,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           },
         });
       }
-      const memories = MemoryService.listAll(user_id);
+      const memories = await MemoryService.listAll(user_id);
       const filtered = category
         ? memories.filter((m: any) => m.category === category)
         : memories;
@@ -502,7 +502,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           },
         });
       }
-      const memory = MemoryService.add(
+      const memory = await MemoryService.add(
         user_id,
         body.content,
         body.category || "fact",
@@ -530,7 +530,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           },
         });
       }
-      const deleted = MemoryService.delete(user_id, memory_id);
+      const deleted = await MemoryService.delete(user_id, memory_id);
       if (!deleted) {
         return reply.status(404).send({
           error: { code: BusinessErrorCode.NOT_FOUND, message: "记忆不存在" },
@@ -558,7 +558,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           },
         });
       }
-      const records = HistoryService.getHistory(
+      const records = await HistoryService.getHistory(
         user_id,
         conversation_id,
         limit ? Number(limit) : 50,

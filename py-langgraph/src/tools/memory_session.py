@@ -2,7 +2,7 @@
 memory.session — 会话记忆管理
 
 提供当前会话/对话的上下文检索能力。
-基于 LangGraph checkpoint 或内存存储。
+统一通过 Repository 层访问 Cloudflare Service。
 """
 
 from __future__ import annotations
@@ -18,9 +18,10 @@ from src.tools.contracts import (
     ToolDescriptor,
     SideEffect,
 )
+from src.repositories import get_repositories
 
 
-# ============ Tool Descriptor ============
+# ============ Tool Descriptor ==========
 
 _SESSION_DESCRIPTOR = ToolDescriptor(
     name="memory.session.search",
@@ -38,54 +39,7 @@ _SESSION_DESCRIPTOR = ToolDescriptor(
 )
 
 
-# ============ 会话记忆存储（内存） ============
-
-
-class SessionMemoryStore:
-    """会话记忆存储 — 基于内存 Map（生产环境可替换为 Redis/数据库）"""
-
-    # 初始化会话记忆存储
-    def __init__(self):
-        self._sessions: dict[str, list[dict]] = {}
-
-    def get(self, conversation_id: str) -> list[dict]:
-        return self._sessions.get(conversation_id, [])
-
-    def add(self, conversation_id: str, role: str, content: str) -> None:
-        if conversation_id not in self._sessions:
-            self._sessions[conversation_id] = []
-        self._sessions[conversation_id].append(
-            {
-                "role": role,
-                "content": content,
-            }
-        )
-
-    def search(self, conversation_id: str, query: str, max_results: int = 5) -> list[dict]:
-        """简单关键词搜索（后续可替换为向量搜索）"""
-        messages = self._sessions.get(conversation_id, [])
-        if not query:
-            return messages[-max_results:]
-
-        query_lower = query.lower()
-        results = []
-        for msg in messages:
-            if query_lower in msg["content"].lower():
-                results.append(msg)
-                if len(results) >= max_results:
-                    break
-        return results
-
-
-_session_store = SessionMemoryStore()
-
-
-# 获取全局会话存储实例
-def get_session_store() -> SessionMemoryStore:
-    return _session_store
-
-
-# ============ LangChain Tool ============
+# ============ LangChain Tool ==========
 
 
 class SessionSearchInput(BaseModel):
@@ -100,37 +54,30 @@ def memory_session_search(
     conversation_id: str,
     query: str = "",
     max_results: int = 5,
-    runtime: ToolRuntime = None,
+    runtime: Any = None,
 ) -> str:
     """在当前会话中搜索之前的对话内容。当需要回顾用户之前说过的话或查找之前的回答时使用。"""
-    scoped_conversation_id = (
-        runtime.config.get("configurable", {}).get("thread_id")
-        if runtime is not None
-        else conversation_id
-    )
+    scoped_conversation_id = conversation_id
+    if runtime is not None:
+        thread_id = runtime.config.get("configurable", {}).get("thread_id")
+        if thread_id:
+            scoped_conversation_id = thread_id
+
     if not scoped_conversation_id:
         return "📝 未提供当前会话上下文，无法读取会话记忆。"
-    if runtime is not None:
-        messages = runtime.state.get("messages", [])
-        normalized = [
-            {
-                "role": "user" if message.type == "human" else "assistant",
-                "content": message.content
-                if isinstance(message.content, str)
-                else str(message.content),
-            }
-            for message in messages
-            if message.type in {"human", "ai"}
-        ]
+
+    repos = get_repositories()
+
+    try:
+        messages_data, _ = repos.get_messages(scoped_conversation_id, limit=max_results * 5)
         query_lower = query.lower()
         results = [
-            message
-            for message in normalized
-            if not query or query_lower in message["content"].lower()
+            {"role": m.get("role", "user"), "content": m.get("content_json", "")}
+            for m in messages_data
+            if not query or query_lower in m.get("content_json", "").lower()
         ][-max_results:]
-    else:
-        store = get_session_store()
-        results = store.search(scoped_conversation_id, query, max_results)
+    except Exception:
+        return "📝 会话记忆查询失败。"
 
     if not results:
         return "📝 当前会话中未找到相关内容。"
@@ -138,18 +85,17 @@ def memory_session_search(
     lines = [f"📝 会话记忆（{scoped_conversation_id}）— 找到 {len(results)} 条：\n"]
     for i, msg in enumerate(results, 1):
         role = "用户" if msg["role"] == "user" else "助手"
-        lines.append(f"[{i}] {role}：{msg['content'][:200]}")
+        content = msg["content"][:200] if len(msg["content"]) > 200 else msg["content"]
+        lines.append(f"[{i}] {role}：{content}")
         lines.append("")
 
     return "\n".join(lines)
 
 
-# ============ 导出 ============
+# ============ 导出 ==========
 
 __all__ = [
     "_SESSION_DESCRIPTOR",
-    "SessionMemoryStore",
     "SessionSearchInput",
-    "get_session_store",
     "memory_session_search",
 ]

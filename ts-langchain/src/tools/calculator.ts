@@ -209,6 +209,10 @@ export function safeCalculate(expression: string): number {
 
 // ============ LangChain Tool ============
 
+export const calculatorInputSchema = z.object({
+  expression: z.string().describe("数学表达式，如 '2 + 2' 或 '(10 + 5) * 3'"),
+});
+
 export const calculatorDescriptor: ToolDescriptor = {
   name: "math.calculate",
   version: "1.0.0",
@@ -221,25 +225,14 @@ export const calculatorDescriptor: ToolDescriptor = {
   timeout_ms: 5000,
   owner: "tools",
   tags: ["math", "compute"],
-  input_schema: {
-    type: "object",
-    properties: {
-      expression: {
-        type: "string",
-        description: "数学表达式，如 '2 + 2'、'(10 + 5) * 3'、'2 ** 10'",
-      },
-    },
-    required: ["expression"],
-  },
+  input_schema: calculatorInputSchema,
 };
 
 export const calculatorTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "calculator",
   description:
     "安全计算数学表达式。支持四则运算、幂运算（**）、括号和取模（%）。当用户需要进行数学计算时使用此工具。",
-  schema: z.object({
-    expression: z.string().describe("数学表达式，如 '2 + 2' 或 '(10 + 5) * 3'"),
-  }),
+  schema: calculatorInputSchema,
   func: async ({ expression }) => {
     try {
       const result = safeCalculate(expression);

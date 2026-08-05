@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     postgres_uri: str = "postgresql://agent:agent@localhost:5432/agent"
     qdrant_url: str = "http://localhost:6333"
 
+    # ============ Cloudflare Service 配置 ============
+    memory_gateway_base_url: str = ""
+    memory_gateway_secret: str = ""
+    memory_search_mode: str = "hybrid"
+    memory_auto_extract: bool = True
+    memory_max_active_per_user: int = 50
+    memory_request_timeout_ms: int = 5000
+
     model_config = SettingsConfigDict(env_file=".env")
 
 

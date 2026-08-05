@@ -1,3 +1,10 @@
+/**
+ * 应用配置 — 从环境变量读取并校验
+ *
+ * 使用 zod 做运行时校验，确保必填字段和类型正确。
+ * 所有 Agent 服务和 API 路由从此模块读取配置。
+ */
+
 import dotenv from "dotenv";
 import { z } from "zod";
 
@@ -46,6 +53,20 @@ const envSchema = z.object({
             .filter(Boolean)
         : [],
     ),
+
+  // ============ Cloudflare Service 配置 ============
+  CLOUDFLARE_MEMORY_BASE_URL: z.string().url().default("http://localhost:8787"),
+  CLOUDFLARE_MEMORY_SECRET: z.string().default(""),
+  MEMORY_SEARCH_MODE: z
+    .string()
+    .default("hybrid")
+    .refine(
+      (v) => v === "hybrid" || v === "sql",
+      { message: "MEMORY_SEARCH_MODE must be 'hybrid' or 'sql'" },
+    ),
+  MEMORY_AUTO_EXTRACT: z.coerce.boolean().default(true),
+  MEMORY_MAX_ACTIVE_PER_USER: z.coerce.number().int().min(1).max(200).default(50),
+  MEMORY_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(5_000),
 });
 
 export const config = envSchema.parse(process.env);

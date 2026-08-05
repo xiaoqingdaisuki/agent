@@ -338,6 +338,10 @@ export function resetSearchStateForTests(): void {
   circuit = { failures: 0, openUntil: 0 };
 }
 
+export const webSearchInputSchema = z.object({
+  query: z.string().trim().min(1).max(400).describe("简洁明确的搜索关键词"),
+});
+
 export const webSearchDescriptor: ToolDescriptor = {
   name: "web.search",
   version: "2.0.0",
@@ -352,22 +356,14 @@ export const webSearchDescriptor: ToolDescriptor = {
   data_classification: ["internal"],
   owner: "tools",
   tags: ["web", "search", "internet", "realtime", "tavily"],
-  input_schema: {
-    type: "object",
-    properties: {
-      query: { type: "string", description: "简洁明确的搜索关键词" },
-    },
-    required: ["query"],
-  },
+  input_schema: webSearchInputSchema,
 };
 
 export const webSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "web_search",
   description:
     "使用 Tavily 搜索实时互联网信息并返回来源链接。涉及新闻、当前数据、政策、人物或公司动态时必须使用。",
-  schema: z.object({
-    query: z.string().trim().min(1).max(400).describe("简洁明确的搜索关键词"),
-  }),
+  schema: webSearchInputSchema,
   func: async ({ query }) =>
     searchResultsToText(await multiSourceSearch(query), query),
 });

@@ -2,14 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   memorySessionSearchTool,
   sessionMemoryDescriptor,
-  sessionStore,
 } from "../../src/tools/memory-session.js";
 import {
   memoryUserSearchTool,
   memoryUserSaveTool,
   userMemorySearchDescriptor,
   userMemorySaveDescriptor,
-  userMemoryStore,
 } from "../../src/tools/memory-user.js";
 
 describe("Memory Tools", () => {
@@ -74,51 +72,6 @@ describe("Memory Tools", () => {
         content: "Likes testing",
       });
       expect(typeof result).toBe("string");
-    });
-  });
-
-  describe("SessionMemoryStore", () => {
-    it("adds and retrieves messages", () => {
-      sessionStore.add("conv1", "user", "Hello");
-      sessionStore.add("conv1", "assistant", "Hi!");
-      const messages = sessionStore.get("conv1");
-      expect(messages.length).toBe(2);
-      expect(messages[0].role).toBe("user");
-    });
-
-    it("searches by query", () => {
-      sessionStore.add("conv2", "user", "What is Python?");
-      sessionStore.add("conv2", "assistant", "Python is great.");
-      const results = sessionStore.search("conv2", "Python");
-      expect(results.length).toBeGreaterThan(0);
-    });
-
-    it("returns empty for empty conversation", () => {
-      const results = sessionStore.search("empty-conv", "test");
-      expect(results.length).toBe(0);
-    });
-  });
-
-  describe("UserMemoryStore", () => {
-    it("adds and searches memories", () => {
-      userMemoryStore.add("u1", "Likes pizza", "preference", 4);
-      userMemoryStore.add("u1", "Likes coding", "preference");
-      const results = userMemoryStore.search("u1", "likes");
-      expect(results.length).toBe(2);
-    });
-
-    it("filters by category", () => {
-      userMemoryStore.add("u2", "Fact A", "fact");
-      userMemoryStore.add("u2", "Pref B", "preference");
-      const facts = userMemoryStore.search("u2", "", "fact");
-      expect(facts.length).toBe(1);
-      expect(facts[0].category).toBe("fact");
-    });
-
-    it("deletes memories", () => {
-      const mem = userMemoryStore.add("u3", "Temp info");
-      expect(userMemoryStore.delete("u3", mem.id)).toBe(true);
-      expect(userMemoryStore.delete("u3", mem.id)).toBe(false);
     });
 
     it("deduplicates on save", async () => {

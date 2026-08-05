@@ -12,12 +12,12 @@ import { ConversationService } from "../../src/services/index.js";
 describe("conversation history", () => {
   const threadId = "bounded-history";
 
-  afterEach(() => clearHistory(threadId));
+  afterEach(async () => await clearHistory(threadId));
 
-  it("bounds retained history and starts on a human message", () => {
+  it("bounds retained history and starts on a human message", async () => {
     for (let index = 0; index < MAX_HISTORY_MESSAGES; index++) {
-      appendMessage(threadId, new HumanMessage(`question ${index}`));
-      appendMessage(threadId, new AIMessage(`answer ${index}`));
+      await appendMessage(threadId, new HumanMessage(`question ${index}`));
+      await appendMessage(threadId, new AIMessage(`answer ${index}`));
     }
 
     const history = getHistory(threadId);

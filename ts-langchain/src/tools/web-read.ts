@@ -188,6 +188,13 @@ function isTextContent(contentType: string): boolean {
 
 // ============ Tool Descriptor ============
 
+export const webReadInputSchema = z.object({
+  url: z
+    .string()
+    .url()
+    .describe("要读取的网页 URL，必须是完整的 URL（https:// 或 http://）"),
+});
+
 export const webReadDescriptor: ToolDescriptor = {
   name: "web.read",
   version: "1.0.0",
@@ -202,17 +209,7 @@ export const webReadDescriptor: ToolDescriptor = {
   data_classification: ["internal"],
   owner: "tools",
   tags: ["web", "read", "http"],
-  input_schema: {
-    type: "object",
-    properties: {
-      url: {
-        type: "string",
-        description:
-          "要读取的网页 URL，必须是完整的 URL（https:// 或 http://）",
-      },
-    },
-    required: ["url"],
-  },
+  input_schema: webReadInputSchema,
 };
 
 // ============ LangChain Tool ============
@@ -221,12 +218,7 @@ export const webReadTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "web_read",
   description:
     "读取指定 URL 的网页正文内容。自动去除 HTML 标签、脚本和样式，提取可读文本。通常在 web_search 之后使用来获取详细信息。",
-  schema: z.object({
-    url: z
-      .string()
-      .url()
-      .describe("要读取的网页 URL，必须是完整的 URL（https:// 或 http://）"),
-  }),
+  schema: webReadInputSchema,
   func: async ({ url }) => {
     // 1. URL 和 DNS 安全检查
     const { safe, reason } = await validateNetworkUrl(url);

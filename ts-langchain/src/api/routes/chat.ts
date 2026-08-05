@@ -43,8 +43,8 @@ export async function registerChatRoutes(app: FastifyInstance) {
         const memoryContext: SystemMessage[] = [];
         if (user_id) {
           try {
-            ProfileService.getOrCreate(user_id);
-            const context = MemoryService.buildMemoryContext(user_id);
+            await ProfileService.getOrCreate(user_id);
+            const context = await MemoryService.buildMemoryContext(user_id);
             if (context) {
               memoryContext.push(new SystemMessage(context));
             }

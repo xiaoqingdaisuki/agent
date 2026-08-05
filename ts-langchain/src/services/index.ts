@@ -307,8 +307,8 @@ export class AgentService {
       // 注入用户记忆
       if (userId) {
         try {
-          ProfileService.getOrCreate(userId);
-          const context = MemoryService.buildMemoryContext(userId);
+          const profile = await ProfileService.getOrCreate(userId);
+          const context = await MemoryService.buildMemoryContext(userId);
           if (context) memoryContext.push(new SystemMessage(context));
         } catch {
           // 记忆模块不可用时静默降级
@@ -374,13 +374,13 @@ export class AgentService {
       // 记录问答历史 + 提取新记忆
       if (userId) {
         try {
-          HistoryService.record(userId, conversationId, content, reply.content);
-          MemoryService.extractMemoriesFromConversation(
+          await HistoryService.record(userId, conversationId, content, reply.content);
+          await MemoryService.extractMemoriesFromConversation(
             userId,
             content,
             reply.content,
           );
-          ProfileService.update(userId);
+          await ProfileService.update(userId);
         } catch {
           // 记忆记录失败不影响主流程
         }
@@ -447,8 +447,8 @@ export class AgentService {
 
       if (userId) {
         try {
-          ProfileService.getOrCreate(userId);
-          const context = MemoryService.buildMemoryContext(userId);
+          const profile = await ProfileService.getOrCreate(userId);
+          const context = await MemoryService.buildMemoryContext(userId);
           if (context) memoryContext.push(new SystemMessage(context));
         } catch {
           // memory module unavailable
@@ -547,13 +547,13 @@ export class AgentService {
       // Record Q&A + extract memories
       if (userId && fullAnswer) {
         try {
-          HistoryService.record(userId, conversationId, content, fullAnswer);
-          MemoryService.extractMemoriesFromConversation(
+          await HistoryService.record(userId, conversationId, content, fullAnswer);
+          await MemoryService.extractMemoriesFromConversation(
             userId,
             content,
             fullAnswer,
           );
-          ProfileService.update(userId);
+          await ProfileService.update(userId);
         } catch {
           // silent
         }
@@ -576,9 +576,9 @@ export class AgentService {
           // 记录问答历史
           if (userId) {
             try {
-              HistoryService.record(userId, conversationId, content, partial);
-              MemoryService.extractMemoriesFromConversation(userId, content, partial);
-              ProfileService.update(userId);
+              await HistoryService.record(userId, conversationId, content, partial);
+              await MemoryService.extractMemoriesFromConversation(userId, content, partial);
+              await ProfileService.update(userId);
             } catch {
               // silent
             }

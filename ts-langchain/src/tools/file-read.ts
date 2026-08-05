@@ -129,6 +129,12 @@ export function maskSensitive(content: string): string {
 
 // ============ Tool Descriptor ============
 
+export const fileReadInputSchema = z.object({
+  filepath: z.string().describe("要读取的文件路径，如 'README.md' 或 'src/main.py'"),
+  offset: z.number().int().min(0).default(0).describe("起始行号（从0开始）"),
+  limit: z.number().int().min(1).max(500).default(100).describe("最多读取行数"),
+});
+
 export const fileReadDescriptor: ToolDescriptor = {
   name: "file.read",
   version: "1.0.0",
@@ -143,28 +149,7 @@ export const fileReadDescriptor: ToolDescriptor = {
   data_classification: ["internal"],
   owner: "tools",
   tags: ["file", "read", "workspace"],
-  input_schema: {
-    type: "object",
-    properties: {
-      filepath: {
-        type: "string",
-        description:
-          "要读取的文件路径（相对于工作区），如 'README.md' 或 'src/main.py'",
-      },
-      offset: {
-        type: "integer",
-        description: "起始行号（从 0 开始），用于分段读取大文件",
-        default: 0,
-      },
-      limit: {
-        type: "integer",
-        description: "最多读取行数，默认 100，最大 500",
-        default: 100,
-        maximum: 500,
-      },
-    },
-    required: ["filepath"],
-  },
+  input_schema: fileReadInputSchema,
 };
 
 // ============ LangChain Tool ============
@@ -173,19 +158,7 @@ export const fileReadTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "file_read",
   description:
     "安全读取工作区内的指定文件内容。自动进行路径安全检查。大文件支持通过 offset/limit 分段读取。",
-  schema: z.object({
-    filepath: z
-      .string()
-      .describe("要读取的文件路径，如 'README.md' 或 'src/main.py'"),
-    offset: z.number().int().min(0).default(0).describe("起始行号（从0开始）"),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(500)
-      .default(100)
-      .describe("最多读取行数"),
-  }),
+  schema: fileReadInputSchema,
   func: async ({ filepath, offset, limit }) => {
     // 1. 路径安全检查
     const workspaceRoot = path.resolve(

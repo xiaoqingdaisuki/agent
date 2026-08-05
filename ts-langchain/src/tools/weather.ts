@@ -38,6 +38,21 @@ const WEATHER_CODES: Record<number, string> = {
 
 // ============ Tool Descriptor ============
 
+export const weatherInputSchema = z.object({
+  city: z
+    .string()
+    .describe(
+      "城市名称，支持中文如 '北京' '上海' '深圳'，也支持英文如 'Beijing' 'Shanghai'",
+    ),
+  days: z
+    .number()
+    .int()
+    .min(1)
+    .max(7)
+    .default(7)
+    .describe("预报天数，默认 7 天"),
+});
+
 export const weatherDescriptor: ToolDescriptor = {
   name: "weather.current",
   version: "1.0.0",
@@ -52,21 +67,7 @@ export const weatherDescriptor: ToolDescriptor = {
   data_classification: ["internal"],
   owner: "tools",
   tags: ["weather", "location"],
-  input_schema: {
-    type: "object",
-    properties: {
-      city: {
-        type: "string",
-        description:
-          "城市名称，支持中文如 '北京' '上海' '深圳'，也支持英文如 'Beijing' 'Shanghai'",
-      },
-      days: {
-        type: "integer",
-        description: "预报天数，默认 7 天，范围 1-7",
-      },
-    },
-    required: ["city"],
-  },
+  input_schema: weatherInputSchema,
 };
 
 // ============ LangChain Tool ============
@@ -75,20 +76,7 @@ export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "get_weather",
   description:
     "【天气查询工具】查询指定城市的实时天气及未来 7 天天气预报。用户问天气、气温、下雨、下雪、冷不冷、热不热、未来几天天气时，必须先调用此工具。优先通过 Open-Meteo 获取，如果失败再用 web.search 搜索。",
-  schema: z.object({
-    city: z
-      .string()
-      .describe(
-        "城市名称，支持中文如 '北京' '上海' '深圳'，也支持英文如 'Beijing' 'Shanghai'",
-      ),
-    days: z
-      .number()
-      .int()
-      .min(1)
-      .max(7)
-      .default(7)
-      .describe("预报天数，默认 7 天"),
-  }),
+  schema: weatherInputSchema,
   func: async ({ city, days = 7 }) => {
     const signal = AbortSignal.timeout(10000);
     // 尝试 Open-Meteo
