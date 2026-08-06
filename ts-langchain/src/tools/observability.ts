@@ -99,6 +99,42 @@ class MetricsCollector {
 // ============ 全局单例 ============
 
 const metricsCollector = new MetricsCollector();
+let gatewayClient: any = null;
+
+function getGatewayClient() {
+  if (!gatewayClient) {
+    const { CloudflareMemoryClient } = require("../../clients/memory_gateway.js");
+    gatewayClient = new CloudflareMemoryClient({
+      baseUrl: process.env.CLOUDFLARE_MEMORY_BASE_URL || "http://localhost:8787",
+      secret: process.env.CLOUDFLARE_MEMORY_SECRET || "",
+    });
+  }
+  return gatewayClient;
+}
+
+// 批量刷新指标到 Gateway（异步，不阻塞）
+async function flushToolMetrics(): Promise<void> {
+  const events = metricsCollector.getEvents(metricsCollector["maxEvents"]);
+  if (events.length === 0) return;
+  const toFlush = events.splice(0, events.length);
+  try {
+    const client = getGatewayClient();
+    await client.writeToolMetrics(
+      toFlush.map((m) => ({
+        tool_name: m.tool_name,
+        tool_version: m.tool_version,
+        ok: m.ok,
+        error_code: m.error_code,
+        duration_ms: m.duration_ms,
+        risk_level: m.risk_level,
+        user_id: m.user_id,
+        tenant_id: m.tenant_id,
+      })),
+    );
+  } catch (err) {
+    console.warn("[metrics] Failed to flush tool metrics to Gateway:", err);
+  }
+}
 
 export function getMetricsCollector(): MetricsCollector {
   return metricsCollector;
@@ -111,6 +147,11 @@ export function recordToolMetric(
     ...metric,
     timestamp: new Date().toISOString(),
   });
+
+  // 每 500 条异步刷入 Gateway
+  if (metricsCollector["metrics"].length >= 500) {
+    void flushToolMetrics();
+  }
 }
 
 export function getMetricsSnapshot(): MetricsSnapshot {

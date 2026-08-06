@@ -56,7 +56,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
         const agent = await createToolAgent(
           getAgentPromptOverride(threadId, message),
         );
-        const history = getHistory(threadId);
+        const history = await getHistory(threadId);
 
         // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
         const toolContext = {

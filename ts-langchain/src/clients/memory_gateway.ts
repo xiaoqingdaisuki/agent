@@ -614,4 +614,63 @@ export class CloudflareMemoryClient {
       degraded: result.data.degraded,
     };
   }
+
+  // ============ Audit Log API ==========
+
+  /**
+   * 批量写入审计日志（异步，不阻塞工具执行）
+   */
+  async writeAuditLogs(
+    entries: Array<{
+      user_id: string;
+      tenant_id: string;
+      conversation_id: string;
+      tool_name: string;
+      tool_version: string;
+      risk_level: string;
+      ok: boolean;
+      error_code?: string;
+      duration_ms: number;
+      request_id: string;
+      trace_id: string;
+    }>,
+  ): Promise<void> {
+    try {
+      await this.request(
+        "POST",
+        "/internal/v1/audit-logs",
+        { entries },
+      );
+    } catch {
+      // 审计日志写入失败不影响主流程
+    }
+  }
+
+  // ============ Tool Metrics API ==========
+
+  /**
+   * 批量写入工具指标（异步，不阻塞工具执行）
+   */
+  async writeToolMetrics(
+    entries: Array<{
+      tool_name: string;
+      tool_version: string;
+      ok: boolean;
+      error_code?: string;
+      duration_ms: number;
+      risk_level: string;
+      user_id: string;
+      tenant_id: string;
+    }>,
+  ): Promise<void> {
+    try {
+      await this.request(
+        "POST",
+        "/internal/v1/tool-metrics",
+        { entries },
+      );
+    } catch {
+      // 指标写入失败不影响主流程
+    }
+  }
 }

@@ -11,9 +11,12 @@ Service Layer — 业务逻辑编排
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 from enum import Enum
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # ============ 错误码 ============
 
@@ -138,8 +141,8 @@ class ConversationService:
             try:
                 from src.repositories import get_repositories
                 get_repositories().create_conversation(user_id, title, mode)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("[service] D1 create conversation failed: %s", exc)
 
         return conv
 
@@ -153,8 +156,8 @@ class ConversationService:
                 existing = get_repositories().get_conversation(conv_id)
                 if not existing:
                     get_repositories().create_conversation(user_id, title, mode)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("[service] D1 ensure conversation %s failed: %s", conv_id, exc)
 
         # 注册到内存
         if conv_id not in _conversations:
@@ -164,18 +167,74 @@ class ConversationService:
         return _conversations[conv_id]
 
     @staticmethod
-    # 根据 ID 获取会话详情，不存在时返回 None
+    # 根据 ID 获取会话详情，内存未命中时从 D1 加载
     def get(conv_id: str) -> Conversation | None:
-        return _conversations.get(conv_id)
+        cached = _conversations.get(conv_id)
+        if cached:
+            return cached
+
+        # D1 回退
+        try:
+            from src.repositories import get_repositories
+            data = get_repositories().get_conversation(conv_id)
+            if not data:
+                return None
+            conv = Conversation(
+                title=data.get("title", ""),
+                mode=data.get("mode", "chat"),
+            )
+            conv.id = data["id"]
+            _conversations[conv_id] = conv
+            return conv
+        except Exception as exc:
+            logger.warning("[service] D1 get conversation %s failed: %s", conv_id, exc)
+            return None
 
     @staticmethod
-    # 列出所有会话，按创建时间倒序排列
+    # 列出所有会话，D1 为权威数据源
     def list() -> list[dict]:
-        return sorted(
-            [c.to_dict() for c in _conversations.values()],
-            key=lambda c: c["created_at"],
-            reverse=True,
-        )
+        try:
+            from src.repositories import get_repositories
+            repos = get_repositories()
+
+            # 从已知内存会话中收集 userId
+            known_user_ids = {
+                c.id: getattr(c, "_user_id", "")
+                for c in _conversations.values()
+            }
+
+            all_convs: dict[str, dict] = {}
+
+            # 按 userId 从 D1 拉取
+            for uid in set(known_user_ids.values()):
+                if not uid:
+                    continue
+                try:
+                    items = repos.list_conversations(uid, 100, 0)
+                    for item in items:
+                        all_convs[item["id"]] = item
+                except Exception as exc:
+                    logger.warning("[service] D1 list conversations for user %s failed: %s", uid, exc)
+
+            # 合并内存中的无 userId 会话
+            for c in _conversations.values():
+                if c.id not in all_convs:
+                    all_convs[c.id] = c.to_dict()
+
+            # 按创建时间倒序
+            return sorted(
+                all_convs.values(),
+                key=lambda c: c.get("created_at", ""),
+                reverse=True,
+            )
+        except Exception as exc:
+            logger.warning("[service] D1 list conversations failed: %s", exc)
+            # D1 失败时返回内存数据
+            return sorted(
+                [c.to_dict() for c in _conversations.values()],
+                key=lambda c: c["created_at"],
+                reverse=True,
+            )
 
     @staticmethod
     # 删除会话及其关联的消息和命令状态，同时从 D1 删除
@@ -190,8 +249,8 @@ class ConversationService:
             try:
                 from src.repositories import get_repositories
                 get_repositories().delete_conversation(conv_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("[service] D1 delete conversation %s failed: %s", conv_id, exc)
 
             return True
         return False
@@ -216,8 +275,8 @@ class ConversationService:
                 "content": content,
                 "created_at": message.created_at,
             }])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[service] D1 persist user message failed for conv %s: %s", conv_id, exc)
 
         return message
 
@@ -238,14 +297,42 @@ class ConversationService:
                 "content": message.content,
                 "created_at": message.created_at,
             }])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[service] D1 persist assistant message failed for conv %s: %s", conv_id, exc)
 
     @staticmethod
-    # 获取会话的全部消息列表
+    # 获取会话的全部消息列表，内存未命中时从 D1 加载
     def get_messages(conv_id: str) -> list[dict]:
         conv = _conversations.get(conv_id)
-        return [message.to_dict() for message in conv.messages] if conv else []
+        if conv and conv.messages:
+            return [message.to_dict() for message in conv.messages]
+
+        # D1 回退
+        try:
+            from src.repositories import get_repositories
+            repos = get_repositories()
+            messages_data, _ = repos.get_messages(conv_id, 200, 0)
+            loaded = [
+                {
+                    "id": m["id"],
+                    "role": m["role"],
+                    "content": m["content_json"],
+                    "created_at": m["created_at"],
+                }
+                for m in messages_data
+            ]
+
+            # 写回内存
+            if conv:
+                from src.services import Message as MessageCls
+                conv.messages = [MessageCls(m["role"], m["content_json"]) for m in messages_data]
+                conv.messages[-1].id = messages_data[-1]["id"] if messages_data else ""
+                conv.messages[-1].created_at = messages_data[-1]["created_at"] if messages_data else ""
+
+            return loaded
+        except Exception as exc:
+            logger.warning("[service] D1 get messages for conv %s failed: %s", conv_id, exc)
+            return []
 
     @staticmethod
     # 清空会话消息列表和关联状态
@@ -311,17 +398,87 @@ class KnowledgeService:
 
     @staticmethod
     def list_documents() -> list[dict]:
-        """列出所有已索引文档"""
-        return sorted(
-            [d.to_dict() for d in _documents.values()],
-            key=lambda d: d["created_at"],
-            reverse=True,
-        )
+        """列出所有已索引文档，D1 为权威数据源"""
+        try:
+            from src.clients.memory_gateway import CloudflareMemoryClient
+            client = CloudflareMemoryClient()
+            result = client.list_documents("default", limit=100)
+            docs = [
+                {
+                    "id": d["id"],
+                    "name": d["name"],
+                    "size": d["size"],
+                    "status": d["status"],
+                    "chunks": d.get("chunk_count", 0),
+                    "category": d.get("category"),
+                    "created_at": d["created_at"],
+                }
+                for d in result.get("documents", [])
+            ]
+            # 写回内存
+            for d in docs:
+                if d["id"] in _documents:
+                    existing = _documents[d["id"]]
+                    existing.chunks = d["chunks"]
+                    existing.status = d["status"]
+                else:
+                    doc = Document(
+                        name=d["name"],
+                        size=d["size"],
+                        chunks=d["chunks"],
+                        category=d["category"],
+                    )
+                    doc.id = d["id"]
+                    doc.status = d["status"]
+                    doc.createdAt = d["created_at"]
+                    _documents[d["id"]] = doc
+
+                # 缓存原始内容用于 reindex
+                content_text = d.get("content_text", "")
+                if content_text:
+                    _document_contents[d["id"]] = (content_text.encode("utf-8"), d["name"])
+            return sorted(docs, key=lambda d: d["created_at"], reverse=True)
+        except Exception:
+            return sorted(
+                [d.to_dict() for d in _documents.values()],
+                key=lambda d: d["created_at"],
+                reverse=True,
+            )
 
     @staticmethod
     def get_document(doc_id: str) -> Document | None:
-        """获取指定文档详情"""
-        return _documents.get(doc_id)
+        """获取指定文档详情，内存未命中时从 D1 加载"""
+        cached = _documents.get(doc_id)
+        if cached:
+            return cached
+
+        # D1 回退
+        try:
+            from src.clients.memory_gateway import CloudflareMemoryClient
+            client = CloudflareMemoryClient()
+            data = client.get_document(doc_id)
+            if not data:
+                return None
+            doc_data = data.get("document", {})
+            doc = Document(
+                name=doc_data.get("name", ""),
+                size=doc_data.get("size", 0),
+                chunks=doc_data.get("chunk_count", 0),
+                category=doc_data.get("category"),
+            )
+            doc.id = doc_data["id"]
+            doc.status = doc_data.get("status", "indexed")
+            doc.createdAt = doc_data.get("created_at", datetime.now().isoformat())
+            _documents[doc_id] = doc
+
+            # 缓存原始内容用于 reindex
+            content_text = doc_data.get("content_text", "")
+            if content_text:
+                _document_contents[doc_id] = (content_text.encode("utf-8"), doc.name)
+
+            return doc
+        except Exception:
+            return None
 
     @staticmethod
     async def delete_document(doc_id: str) -> bool:
@@ -342,13 +499,28 @@ class KnowledgeService:
 
     @staticmethod
     async def reindex_document(doc_id: str) -> Document:
-        """重新索引指定文档"""
+        """重新索引指定文档，内存无内容时从 D1 加载"""
         doc = _documents.get(doc_id)
         if not doc:
             raise BusinessError(BusinessErrorCode.NOT_FOUND, "Document not found", 404)
+
         source = _document_contents.get(doc_id)
         if source is None:
-            raise BusinessError(BusinessErrorCode.NOT_FOUND, "Document content not found", 404)
+            # 从 D1 加载原始内容
+            try:
+                from src.clients.memory_gateway import CloudflareMemoryClient
+                client = CloudflareMemoryClient()
+                data = client.get_document(doc_id)
+                if data and data.get("document", {}).get("content_text"):
+                    content_text = data["document"]["content_text"]
+                    filename = data["document"].get("filename", doc.name)
+                    source = (content_text.encode("utf-8"), filename)
+                    _document_contents[doc_id] = source
+            except Exception:
+                pass
+
+        if source is None:
+            raise BusinessError(BusinessErrorCode.NOT_FOUND, "Document content not found in memory or D1", 404)
 
         try:
             buffer, filename = source

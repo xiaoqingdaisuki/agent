@@ -21,6 +21,8 @@ export interface Document {
   category: string;
   status: "indexed" | "failed";
   chunk_count: number;
+  content_text: string;
+  content_filename: string;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -149,6 +151,8 @@ export async function createDocument(
     category: doc.category,
     status: degraded ? "failed" : "indexed",
     chunk_count: textChunks.length,
+    content_text: doc.content,
+    content_filename: doc.filename,
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -156,7 +160,7 @@ export async function createDocument(
 
   await db
     .prepare(
-      "INSERT INTO documents (id, user_id, name, filename, file_type, size, category, status, chunk_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO documents (id, user_id, name, filename, file_type, size, category, status, chunk_count, content_text, content_filename, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(
       document.id,
@@ -168,6 +172,8 @@ export async function createDocument(
       document.category,
       document.status,
       document.chunk_count,
+      doc.content,
+      doc.filename,
       document.created_at,
       document.updated_at,
     )

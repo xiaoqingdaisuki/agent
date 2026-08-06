@@ -119,7 +119,7 @@ class MetricsCollector:
         self._metrics.clear()
 
 
-# ============ 全局单例 ============
+# ============ 全局单例 ==========
 
 _metrics = MetricsCollector()
 
@@ -128,7 +128,51 @@ def get_metrics_collector() -> MetricsCollector:
     return _metrics
 
 
-# 记录一次工具调用指标到全局收集器
+# 异步批量刷入 Gateway（不阻塞工具执行）
+def _flush_metrics() -> None:
+    """将工具指标批量写入 Gateway D1"""
+    events = _metrics.get_events()
+    if not events:
+        return
+    try:
+        import asyncio
+        import threading
+
+        from src.clients.memory_gateway import CloudflareMemoryClient
+
+        client = CloudflareMemoryClient()
+        entries = [
+            {
+                "tool_name": e["tool"],
+                "tool_version": e.get("version", ""),
+                "ok": e["ok"],
+                "error_code": e.get("error"),
+                "duration_ms": e["duration_ms"],
+                "risk_level": e.get("risk", "R0"),
+                "user_id": e.get("user_id", ""),
+                "tenant_id": e.get("tenant_id", ""),
+            }
+            for e in events
+        ]
+
+        async def _do_flush():
+            await client.write_tool_metrics(entries)
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(_do_flush())
+            else:
+                loop.run_until_complete(_do_flush())
+        except RuntimeError:
+            def _run():
+                asyncio.run(_do_flush())
+
+            threading.Thread(target=_run, daemon=True).start()
+    except Exception:
+        pass  # 刷入失败静默降级
+
+
 def record_tool_metric(
     tool_name: str,
     tool_version: str,
@@ -153,6 +197,10 @@ def record_tool_metric(
             timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         )
     )
+
+    # 每 500 条异步刷入 Gateway
+    if len(_metrics._metrics) >= 500:
+        _flush_metrics()
 
 
 # ============ 导出 ============

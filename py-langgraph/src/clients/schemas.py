@@ -145,6 +145,7 @@ class DocumentData(BaseModel):
     category: str = "general"
     status: str  # indexed | failed
     chunk_count: int = 0
+    content_text: str = ""
     created_at: str
     updated_at: str
     deleted_at: Optional[str] = None

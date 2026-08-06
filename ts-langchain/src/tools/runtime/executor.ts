@@ -41,6 +41,44 @@ interface AuditEntry {
 }
 
 const auditLog: AuditEntry[] = [];
+let gatewayClient: any = null;
+
+function getGatewayClient() {
+  if (!gatewayClient) {
+    const { CloudflareMemoryClient } = require("../../clients/memory_gateway.js");
+    gatewayClient = new CloudflareMemoryClient({
+      baseUrl: process.env.CLOUDFLARE_MEMORY_BASE_URL || "http://localhost:8787",
+      secret: process.env.CLOUDFLARE_MEMORY_SECRET || "",
+    });
+  }
+  return gatewayClient;
+}
+
+// 批量写入审计日志到 Gateway（异步，不阻塞）
+async function flushAuditLogs(): Promise<void> {
+  if (auditLog.length === 0) return;
+  const entries = auditLog.splice(0, auditLog.length);
+  try {
+    const client = getGatewayClient();
+    await client.writeAuditLogs(
+      entries.map((e) => ({
+        user_id: e.user_id,
+        tenant_id: e.tenant_id,
+        conversation_id: e.conversation_id,
+        tool_name: e.tool_name,
+        tool_version: e.tool_version,
+        risk_level: e.risk_level,
+        ok: e.ok,
+        error_code: e.error_code,
+        duration_ms: e.duration_ms,
+        request_id: e.request_id,
+        trace_id: e.trace_id,
+      })),
+    );
+  } catch (err) {
+    console.warn("[executor] Failed to flush audit logs to Gateway:", err);
+  }
+}
 
 export function getAuditLog(): ReadonlyArray<AuditEntry> {
   return auditLog;
@@ -254,9 +292,13 @@ export function recordAudit(entry: Omit<AuditEntry, "timestamp">): void {
     timestamp: new Date().toISOString(),
   });
 
-  // 保留最近 1000 条
+  // 保留最近 1000 条，超出阈值时异步刷入 Gateway
   if (auditLog.length > 1000) {
     auditLog.splice(0, auditLog.length - 1000);
+  }
+  if (auditLog.length >= 500) {
+    // 达到 500 条时异步刷入 Gateway，避免内存堆积
+    void flushAuditLogs();
   }
 
   // 同步记录可观测性指标

@@ -51,7 +51,7 @@ export async function chat(
 
   const response = await agent.invoke([
     { role: "system", content: systemPrompt },
-    ...getHistory(threadId).map(toOpenAIMessage),
+    ...(await getHistory(threadId)).map(toOpenAIMessage),
     { role: "user", content: message },
   ]);
   const reply =

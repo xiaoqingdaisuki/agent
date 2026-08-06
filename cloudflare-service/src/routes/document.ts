@@ -183,20 +183,23 @@ export function registerDocumentRoutes(app: any) {
         );
       }
 
-      // 获取现有块内容
-      const existingChunks = await getChunksByDocument(c.env.DB, documentId);
-      if (existingChunks.length === 0) {
-        return c.json(
-          { ok: false, data: null, error: { code: "DOCUMENT_NO_CONTENT", message: "No chunks to reindex" }, meta: { request_id: c.get("requestId"), degraded: false, warnings: [] } },
-          400,
-        );
+      // 优先使用存储的原始内容，无则从 chunks 拼接
+      let fullText = document.content_text;
+      if (!fullText) {
+        const existingChunks = await getChunksByDocument(c.env.DB, documentId);
+        if (existingChunks.length === 0) {
+          return c.json(
+            { ok: false, data: null, error: { code: "DOCUMENT_NO_CONTENT", message: "No content available for reindex" }, meta: { request_id: c.get("requestId"), degraded: false, warnings: [] } },
+            400,
+          );
+        }
+        fullText = existingChunks.map((ch) => ch.content).join("\n\n");
       }
 
       // 删除旧块
       await deleteChunksByDocument(c.env.DB, documentId);
 
       // 重新切分 + 嵌入
-      const fullText = existingChunks.map((ch) => ch.content).join("\n\n");
       const textChunks = splitText(fullText);
 
       const hashPromises = textChunks.map((chunk) => hashContent(chunk));

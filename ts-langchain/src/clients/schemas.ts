@@ -100,6 +100,7 @@ export const DocumentSchema = z.object({
   category: z.string(),
   status: z.enum(["indexed", "failed"]),
   chunk_count: z.coerce.number().int().nonnegative(),
+  content_text: z.string().default(""),
   created_at: z.string(),
   updated_at: z.string(),
   deleted_at: z.string().nullable(),

@@ -310,6 +310,20 @@ class CloudflareMemoryClient:
                 return False
             raise
 
+    async def write_audit_logs(self, entries: list[dict]) -> None:
+        """批量写入审计日志（不阻塞主流程）"""
+        try:
+            await self._request("POST", "/internal/v1/audit-logs", {"entries": entries})
+        except Exception:
+            pass  # 审计日志写入失败不影响主流程
+
+    async def write_tool_metrics(self, entries: list[dict]) -> None:
+        """批量写入工具指标（不阻塞主流程）"""
+        try:
+            await self._request("POST", "/internal/v1/tool-metrics", {"entries": entries})
+        except Exception:
+            pass  # 指标写入失败不影响主流程
+
     async def list_user_memories(self, user_id: str, limit: int = 100) -> list[dict]:
         """列出用户所有记忆（用于清空）"""
         result = await self._request("GET", f"/internal/v1/users/{user_id}/memories?limit={limit}")

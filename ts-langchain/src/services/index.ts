@@ -56,11 +56,12 @@ export interface Conversation {
   mode: "chat" | "knowledge" | "mixed";
   createdAt: string;
   messageCount: number;
+  userId?: string;
 }
 
 export interface Message {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system" | "tool";
   content: string;
   createdAt: string;
 }
@@ -209,6 +210,7 @@ export class ConversationService {
       mode,
       createdAt: new Date().toISOString(),
       messageCount: 0,
+      userId,
     };
     conversations.set(id, conversation);
     conversationMessages.set(id, []);
@@ -218,8 +220,8 @@ export class ConversationService {
       try {
         const repos = getRepositories();
         await repos.conversation.create(userId, title, mode);
-      } catch {
-        // D1 持久化失败不影响内存中的会话
+      } catch (err) {
+        console.warn(`[service] D1 create conversation failed: ${err}`);
       }
     }
 
@@ -241,8 +243,8 @@ export class ConversationService {
         if (!existing) {
           await repos.conversation.create(userId, title, mode);
         }
-      } catch {
-        // D1 检查/创建失败不影响内存
+      } catch (err) {
+        console.warn(`[service] D1 ensure conversation ${conversationId} failed: ${err}`);
       }
     }
 
@@ -254,25 +256,109 @@ export class ConversationService {
         mode,
         createdAt: new Date().toISOString(),
         messageCount: 0,
+        userId,
       };
       conversations.set(conversationId, conversation);
       conversationMessages.set(conversationId, []);
+    } else {
+      // 更新 userId（ensure 可能先于 create 被调用）
+      const existing = conversations.get(conversationId);
+      if (existing && userId && !existing.userId) {
+        existing.userId = userId;
+      }
     }
 
     return conversations.get(conversationId)!;
   }
 
-  // 根据 ID 获取会话，不存在时返回 undefined
-  static get(id: string): Conversation | undefined {
-    return conversations.get(id);
+  // 根据 ID 获取会话，内存未命中时从 D1 加载
+  static async get(id: string): Promise<Conversation | undefined> {
+    const cached = conversations.get(id);
+    if (cached) return cached;
+
+    // D1 回退
+    try {
+      const repos = getRepositories();
+      const data = await repos.conversation.get(id);
+      if (!data) return undefined;
+
+      const conversation: Conversation = {
+        id: data.id,
+        title: data.title,
+        mode: data.mode,
+        createdAt: data.created_at,
+        messageCount: 0,
+        userId: data.user_id,
+      };
+      conversations.set(id, conversation);
+      conversationMessages.set(id, []);
+      return conversation;
+    } catch (err) {
+      console.warn(`[service] D1 get conversation ${id} failed: ${err}`);
+      return undefined;
+    }
   }
 
-  // 列出所有会话，按创建时间倒序排列
-  static list(): Conversation[] {
-    return Array.from(conversations.values()).sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
+  // 列出所有会话，内存未命中时从 D1 加载
+  static async list(): Promise<Conversation[]> {
+    // 优先从 D1 加载（D1 为权威数据源）
+    try {
+      const repos = getRepositories();
+      // 遍历已知 userId 从 D1 拉取，或尝试不带 userId 的 list
+      const knownUserIds = new Set(
+        Array.from(conversations.values())
+          .map((c) => c.userId)
+          .filter((id): id is string => !!id),
+      );
+
+      const allConversations: Conversation[] = [];
+
+      // 从已知 userId 拉取
+      for (const uid of knownUserIds) {
+        const dataList = await repos.conversation.list(uid, 100, 0);
+        for (const d of dataList) {
+          allConversations.push({
+            id: d.id,
+            title: d.title,
+            mode: d.mode,
+            createdAt: d.created_at,
+            messageCount: 0,
+            userId: d.user_id,
+          });
+        }
+      }
+
+      // 如果内存中有无 userId 的会话，也包含进来
+      for (const c of conversations.values()) {
+        if (!c.userId && !allConversations.find((ac) => ac.id === c.id)) {
+          allConversations.push(c);
+        }
+      }
+
+      // 合并去重：D1 数据优先
+      const merged = new Map<string, Conversation>();
+      for (const c of allConversations) merged.set(c.id, c);
+      for (const c of conversations.values()) {
+        if (!merged.has(c.id)) merged.set(c.id, c);
+      }
+
+      // 写回内存
+      for (const [id, conv] of merged) {
+        conversations.set(id, conv);
+      }
+
+      return Array.from(merged.values()).sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+    } catch (err) {
+      console.warn(`[service] D1 list conversations failed: ${err}`);
+      // D1 失败时返回内存数据
+      return Array.from(conversations.values()).sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+    }
   }
 
   // 删除会话及其关联的消息和命令状态，同时从 D1 删除
@@ -286,8 +372,8 @@ export class ConversationService {
     try {
       const repos = getRepositories();
       await repos.conversation.delete(id);
-    } catch {
-      // 非阻塞
+    } catch (err) {
+      console.warn(`[service] D1 delete conversation ${id} failed: ${err}`);
     }
 
     return deleted;
@@ -326,8 +412,34 @@ export class ConversationService {
   }
 
   // 获取会话的全部消息列表
-  static getMessages(conversationId: string): Message[] {
-    return [...(conversationMessages.get(conversationId) ?? [])];
+  // 获取会话消息列表，内存未命中时从 D1 加载
+  static async getMessages(conversationId: string): Promise<Message[]> {
+    const cached = conversationMessages.get(conversationId);
+    if (cached) return [...cached];
+
+    // D1 回退
+    try {
+      const repos = getRepositories();
+      const { messages } = await repos.message.getMessages(conversationId, 200, 0);
+      const loaded: Message[] = messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content_json,
+        createdAt: m.created_at,
+      }));
+      conversationMessages.set(conversationId, loaded);
+
+      // 同步更新会话 messageCount
+      const conv = conversations.get(conversationId);
+      if (conv && loaded.length > 0) {
+        conv.messageCount = loaded.filter((m) => m.role === "user").length;
+      }
+
+      return [...loaded];
+    } catch (err) {
+      console.warn(`[service] D1 get messages for conversation ${conversationId} failed: ${err}`);
+      return [];
+    }
   }
 
   // 清空会话消息列表和关联状态
@@ -362,7 +474,7 @@ export class AgentService {
         return reply;
       }
 
-      const history = getHistory(conversationId);
+      const history = await getHistory(conversationId);
       const memoryContext: SystemMessage[] = [];
 
       // 注入用户记忆
@@ -376,7 +488,7 @@ export class AgentService {
         }
       }
 
-      const conversation = ConversationService.get(conversationId);
+      const conversation = await ConversationService.get(conversationId);
       const agent =
         conversation?.mode === "knowledge"
           ? null
@@ -503,7 +615,7 @@ export class AgentService {
         return;
       }
 
-      const history = getHistory(conversationId);
+      const history = await getHistory(conversationId);
       const memoryContext: SystemMessage[] = [];
 
       if (userId) {
@@ -745,20 +857,77 @@ export class KnowledgeService {
   }
 
   /**
-   * 列出所有文档
+   * 列出所有文档，D1 为权威数据源
    */
-  static listDocuments(): Document[] {
-    return Array.from(documents.values()).sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
+  static async listDocuments(): Promise<Document[]> {
+    // 优先从 D1 加载
+    try {
+      const result = await this.client.listDocuments(KNOWLEDGE_USER_ID, {
+        limit: 100,
+      });
+      const d1Docs: Document[] = result.documents.map((d) => ({
+        id: d.id,
+        name: d.name,
+        size: d.size,
+        status: d.status === "failed" ? "failed" : "indexed",
+        chunks: d.chunk_count,
+        category: d.category,
+        createdAt: d.created_at,
+      }));
+
+      // 写回内存缓存
+      for (const doc of d1Docs) {
+        documents.set(doc.id, doc);
+      }
+
+      return d1Docs.sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+    } catch {
+      // D1 失败时返回内存数据
+      return Array.from(documents.values()).sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+    }
   }
 
   /**
-   * 获取文档详情
+   * 获取文档详情，内存未命中时从 D1 加载
    */
-  static getDocument(id: string): Document | undefined {
-    return documents.get(id);
+  static async getDocument(id: string): Promise<Document | undefined> {
+    const cached = documents.get(id);
+    if (cached) return cached;
+
+    // D1 回退
+    try {
+      const data = await this.client.getDocument(id);
+      if (!data) return undefined;
+
+      const doc: Document = {
+        id: data.document.id,
+        name: data.document.name,
+        size: data.document.size,
+        status: data.document.status === "failed" ? "failed" : "indexed",
+        chunks: data.document.chunk_count,
+        category: data.document.category,
+        createdAt: data.document.created_at,
+      };
+      documents.set(id, doc);
+
+      // 缓存原始内容用于 reindex
+      if (data.document.content_text) {
+        documentContents.set(id, {
+          content: data.document.content_text,
+          filename: data.document.filename,
+        });
+      }
+
+      return doc;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -776,7 +945,7 @@ export class KnowledgeService {
   }
 
   /**
-   * 重新索引
+   * 重新索引，内存无内容时从 D1 加载
    */
   static async reindexDocument(id: string): Promise<Document> {
     const doc = documents.get(id);
@@ -788,11 +957,27 @@ export class KnowledgeService {
       );
     }
 
-    const source = documentContents.get(id);
+    // 优先从内存获取，回退到 D1
+    let source = documentContents.get(id);
+    if (!source) {
+      try {
+        const data = await this.client.getDocument(id);
+        if (data?.document.content_text) {
+          source = {
+            content: data.document.content_text,
+            filename: data.document.filename,
+          };
+          documentContents.set(id, source);
+        }
+      } catch {
+        // D1 加载失败，继续检查内存
+      }
+    }
+
     if (!source) {
       throw new BusinessError(
         BusinessErrorCode.NOT_FOUND,
-        "Document content not found",
+        "Document content not found in memory or D1",
         404,
       );
     }

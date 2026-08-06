@@ -157,6 +157,13 @@ async def send_message(conv_id: str, req: SendMessageRequest):
                 detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
             )
 
+        # 从 Gateway 恢复 checkpoint（重启后恢复图状态）
+        try:
+            from src.memory import get_default_checkpointer
+            await get_default_checkpointer().restore_from_gateway(conv_id)
+        except Exception:
+            pass  # 恢复失败不影响主流程
+
         ConversationService.append_user_message(conv_id, req.content, req.user_id or "")
         reply = await AgentService.chat(conv_id, req.content, user_id=req.user_id)
 
@@ -187,6 +194,13 @@ async def stream_message(conv_id: str, req: SendMessageRequest):
             status_code=404,
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
+
+    # 从 Gateway 恢复 checkpoint（重启后恢复图状态）
+    try:
+        from src.memory import get_default_checkpointer
+        await get_default_checkpointer().restore_from_gateway(conv_id)
+    except Exception:
+        pass  # 恢复失败不影响主流程
 
     ConversationService.append_user_message(conv_id, req.content, req.user_id or "")
 

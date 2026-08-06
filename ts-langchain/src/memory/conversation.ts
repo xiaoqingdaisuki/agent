@@ -8,7 +8,7 @@
  * 流式响应只在实际成功时落库，防止重复消息。
  */
 
-import { BaseMessage } from "@langchain/core/messages";
+import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 import { getRepositories } from "../repositories/index.js";
 
 export const MAX_HISTORY_MESSAGES = 50;
@@ -17,13 +17,33 @@ export const MAX_HISTORY_MESSAGES = 50;
 const conversations = new Map<string, BaseMessage[]>();
 
 /**
- * 获取指定线程的对话历史，不存在则返回空数组
+ * 获取指定线程的对话历史，内存未命中时从 D1 加载
  */
-export function getHistory(threadId: string): BaseMessage[] {
-  if (!conversations.has(threadId)) {
-    conversations.set(threadId, []);
+export async function getHistory(threadId: string): Promise<BaseMessage[]> {
+  const cached = conversations.get(threadId);
+  if (cached && cached.length > 0) return cached;
+
+  // D1 回退
+  try {
+    const repos = getRepositories();
+    const { messages } = await repos.message.getMessages(threadId, MAX_HISTORY_MESSAGES, 0);
+    const loaded: BaseMessage[] = [];
+    for (const m of messages) {
+      const content = m.content_json;
+      if (m.role === "user") {
+        loaded.push(new HumanMessage(content));
+      } else if (m.role === "assistant") {
+        loaded.push(new AIMessage(content));
+      } else if (m.role === "system") {
+        loaded.push(new SystemMessage(content));
+      }
+    }
+    conversations.set(threadId, loaded);
+    return loaded;
+  } catch (err) {
+    console.warn(`[memory] D1 load messages failed for thread ${threadId}: ${err}`);
+    return conversations.get(threadId) ?? [];
   }
-  return conversations.get(threadId)!;
 }
 
 /**
@@ -32,7 +52,7 @@ export function getHistory(threadId: string): BaseMessage[] {
  * 同时持久化到 Repository（异步，不阻塞主流程）。
  */
 export async function appendMessage(threadId: string, message: BaseMessage): Promise<void> {
-  const history = getHistory(threadId);
+  const history = await getHistory(threadId);
   history.push(message);
 
   const role = message._getType() === "human" ? "user" : "assistant";
@@ -57,8 +77,8 @@ export async function appendMessage(threadId: string, message: BaseMessage): Pro
         created_at: new Date().toISOString(),
       },
     ]);
-  } catch {
-    // 持久化失败不影响进程内历史
+  } catch (err) {
+    console.error(`[memory] Failed to persist message to D1 for thread ${threadId}: ${err}`);
   }
 
   // 裁剪超出上限的旧消息
@@ -84,7 +104,7 @@ export async function clearHistory(threadId: string): Promise<void> {
   try {
     const repos = getRepositories();
     await repos.message.clear(threadId);
-  } catch {
-    // 清空失败不影响进程内清理
+  } catch (err) {
+    console.warn(`[memory] D1 clear messages failed for thread ${threadId}: ${err}`);
   }
 }

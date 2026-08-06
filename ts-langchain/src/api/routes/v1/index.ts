@@ -101,13 +101,14 @@ export async function registerV1Routes(app: FastifyInstance) {
   });
 
   app.get("/conversations", async () => {
-    return ConversationService.list().map(serializeConversation);
+    const convs = await ConversationService.list();
+    return convs.map(serializeConversation);
   });
 
   app.get<{ Params: { id: string } }>(
     "/conversations/:id",
     async (request, reply) => {
-      const conv = ConversationService.get(request.params.id);
+      const conv = await ConversationService.get(request.params.id);
       if (!conv) {
         return reply.status(404).send({
           error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
@@ -133,15 +134,14 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>(
     "/conversations/:id/messages",
     async (request, reply) => {
-      const conv = ConversationService.get(request.params.id);
+      const conv = await ConversationService.get(request.params.id);
       if (!conv) {
         return reply.status(404).send({
           error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
         });
       }
-      return ConversationService.getMessages(request.params.id).map(
-        serializeMessage,
-      );
+      const messages = await ConversationService.getMessages(request.params.id);
+      return messages.map(serializeMessage);
     },
   );
 
@@ -338,13 +338,14 @@ export async function registerV1Routes(app: FastifyInstance) {
   });
 
   app.get("/knowledge/documents", async () => {
-    return KnowledgeService.listDocuments().map(serializeDocument);
+    const docs = await KnowledgeService.listDocuments();
+    return docs.map(serializeDocument);
   });
 
   app.get<{ Params: { id: string } }>(
     "/knowledge/documents/:id",
     async (request, reply) => {
-      const doc = KnowledgeService.getDocument(request.params.id);
+      const doc = await KnowledgeService.getDocument(request.params.id);
       if (!doc) {
         return reply.status(404).send({
           error: { code: BusinessErrorCode.NOT_FOUND, message: "文档不存在" },

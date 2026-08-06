@@ -58,7 +58,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       const toolAgent = await createToolAgent(
         getAgentPromptOverride(threadId, message),
       );
-      const history = getHistory(threadId);
+      const history = await getHistory(threadId);
 
       const toolContext = {
         request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,

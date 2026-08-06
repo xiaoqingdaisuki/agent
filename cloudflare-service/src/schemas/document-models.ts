@@ -27,6 +27,8 @@ export const DocumentSchema = z.object({
   category: DocumentCategorySchema,
   status: DocumentStatusSchema,
   chunk_count: z.coerce.number().int().nonnegative(),
+  content_text: z.string().default(""),
+  content_filename: z.string().default(""),
   created_at: z.string(),
   updated_at: z.string(),
   deleted_at: z.string().nullable(),

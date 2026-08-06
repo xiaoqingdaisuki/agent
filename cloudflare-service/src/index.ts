@@ -16,6 +16,9 @@ import { registerConversationRoutes } from "./routes/conversation.js";
 import { registerMessageRoutes } from "./routes/message.js";
 import { registerMemoryRoutes } from "./routes/memory.js";
 import { registerDocumentRoutes } from "./routes/document.js";
+import { registerCheckpointRoutes } from "./routes/checkpoint.js";
+import { registerAuditLogRoutes } from "./routes/audit-log.js";
+import { registerToolMetricsRoutes } from "./routes/tool-metrics.js";
 import { registerOpenApiRoute } from "./routes/openapi.js";
 
 // 扩展 Hono Context 类型
@@ -79,6 +82,9 @@ registerConversationRoutes(app);
 registerMessageRoutes(app);
 registerMemoryRoutes(app);
 registerDocumentRoutes(app);
+registerCheckpointRoutes(app);
+registerAuditLogRoutes(app);
+registerToolMetricsRoutes(app);
 registerOpenApiRoute(app);
 
 // 根路径

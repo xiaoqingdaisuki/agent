@@ -212,6 +212,46 @@ def record_audit(entry: dict[str, Any]) -> None:
     if len(_audit_log) > 1000:
         del _audit_log[: len(_audit_log) - 1000]
 
+    # 达到 500 条时异步刷入 Gateway
+    if len(_audit_log) >= 500:
+        _flush_audit_logs()
+
+
+# 异步批量刷入 Gateway（不阻塞工具执行）
+def _flush_audit_logs() -> None:
+    """将审计日志批量写入 Gateway D1"""
+    if not _audit_log:
+        return
+    entries = _audit_log.copy()
+    _audit_log.clear()
+    try:
+        import asyncio
+
+        from src.clients.memory_gateway import CloudflareMemoryClient
+
+        client = CloudflareMemoryClient()
+
+        async def _do_flush():
+            await client.write_audit_logs(entries)
+
+        # 在已有事件循环中提交后台任务
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(_do_flush())
+            else:
+                loop.run_until_complete(_do_flush())
+        except RuntimeError:
+            # 无事件循环，创建新线程运行
+            import threading
+
+            def _run():
+                asyncio.run(_do_flush())
+
+            threading.Thread(target=_run, daemon=True).start()
+    except Exception:
+        pass  # 刷入失败静默降级
+
 
 # ============ 核心执行器 ============
 
