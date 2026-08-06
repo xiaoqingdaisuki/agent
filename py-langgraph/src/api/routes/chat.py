@@ -7,6 +7,7 @@ from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
 from src.agents.deadline import AgentDeadline
 from src.agents.response_handler import get_finish_reason, is_likely_truncated, maybe_append_continuation_hint
 from src.commands import execute_agent_command, get_agent_prompt_override
+from src.services import ConversationService, Message
 
 router = APIRouter()
 
@@ -32,8 +33,19 @@ async def chat(request: ChatRequest):
     """
     try:
         thread_id = request.thread_id or str(uuid4())
+        ConversationService.ensure(thread_id, request.user_id)
+        ConversationService.append_user_message(
+            thread_id,
+            request.message,
+            request.user_id or "",
+        )
         command = execute_agent_command(request.message, thread_id)
         if command:
+            ConversationService.append_assistant_message(
+                thread_id,
+                Message("assistant", command.reply),
+                request.user_id or "",
+            )
             return ChatResponse(reply=command.reply, thread_id=thread_id)
 
         if request.user_id:
@@ -73,6 +85,12 @@ async def chat(request: ChatRequest):
         finish_reason = get_finish_reason(last_msg)
         if is_likely_truncated(reply_text, finish_reason):
             reply_text = maybe_append_continuation_hint(reply_text, finish_reason)
+
+        ConversationService.append_assistant_message(
+            thread_id,
+            Message("assistant", reply_text),
+            request.user_id or "",
+        )
 
         return ChatResponse(reply=reply_text, thread_id=thread_id)
     except TimeoutError:

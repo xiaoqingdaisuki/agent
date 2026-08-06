@@ -40,8 +40,12 @@ class TestWebSearchTool:
 
 class TestWebReadTool:
     def test_rejects_hostname_resolving_to_private_ip(self, monkeypatch):
+        import importlib
+
+        web_read_module = importlib.import_module("src.tools.web_read")
         monkeypatch.setattr(
-            "src.tools.web_read.socket.getaddrinfo",
+            web_read_module.socket,
+            "getaddrinfo",
             lambda *args, **kwargs: [(2, 1, 6, "", ("10.0.0.8", 80))],
         )
         safe, reason = _is_safe_url("https://attacker.example/path")

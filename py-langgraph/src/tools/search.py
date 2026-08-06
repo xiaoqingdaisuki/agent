@@ -389,6 +389,7 @@ class SearchInput(BaseModel):
 
 # 使用 Tavily 搜索实时互联网信息并返回来源链接
 @tool(args_schema=SearchInput)
+# 执行 web search 对应的业务逻辑
 def web_search(query: str) -> str:
     """使用 Tavily 搜索实时互联网信息并返回来源链接。"""
     return search_results_to_text(multi_source_search(query), query)

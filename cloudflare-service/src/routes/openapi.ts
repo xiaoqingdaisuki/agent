@@ -27,6 +27,7 @@ import {
 /**
  * 将 Zod Schema 实例属性提取为 OpenAPI 约束条件（Zod 4 兼容）
  */
+// 获取 getStringConstraints 对应的数据
 function getStringConstraints(schema: any): Record<string, unknown> {
   const constraints: Record<string, unknown> = {};
   if (schema.minLength != null) constraints.minLength = schema.minLength;
@@ -37,6 +38,7 @@ function getStringConstraints(schema: any): Record<string, unknown> {
 /**
  * 将 Zod Schema 实例的数字约束提取为 OpenAPI 约束条件（Zod 4 兼容）
  */
+// 获取 getNumberConstraints 对应的数据
 function getNumberConstraints(schema: any): Record<string, unknown> {
   const constraints: Record<string, unknown> = {};
   if (schema.isInt) constraints.type = "integer";
@@ -48,6 +50,7 @@ function getNumberConstraints(schema: any): Record<string, unknown> {
 /**
  * 获取 Zod schema 内部类型标识（Zod 4: _def.type / Zod 3: _def.typeName）
  */
+// 获取 getSchemaType 对应的数据
 function getSchemaType(schema: any): string {
   return schema._def?.type || "";
 }
@@ -56,6 +59,7 @@ function getSchemaType(schema: any): string {
  * 将 Zod Schema 转换为 OpenAPI Schema Object
  * 适配 Zod 4 内部 API（_def.type 替代 _def.typeName，实例属性替代 checks[].kind）
  */
+// 执行 zodToOpenApi 对应的业务逻辑
 function zodToOpenApi(schema: z.ZodTypeAny): Record<string, unknown> {
   const anySchema = schema as any;
   const type = getSchemaType(anySchema);
@@ -148,6 +152,7 @@ function zodToOpenApi(schema: z.ZodTypeAny): Record<string, unknown> {
 
 // ============ OpenAPI 规范定义 ==========
 
+// 获取 getOpenApiSpec 对应的数据
 function getOpenApiSpec(): Record<string, unknown> {
   const spec: Record<string, unknown> = {
     openapi: "3.0.3",
@@ -651,6 +656,7 @@ function getOpenApiSpec(): Record<string, unknown> {
 
 // ============ 路由注册 ==========
 
+// 创建或注册 registerOpenApiRoute 所需的数据
 export function registerOpenApiRoute(app: any) {
   app.get("/internal/v1/openapi.json", async (c: any) => {
     const spec = getOpenApiSpec();

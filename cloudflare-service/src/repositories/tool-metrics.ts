@@ -25,6 +25,7 @@ export interface ToolMetricEntry {
 /**
  * 批量写入工具指标
  */
+// 创建或注册 createToolMetrics 所需的数据
 export async function createToolMetrics(
   db: D1Database,
   entries: Array<{
@@ -66,6 +67,7 @@ export async function createToolMetrics(
 /**
  * 查询工具指标（按工具名 + 时间范围）
  */
+// 获取 getToolMetrics 对应的数据
 export async function getToolMetrics(
   db: D1Database,
   toolName?: string,
@@ -104,6 +106,7 @@ export async function getToolMetrics(
 /**
  * 获取指标快照（汇总统计）
  */
+// 获取 getToolMetricsSnapshot 对应的数据
 export async function getToolMetricsSnapshot(
   db: D1Database,
   sinceHours = 24,

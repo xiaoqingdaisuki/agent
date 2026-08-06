@@ -38,6 +38,7 @@ class KnowledgeHit:
     chunk_index: int | None = None
 
 
+# 执行 hits to text 对应的业务逻辑
 def hits_to_text(hits: list[KnowledgeHit], query: str) -> str:
     """将命中结果转换为展示文本"""
     if not hits:
@@ -84,6 +85,7 @@ class KnowledgeSearchInput(BaseModel):
 
 
 @tool(args_schema=KnowledgeSearchInput)
+# 执行 knowledge search 对应的业务逻辑
 async def knowledge_search(query: str, top_k: int = 5) -> str:
     """在企业知识库中搜索相关信息。适用于需要从公司文档、产品手册、技术文档等内部资料中查找答案的场景。"""
     try:

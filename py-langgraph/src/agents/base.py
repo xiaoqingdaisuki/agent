@@ -63,6 +63,7 @@ def get_llm(provider: str = "openai"):
     )
 
 
+# 创建或注册 build chat agent 所需的数据
 def build_chat_agent(checkpointer=None):
     """
     对话 Agent — 最简单的 StateGraph
@@ -74,6 +75,7 @@ def build_chat_agent(checkpointer=None):
 
     llm = get_llm()
 
+    # 执行 agent node 对应的业务逻辑
     async def agent_node(state: AgentState):
         system_prompt = SYSTEM_PROMPT
         user_id = state.get("user_id")
@@ -223,6 +225,7 @@ def should_continue(state: AgentState) -> Literal["tools", "limit", END]:
     return END
 
 
+# 执行 compile tool agent 对应的业务逻辑
 def _compile_tool_agent(checkpointer, base_prompt: str):
     """
     工具调用 Agent — 带条件路由的 StateGraph
@@ -239,6 +242,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
     llm = get_llm()
     llm_with_tools = llm.bind_tools(tools)
 
+    # 执行 agent node 对应的业务逻辑
     async def agent_node(state: AgentState):
         system_prompt = base_prompt
         user_id = state.get("user_id")
@@ -297,6 +301,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
 
         return {"messages": [response]}
 
+    # 执行 limit node 对应的业务逻辑
     async def limit_node(state: AgentState):
         # Drop the unexecuted tool-call message so providers do not reject a
         # dangling assistant tool request without matching ToolMessages.
@@ -363,6 +368,7 @@ def _get_cache_key(base_prompt: str, checkpointer) -> tuple:
 
 # 使用 checkpointer 的 id 作为缓存键的一部分，编译并缓存工具调用图
 @lru_cache(maxsize=10)
+# 执行 build cached tool agent 对应的业务逻辑
 def _build_cached_tool_agent(base_prompt: str, checkpointer_id: int | None):
     """使用 checkpointer 的 id 作为缓存键的一部分。"""
     cp = None if checkpointer_id is None else _resolve_checkpointer(checkpointer_id)
@@ -382,7 +388,8 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
 
     base_prompt = system_prompt_override or TOOL_CALLING_PROMPT
     if checkpointer is None:
-        return _build_cached_tool_agent(base_prompt, None)
+        checkpointer = _get_default_checkpointer()
+        return _build_cached_tool_agent(base_prompt, id(checkpointer))
     return _compile_tool_agent(checkpointer, base_prompt)
 
 

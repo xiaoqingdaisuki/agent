@@ -12,6 +12,7 @@ import {
   deleteThreadCheckpoints,
 } from "../repositories/checkpoint.js";
 
+// 创建或注册 registerCheckpointRoutes 所需的数据
 export function registerCheckpointRoutes(app: any) {
   // 保存或更新 checkpoint（upsert）
   app.post("/internal/v1/checkpoints/:thread_id", async (c: any) => {

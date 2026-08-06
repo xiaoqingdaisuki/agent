@@ -64,6 +64,7 @@ def create_app() -> FastAPI:
     app.middleware("http")(_timeout_middleware)
 
     @app.exception_handler(BusinessError)
+    # 执行 business error handler 对应的业务逻辑
     async def business_error_handler(request: Request, exc: BusinessError):
         return JSONResponse(
             status_code=exc.status_code,
@@ -71,6 +72,7 @@ def create_app() -> FastAPI:
         )
 
     @app.exception_handler(Exception)
+    # 执行 generic error handler 对应的业务逻辑
     async def generic_error_handler(request: Request, exc: Exception):
         return JSONResponse(
             status_code=500,
@@ -86,6 +88,7 @@ def create_app() -> FastAPI:
     app.include_router(v1_router, prefix="/api/v1", tags=["v1"])
 
     @app.get("/health")
+    # 执行 legacy health 对应的业务逻辑
     async def legacy_health():
         return {"status": "ok", "version": "0.2.0"}
 

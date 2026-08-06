@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["tests/**/*.ts"],
+    include: ["tests/**/test_*.ts", "tests/**/*.test.ts"],
     setupFiles: ["./tests/vitest.setup.ts"],
     coverage: {
       reporter: ["text", "json"],

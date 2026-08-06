@@ -35,6 +35,7 @@ _SENSITIVE_KEYS = frozenset(
 )
 
 
+# 执行 redact structured data 对应的业务逻辑
 def redact_structured_data(data):
     """对结构化数据递归脱敏 — 按 key 过滤 + 字符串值内容级脱敏。"""
     if data is None or isinstance(data, (bool, int, float)):
@@ -140,6 +141,7 @@ _CONTENT_REDACTION_RULES: list[tuple[str, re.Pattern, str]] = [
 ]
 
 
+# 执行 redact text content 对应的业务逻辑
 def redact_text_content(text: str) -> str:
     """对纯文本内容做内容级脱敏。"""
     result = text
@@ -148,6 +150,7 @@ def redact_text_content(text: str) -> str:
     return result
 
 
+# 执行 redact data 对应的业务逻辑
 def redact_data(data):
     """对任意类型数据做脱敏：结构化按 key 过滤 + 文本内容正则脱敏。"""
     if isinstance(data, str):

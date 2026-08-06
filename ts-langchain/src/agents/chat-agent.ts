@@ -14,6 +14,7 @@ function toOpenAIMessage(message: BaseMessage) {
   return { role, content: message.content };
 }
 
+// 创建或注册 createChatAgent 所需的数据
 export function createChatAgent(): ChatOpenAI {
   if (chatAgent) return chatAgent;
 
@@ -28,6 +29,7 @@ export function createChatAgent(): ChatOpenAI {
   return chatAgent;
 }
 
+// 执行 chat 对应的业务逻辑
 export async function chat(
   agent: ChatOpenAI,
   message: string,
@@ -57,8 +59,8 @@ export async function chat(
   const reply =
     typeof response.content === "string" ? response.content : response.text;
 
-  appendMessage(threadId, new HumanMessage(message));
-  appendMessage(threadId, new AIMessage(reply));
+  await appendMessage(threadId, new HumanMessage(message));
+  await appendMessage(threadId, new AIMessage(reply));
 
   return { reply, threadId };
 }

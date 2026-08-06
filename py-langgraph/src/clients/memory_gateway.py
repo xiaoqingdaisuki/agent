@@ -36,6 +36,7 @@ from src.clients.schemas import (
 class MemoryGatewayError(Exception):
     """Gateway 请求失败"""
 
+    # 初始化当前对象
     def __init__(self, code: str, message: str, status_code: int = 500):
         self.code = code
         self.message = message
@@ -46,6 +47,7 @@ class MemoryGatewayError(Exception):
 class CloudflareMemoryClient:
     """Cloudflare Service HTTP 客户端"""
 
+    # 初始化当前对象
     def __init__(
         self,
         base_url: str = "",
@@ -57,6 +59,7 @@ class CloudflareMemoryClient:
         self._timeout = timeout_ms or settings.memory_request_timeout_ms
         self._client: httpx.AsyncClient | None = None
 
+    # 执行 get client 对应的业务逻辑
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
@@ -65,10 +68,12 @@ class CloudflareMemoryClient:
             )
         return self._client
 
+    # 关闭资源并完成清理
     async def close(self) -> None:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
+    # 执行 headers 对应的业务逻辑
     def _headers(self, idempotency_key: str | None = None) -> dict[str, str]:
         headers = {
             "Authorization": f"Bearer {self._secret}",
@@ -78,6 +83,7 @@ class CloudflareMemoryClient:
             headers["Idempotency-Key"] = idempotency_key
         return headers
 
+    # 执行 request 对应的业务逻辑
     async def _request(
         self,
         method: str,
@@ -107,6 +113,7 @@ class CloudflareMemoryClient:
 
     # ============ Profile ============
 
+    # 获取 get profile 对应的数据
     async def get_profile(self, user_id: str) -> dict | None:
         """获取用户画像"""
         try:
@@ -118,9 +125,12 @@ class CloudflareMemoryClient:
                 return None
             raise
 
-    async def put_profile(self, user_id: str, name: str = "", preferences: dict | None = None) -> dict:
+    # 更新或保存 put profile 对应的数据
+    async def put_profile(self, user_id: str, name: str | None = None, preferences: dict | None = None) -> dict:
         """创建或更新用户画像"""
-        body: dict[str, Any] = {"name": name}
+        body: dict[str, Any] = {}
+        if name is not None:
+            body["name"] = name
         if preferences is not None:
             body["preferences"] = preferences
         result = await self._request("PUT", f"/internal/v1/users/{user_id}/profile", body)
@@ -128,21 +138,33 @@ class CloudflareMemoryClient:
 
     # ============ Conversation ============
 
-    async def create_conversation(self, user_id: str, title: str, mode: str = "chat") -> dict:
+    # 创建或注册 create conversation 所需的数据
+    async def create_conversation(
+        self,
+        user_id: str,
+        title: str,
+        mode: str = "chat",
+        conversation_id: str | None = None,
+    ) -> dict:
         """创建会话"""
-        result = await self._request("POST", "/internal/v1/conversations", {
+        body = {
             "user_id": user_id,
             "title": title,
             "mode": mode,
-        })
+        }
+        if conversation_id:
+            body["id"] = conversation_id
+        result = await self._request("POST", "/internal/v1/conversations", body)
         return ConversationData.model_validate(result["data"]).model_dump()
 
+    # 获取 list conversations 对应的数据
     async def list_conversations(self, user_id: str, limit: int = 20, offset: int = 0) -> list[dict]:
         """列出用户的会话"""
         result = await self._request("GET", f"/internal/v1/users/{user_id}/conversations?limit={limit}&offset={offset}")
         data = result.get("data", [])
         return [ConversationData.model_validate(item).model_dump() for item in data]
 
+    # 获取 get conversation 对应的数据
     async def get_conversation(self, conversation_id: str) -> dict | None:
         """获取会话详情"""
         try:
@@ -154,6 +176,7 @@ class CloudflareMemoryClient:
                 return None
             raise
 
+    # 删除或清理 delete conversation 对应的数据
     async def delete_conversation(self, conversation_id: str) -> bool:
         """删除会话"""
         try:
@@ -166,6 +189,7 @@ class CloudflareMemoryClient:
 
     # ============ Message ============
 
+    # 创建或注册 create messages batch 所需的数据
     async def create_messages_batch(self, conversation_id: str, user_id: str, messages: list[dict]) -> None:
         """批量写入消息"""
         await self._request("POST", f"/internal/v1/conversations/{conversation_id}/messages:batch", {
@@ -173,18 +197,21 @@ class CloudflareMemoryClient:
             "messages": messages,
         })
 
+    # 获取 get messages 对应的数据
     async def get_messages(self, conversation_id: str, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
         """获取会话消息"""
         result = await self._request("GET", f"/internal/v1/conversations/{conversation_id}/messages?limit={limit}&offset={offset}")
         page = MessagesPageData.model_validate(result.get("data", {}))
         return [msg.model_dump() for msg in page.messages], page.total
 
+    # 删除或清理 clear messages 对应的数据
     async def clear_messages(self, conversation_id: str) -> None:
         """清空会话消息"""
         await self._request("DELETE", f"/internal/v1/conversations/{conversation_id}/messages")
 
     # ============ Memory ============
 
+    # 更新或保存 save memory 对应的数据
     async def save_memory(self, user_id: str, memory_id: str, content: str, category: str = "fact", importance: int = 3, source: str = "user_explicit", source_conversation_id: str | None = None) -> dict:
         """保存记忆（幂等）"""
         idempotency_key = hashlib.sha256(f"{user_id}:{content}".encode()).hexdigest()[:32]
@@ -202,6 +229,7 @@ class CloudflareMemoryClient:
         )
         return MemoryData.model_validate(result["data"]).model_dump()
 
+    # 获取 list memories 对应的数据
     async def list_memories(self, user_id: str, category: str | None = None, limit: int = 50) -> list[dict]:
         """列出用户的长期记忆"""
         params = f"?limit={limit}"
@@ -211,6 +239,7 @@ class CloudflareMemoryClient:
         data = result.get("data", [])
         return [MemoryData.model_validate(item).model_dump() for item in data]
 
+    # 更新或保存 update memory 对应的数据
     async def update_memory(self, user_id: str, memory_id: str, content: str | None = None, category: str | None = None, importance: int | None = None) -> dict | None:
         """更新记忆"""
         body: dict[str, Any] = {}
@@ -230,6 +259,7 @@ class CloudflareMemoryClient:
                 return None
             raise
 
+    # 查询 search memories 对应的结果
     async def search_memories(self, user_id: str, query: str, category: str | None = None, limit: int = 10, min_score: float = 0.65) -> dict:
         """语义搜索记忆"""
         body: dict[str, Any] = {"query": query, "limit": limit, "min_score": min_score}
@@ -240,6 +270,7 @@ class CloudflareMemoryClient:
 
     # ============ Document ============
 
+    # 创建或注册 upload document 所需的数据
     async def upload_document(self, user_id: str, filename: str, content: str, file_type: str | None = None, category: str = "general") -> dict:
         """上传文档（content 为 base64 编码）"""
         body: dict[str, Any] = {
@@ -253,6 +284,7 @@ class CloudflareMemoryClient:
         result = await self._request("POST", "/internal/v1/documents", body)
         return DocumentData.model_validate(result.get("data", {}).get("document")).model_dump()
 
+    # 获取 list documents 对应的数据
     async def list_documents(self, user_id: str, limit: int = 20, offset: int = 0, category: str | None = None) -> dict:
         """列出用户文档"""
         params = f"?user_id={user_id}&limit={limit}&offset={offset}"
@@ -265,6 +297,7 @@ class CloudflareMemoryClient:
             "total": data.get("total", 0),
         }
 
+    # 获取 get document 对应的数据
     async def get_document(self, document_id: str) -> dict | None:
         """获取文档详情"""
         try:
@@ -279,6 +312,7 @@ class CloudflareMemoryClient:
                 return None
             raise
 
+    # 删除或清理 delete document 对应的数据
     async def delete_document(self, document_id: str) -> bool:
         """删除文档"""
         try:
@@ -289,6 +323,16 @@ class CloudflareMemoryClient:
                 return False
             raise
 
+    # 原地重建文档索引并保留文档 ID
+    async def reindex_document(self, document_id: str) -> dict:
+        """原地重建文档索引"""
+        result = await self._request(
+            "POST",
+            f"/internal/v1/documents/{document_id}/reindex",
+        )
+        return result.get("data", {})
+
+    # 查询 search documents 对应的结果
     async def search_documents(self, user_id: str, query: str, limit: int = 5, min_score: float = 0.6) -> dict:
         """语义搜索文档"""
         body: dict[str, Any] = {
@@ -300,6 +344,7 @@ class CloudflareMemoryClient:
         result = await self._request("POST", "/internal/v1/documents:search", body)
         return DocumentSearchResponseData.model_validate(result.get("data", {})).model_dump()
 
+    # 删除或清理 delete memory 对应的数据
     async def delete_memory(self, user_id: str, memory_id: str) -> bool:
         """删除记忆（软删除）"""
         try:
@@ -310,6 +355,7 @@ class CloudflareMemoryClient:
                 return False
             raise
 
+    # 更新或保存 write audit logs 对应的数据
     async def write_audit_logs(self, entries: list[dict]) -> None:
         """批量写入审计日志（不阻塞主流程）"""
         try:
@@ -317,6 +363,7 @@ class CloudflareMemoryClient:
         except Exception:
             pass  # 审计日志写入失败不影响主流程
 
+    # 更新或保存 write tool metrics 对应的数据
     async def write_tool_metrics(self, entries: list[dict]) -> None:
         """批量写入工具指标（不阻塞主流程）"""
         try:
@@ -324,6 +371,7 @@ class CloudflareMemoryClient:
         except Exception:
             pass  # 指标写入失败不影响主流程
 
+    # 获取 list user memories 对应的数据
     async def list_user_memories(self, user_id: str, limit: int = 100) -> list[dict]:
         """列出用户所有记忆（用于清空）"""
         result = await self._request("GET", f"/internal/v1/users/{user_id}/memories?limit={limit}")

@@ -39,6 +39,7 @@ class MetricsCollector {
   private metrics: ToolCallMetric[] = [];
   private maxEvents = 10_000;
 
+  // 更新或保存 record 对应的数据
   record(metric: ToolCallMetric): void {
     this.metrics.push(metric);
     if (this.metrics.length > this.maxEvents) {
@@ -46,6 +47,7 @@ class MetricsCollector {
     }
   }
 
+  // 执行 snapshot 对应的业务逻辑
   snapshot(): MetricsSnapshot {
     const snap: MetricsSnapshot = {
       total_calls: 0,
@@ -87,10 +89,12 @@ class MetricsCollector {
     return snap;
   }
 
+  // 获取 getEvents 对应的数据
   getEvents(limit = 100): ToolCallMetric[] {
     return this.metrics.slice(-limit);
   }
 
+  // 删除或清理 clear 对应的数据
   clear(): void {
     this.metrics = [];
   }
@@ -101,6 +105,7 @@ class MetricsCollector {
 const metricsCollector = new MetricsCollector();
 let gatewayClient: any = null;
 
+// 获取 getGatewayClient 对应的数据
 function getGatewayClient() {
   if (!gatewayClient) {
     const { CloudflareMemoryClient } = require("../../clients/memory_gateway.js");
@@ -136,10 +141,12 @@ async function flushToolMetrics(): Promise<void> {
   }
 }
 
+// 获取 getMetricsCollector 对应的数据
 export function getMetricsCollector(): MetricsCollector {
   return metricsCollector;
 }
 
+// 更新或保存 recordToolMetric 对应的数据
 export function recordToolMetric(
   metric: Omit<ToolCallMetric, "timestamp">,
 ): void {
@@ -154,6 +161,7 @@ export function recordToolMetric(
   }
 }
 
+// 获取 getMetricsSnapshot 对应的数据
 export function getMetricsSnapshot(): MetricsSnapshot {
   return metricsCollector.snapshot();
 }

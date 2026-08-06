@@ -61,6 +61,7 @@ function serializeDocument(document: Document) {
   };
 }
 
+// 创建或注册 registerV1Routes 所需的数据
 export async function registerV1Routes(app: FastifyInstance) {
   // ============ 健康检查 ============
   app.get("/health", async () => ({
@@ -72,10 +73,10 @@ export async function registerV1Routes(app: FastifyInstance) {
   // ============ 会话管理 ==========
 
   app.post<{
-    Body: { title: string; mode?: "chat" | "knowledge" | "mixed" };
+    Body: { title: string; mode?: "chat" | "knowledge" | "mixed"; user_id?: string };
   }>("/conversations", async (request, reply) => {
     try {
-      const { title, mode = "chat" } = request.body;
+      const { title, mode = "chat", user_id } = request.body;
       if (!title) {
         return reply.status(400).send({
           error: {
@@ -85,7 +86,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         });
       }
 
-      const conv = await ConversationService.create(title, mode);
+      const conv = await ConversationService.create(title, mode, user_id);
       return reply.status(201).send(serializeConversation(conv));
     } catch (error: any) {
       if (error instanceof BusinessError) {
@@ -100,8 +101,8 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   });
 
-  app.get("/conversations", async () => {
-    const convs = await ConversationService.list();
+  app.get<{ Querystring: { user_id?: string } }>("/conversations", async (request) => {
+    const convs = await ConversationService.list(request.query.user_id);
     return convs.map(serializeConversation);
   });
 
@@ -154,13 +155,9 @@ export async function registerV1Routes(app: FastifyInstance) {
       const convId = request.params.id;
 
       // 确保会话存在于 D1
-      try {
-        await ConversationService.ensure(convId, user_id);
-      } catch {
-        // 非阻塞
-      }
+      await ConversationService.ensure(convId, user_id);
 
-      const conv = ConversationService.get(convId);
+      const conv = await ConversationService.get(convId);
 
       if (!conv) {
         return reply.status(404).send({
@@ -176,7 +173,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         });
       }
 
-      ConversationService.appendUserMessage(convId, content);
+      await ConversationService.appendUserMessage(convId, content);
       const assistantMessage = await AgentService.chat(
         convId,
         content,
@@ -205,13 +202,9 @@ export async function registerV1Routes(app: FastifyInstance) {
     const convId = request.params.id;
 
     // 确保会话记录存在于 D1（前端可能直接请求已有的 thread_id）
-    try {
-      await ConversationService.ensure(convId, user_id);
-    } catch {
-      // 会话创建失败不影响流式响应
-    }
+    await ConversationService.ensure(convId, user_id);
 
-    const conversation = ConversationService.get(convId);
+    const conversation = await ConversationService.get(convId);
     if (!conversation) {
       return reply.status(404).send({
         error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
@@ -226,7 +219,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       });
     }
 
-    ConversationService.appendUserMessage(convId, content);
+    await ConversationService.appendUserMessage(convId, content);
     reply.hijack();
     reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
@@ -284,13 +277,13 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>(
     "/conversations/:id/messages",
     async (request, reply) => {
-      const conv = ConversationService.get(request.params.id);
+      const conv = await ConversationService.get(request.params.id);
       if (!conv) {
         return reply.status(404).send({
           error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
         });
       }
-      ConversationService.clearMessages(request.params.id);
+      await ConversationService.clearMessages(request.params.id);
       return { success: true };
     },
   );
@@ -464,7 +457,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         });
       }
       const profile = await ProfileService.update(user_id,
-        body.name || "",
+        body.name,
         body.preferences,
       );
       if (!profile) {

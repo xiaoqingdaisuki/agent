@@ -23,6 +23,7 @@ from src.repositories import get_repositories
 _repositories = None
 
 
+# 执行 get repositories 对应的业务逻辑
 def _get_repositories():
     """获取 Cloudflare 仓储实例"""
     global _repositories
@@ -35,6 +36,7 @@ class ProfileService:
     """用户画像管理"""
 
     @staticmethod
+    # 获取 get or create 对应的数据
     def get_or_create(user_id: str, name: str = "") -> UserProfile:
         repos = _get_repositories()
         data = repos.get_or_create_profile(user_id, name)
@@ -47,6 +49,7 @@ class ProfileService:
         )
 
     @staticmethod
+    # 获取 get 对应的数据
     def get(user_id: str) -> UserProfile | None:
         repos = _get_repositories()
         data = repos.get_profile(user_id)
@@ -61,9 +64,10 @@ class ProfileService:
         )
 
     @staticmethod
+    # 更新或保存 update 对应的数据
     def update(user_id: str, **updates) -> UserProfile | None:
         repos = _get_repositories()
-        name = updates.get("name", "")
+        name = updates.get("name")
         preferences = updates.get("preferences")
         data = repos.update_profile(user_id, name=name, preferences=preferences)
         if not data:
@@ -81,6 +85,7 @@ class MemoryService:
     """长期记忆管理"""
 
     @staticmethod
+    # 创建或注册 add 所需的数据
     def add(user_id: str, content: str, category: str = "fact", importance: int = 3) -> Memory:
         """存储一条新记忆"""
         repos = _get_repositories()
@@ -96,11 +101,11 @@ class MemoryService:
         )
 
     @staticmethod
+    # 获取 get relevant 对应的数据
     def get_relevant(user_id: str, max_items: int = 10) -> list[Memory]:
         """获取用户的高优先级记忆"""
         repos = _get_repositories()
-        data = repos.search_memories(user_id, "", category=None, limit=max_items)
-        items = data.get("items", [])
+        items = repos.list_memories(user_id, limit=max_items)
         return [
             Memory(
                 id=m["id"],
@@ -115,6 +120,7 @@ class MemoryService:
         ]
 
     @staticmethod
+    # 获取 get by category 对应的数据
     def get_by_category(user_id: str, category: str) -> list[Memory]:
         repos = _get_repositories()
         data = repos.list_memories(user_id, category=category)
@@ -132,16 +138,19 @@ class MemoryService:
         ]
 
     @staticmethod
+    # 删除或清理 delete 对应的数据
     def delete(user_id: str, memory_id: str) -> bool:
         repos = _get_repositories()
         return repos.delete_memory(user_id, memory_id)
 
     @staticmethod
+    # 获取 list all 对应的数据
     def list_all(user_id: str) -> list[dict]:
         repos = _get_repositories()
         return repos.list_memories(user_id)
 
     @staticmethod
+    # 创建或注册 build memory context 所需的数据
     def build_memory_context(user_id: str) -> str:
         """将记忆组装成 prompt 片段，供注入 System Prompt"""
         memories = MemoryService.get_relevant(user_id, 10)
@@ -155,6 +164,7 @@ class MemoryService:
         return "\n".join(lines)
 
     @staticmethod
+    # 执行 extract memories from conversation 对应的业务逻辑
     def extract_memories_from_conversation(
         user_id: str, question: str, answer: str
     ) -> list[Memory]:
@@ -180,6 +190,7 @@ class MemoryService:
         return regex_memories
 
     @staticmethod
+    # 执行 extract with regex 对应的业务逻辑
     def _extract_with_regex(user_id: str, question: str) -> list[Memory]:
         """正则规则提取"""
         new_memories = []
@@ -233,6 +244,7 @@ class MemoryService:
         return new_memories
 
     @staticmethod
+    # 执行 extract with llm 对应的业务逻辑
     def _extract_with_llm(user_id: str, question: str, answer: str) -> None:
         """LLM-based 记忆提取"""
         if not settings.openai_api_key:
@@ -288,24 +300,98 @@ class HistoryService:
     """问答历史管理"""
 
     @staticmethod
+    # 更新或保存 record 对应的数据
     def record(user_id: str, conversation_id: str, question: str, answer: str) -> dict:
         repos = _get_repositories()
-        data = repos.save_memory(user_id, answer, source="conversation_extraction", source_conversation_id=conversation_id)
+        conversation = repos.get_conversation(conversation_id)
+        if not conversation:
+            repos.create_conversation(user_id, "History", "chat", conversation_id)
+        elif conversation.get("user_id") != user_id:
+            raise ValueError("Conversation does not belong to the requested user")
+
+        messages, _ = repos.get_messages(conversation_id, 200, 0)
+        for index in range(len(messages) - 1, 0, -1):
+            assistant = messages[index]
+            user = messages[index - 1]
+            if (
+                assistant["role"] == "assistant"
+                and user["role"] == "user"
+                and user["content_json"] == question
+                and assistant["content_json"] == answer
+            ):
+                return {
+                    "id": assistant["id"],
+                    "user_id": user_id,
+                    "conversation_id": conversation_id,
+                    "question": question,
+                    "answer": answer,
+                    "timestamp": assistant["created_at"],
+                }
+
+        timestamp = datetime.now().isoformat()
+        user_message_id = f"msg_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_user"
+        assistant_message_id = f"msg_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_assistant"
+        repos.create_message_batch(
+            conversation_id,
+            user_id,
+            [
+                {
+                    "id": user_message_id,
+                    "sequence_no": len(messages),
+                    "role": "user",
+                    "content": question,
+                    "created_at": timestamp,
+                },
+                {
+                    "id": assistant_message_id,
+                    "sequence_no": len(messages) + 1,
+                    "role": "assistant",
+                    "content": answer,
+                    "created_at": timestamp,
+                },
+            ],
+        )
         return {
-            "id": data["id"],
+            "id": assistant_message_id,
             "user_id": user_id,
             "conversation_id": conversation_id,
             "question": question,
             "answer": answer,
-            "timestamp": data.get("created_at", ""),
+            "timestamp": timestamp,
         }
 
     @staticmethod
+    # 获取 get history 对应的数据
     def get_history(user_id: str, conversation_id: str = None, limit: int = 50) -> list[dict]:
         repos = _get_repositories()
-        data = repos.search_memories(user_id, "", category=None, limit=limit)
-        items = data.get("items", [])
-        # 按 source_conversation_id 过滤
         if conversation_id:
-            items = [m for m in items if m.get("source_conversation_id") == conversation_id]
-        return items[:limit]
+            conversation = repos.get_conversation(conversation_id)
+            conversations = (
+                [conversation]
+                if conversation and conversation.get("user_id") == user_id
+                else []
+            )
+        else:
+            conversations = repos.list_conversations(user_id, max(limit, 20), 0)
+
+        records = []
+        for conversation in conversations:
+            messages, _ = repos.get_messages(conversation["id"], 200, 0)
+            pending_question = None
+            for message in messages:
+                if message["role"] == "user":
+                    pending_question = message
+                elif message["role"] == "assistant" and pending_question:
+                    records.append(
+                        {
+                            "id": message["id"],
+                            "user_id": user_id,
+                            "conversation_id": conversation["id"],
+                            "question": pending_question["content_json"],
+                            "answer": message["content_json"],
+                            "timestamp": message["created_at"],
+                        }
+                    )
+                    pending_question = None
+
+        return sorted(records, key=lambda item: item["timestamp"], reverse=True)[:limit]

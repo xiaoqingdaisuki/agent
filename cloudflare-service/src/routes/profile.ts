@@ -8,6 +8,7 @@
 import { getOrCreateProfile, getProfile, updateProfile } from "../repositories/profile.js";
 import { ProfileSaveSchema, GatewayResponseSchema } from "../schemas/memory-models.js";
 
+// 创建或注册 registerProfileRoutes 所需的数据
 export function registerProfileRoutes(app: any) {
   // 创建/更新画像
   app.put("/internal/v1/users/:user_id/profile", async (c: any) => {

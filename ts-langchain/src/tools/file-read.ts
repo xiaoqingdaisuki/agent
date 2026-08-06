@@ -97,6 +97,7 @@ const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
 /**
  * 依次尝试 UTF-8 / GBK / Latin-1，返回首个可成功解码的编码名
  */
+// 执行 detectEncoding 对应的业务逻辑
 function detectEncoding(buffer: Buffer): string {
   // UTF-8
   try {
@@ -163,6 +164,7 @@ export function resolveSafePath(
 /**
  * 检查符号链接是否指向工作区外
  */
+// 校验并判断 checkSymlink 对应的状态
 async function checkSymlink(
   safePath: string,
   workspaceRoot: string,

@@ -47,6 +47,7 @@ def build_rag_agent(
         top_k=top_k,
     )
 
+    # 获取 retrieve node 对应的数据
     async def retrieve_node(state: RAGState):
         """检索节点：从向量库获取相关文档"""
         last_message = state["messages"][-1]
@@ -57,6 +58,7 @@ def build_rag_agent(
         context = [r["content"] for r in results]
         return {"context": context}
 
+    # 执行 grade node 对应的业务逻辑
     def grade_node(state: RAGState):
         """判断检索结果是否相关"""
         last_message = state["messages"][-1]
@@ -69,6 +71,7 @@ def build_rag_agent(
         # 实际项目中可以用 LLM 判断相关性
         return {"should_retrieve": len(context) > 0}
 
+    # 执行 generate node 对应的业务逻辑
     async def generate_node(state: RAGState):
         """生成节点：基于检索结果生成回答"""
         context = state.get("context", [])

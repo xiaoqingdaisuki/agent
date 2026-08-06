@@ -1,6 +1,7 @@
 import { config } from "../config/index.js";
 
 export class AgentDeadlineError extends Error {
+  // 初始化当前对象
   constructor(readonly timeoutMs: number = config.AGENT_DEADLINE_MS) {
     super(`Agent request exceeded the ${timeoutMs}ms deadline`);
     this.name = "AgentDeadlineError";

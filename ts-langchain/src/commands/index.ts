@@ -45,6 +45,7 @@ const commandHandlers = new Map<
   (threadId: string) => AgentCommandResult
 >([[DARK_MODE_COMMAND, toggleDarkMode]]);
 
+// 执行 executeAgentCommand 对应的业务逻辑
 export function executeAgentCommand(
   content: string,
   threadId: string,
@@ -67,6 +68,7 @@ export function executeAgentCommand(
   };
 }
 
+// 获取 getAgentPromptOverride 对应的数据
 export function getAgentPromptOverride(
   threadId: string,
   content?: string,
@@ -84,6 +86,7 @@ export function getAgentPromptOverride(
   return darkModeThreads.has(threadId) ? DARK_MODE_PROMPT : undefined;
 }
 
+// 删除或清理 clearAgentCommandState 对应的数据
 export function clearAgentCommandState(threadId: string): void {
   darkModeThreads.delete(threadId);
 }

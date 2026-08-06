@@ -7,6 +7,7 @@
 
 import { isPublicPath } from "../middleware/auth.js";
 
+// 执行 healthRoute 对应的业务逻辑
 export async function healthRoute(app: any) {
   app.get("/internal/v1/health", async (c: any) => {
     const components: Record<string, string> = {

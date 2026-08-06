@@ -76,6 +76,7 @@ export const MemorySearchResultSchema = z.object({
   final_score: z.number(),
   created_at: z.string(),
   updated_at: z.string(),
+  source_conversation_id: z.string().nullable(),
 });
 
 export const MessagesPageSchema = z.object({

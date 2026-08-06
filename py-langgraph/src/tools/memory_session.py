@@ -50,6 +50,7 @@ class SessionSearchInput(BaseModel):
 
 # 在当前会话中搜索之前的对话内容
 @tool(args_schema=SessionSearchInput)
+# 执行 memory session search 对应的业务逻辑
 def memory_session_search(
     conversation_id: str,
     query: str = "",

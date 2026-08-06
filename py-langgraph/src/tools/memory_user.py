@@ -69,6 +69,7 @@ class UserSearchInput(BaseModel):
 
 # 搜索当前用户的长期记忆
 @tool(args_schema=UserSearchInput)
+# 执行 memory user search 对应的业务逻辑
 def memory_user_search(
     user_id: str,
     query: str = "",
@@ -119,6 +120,7 @@ class UserSaveInput(BaseModel):
 
 # 保存一条关于用户的重要信息到长期记忆
 @tool(args_schema=UserSaveInput)
+# 执行 memory user save 对应的业务逻辑
 def memory_user_save(
     user_id: str,
     content: str,

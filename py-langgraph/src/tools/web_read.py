@@ -151,6 +151,7 @@ class WebReadInput(BaseModel):
 
 # 读取指定 URL 的网页正文内容，通常在 web_search 之后使用
 @tool(args_schema=WebReadInput)
+# 执行 web read 对应的业务逻辑
 def web_read(url: str) -> str:
     """读取指定 URL 的网页正文内容。通常在 web_search 之后使用来获取详细信息。"""
     # 1. URL 安全检查

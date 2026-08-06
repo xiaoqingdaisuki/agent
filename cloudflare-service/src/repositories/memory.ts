@@ -38,6 +38,7 @@ export interface MemorySearchResult {
   final_score: number;
   created_at: string;
   updated_at: string;
+  source_conversation_id: string | null;
 }
 
 // 规范化内容：去除首尾空白、合并连续空白、英文小写
@@ -224,6 +225,7 @@ export async function searchMemories(
           final_score: Math.round(finalScore * 1000) / 1000,
           created_at: m.created_at,
           updated_at: m.updated_at,
+          source_conversation_id: m.source_conversation_id,
         };
       });
 
@@ -261,6 +263,7 @@ async function degradeSearch(db: D1Database, userId: string, category?: string, 
       final_score: m.importance / 5,
       created_at: m.created_at,
       updated_at: m.updated_at,
+      source_conversation_id: m.source_conversation_id,
     })),
     degraded: true,
   };
@@ -290,18 +293,28 @@ export async function listMemories(
 }
 
 // 获取单条记忆
-export async function getMemoryById(db: D1Database, id: string): Promise<Memory | null> {
-  const result = await db.prepare("SELECT * FROM memories WHERE id = ?").bind(id).first<Memory>();
+export async function getMemoryById(
+  db: D1Database,
+  id: string,
+  userId?: string,
+): Promise<Memory | null> {
+  const query = userId
+    ? db.prepare("SELECT * FROM memories WHERE id = ? AND user_id = ?").bind(id, userId)
+    : db.prepare("SELECT * FROM memories WHERE id = ?").bind(id);
+  const result = await query.first<Memory>();
   return result ?? null;
 }
 
-// 更新记忆
+// 更新记忆并同步重建 Vectorize 索引
 export async function updateMemory(
   db: D1Database,
+  index: VectorizeIndex,
+  ai: Ai,
+  userId: string,
   id: string,
   changes: { content?: string; category?: string; importance?: number; normalized_content?: string; content_hash?: string },
 ): Promise<Memory | null> {
-  const existing = await getMemoryById(db, id);
+  const existing = await getMemoryById(db, id, userId);
   if (!existing || existing.status === "deleted") return null;
 
   const now = new Date().toISOString();
@@ -313,25 +326,50 @@ export async function updateMemory(
 
   await db
     .prepare(
-      "UPDATE memories SET content = ?, normalized_content = ?, content_hash = ?, category = ?, importance = ?, updated_at = ?, index_status = 'pending' WHERE id = ?",
+      "UPDATE memories SET content = ?, normalized_content = ?, content_hash = ?, category = ?, importance = ?, updated_at = ?, index_status = 'pending' WHERE id = ? AND user_id = ?",
     )
-    .bind(newContent, newNormalized, newHash, newCategory, newImportance, now, id)
+    .bind(newContent, newNormalized, newHash, newCategory, newImportance, now, id, userId)
     .run();
 
-  return getMemoryById(db, id);
+  try {
+    const embedding = await getEmbedding(ai, newContent);
+    await index.upsert([
+      {
+        id,
+        values: embedding,
+        metadata: {
+          user_id: userId,
+          category: newCategory,
+          active: true,
+          embedding_version: existing.embedding_version,
+        },
+      },
+    ]);
+    await db.prepare("UPDATE memories SET index_status = 'ready' WHERE id = ? AND user_id = ?").bind(id, userId).run();
+  } catch (error) {
+    await createIndexJob(db, id, "upsert", "memory", error);
+    await db.prepare("UPDATE memories SET index_status = 'failed' WHERE id = ? AND user_id = ?").bind(id, userId).run();
+  }
+
+  return getMemoryById(db, id, userId);
 }
 
 // 删除记忆（软删除 + Vectorize 清理）
-export async function deleteMemory(db: D1Database, index: VectorizeIndex, id: string): Promise<boolean> {
-  const existing = await getMemoryById(db, id);
+export async function deleteMemory(
+  db: D1Database,
+  index: VectorizeIndex,
+  userId: string,
+  id: string,
+): Promise<boolean> {
+  const existing = await getMemoryById(db, id, userId);
   if (!existing || existing.status === "deleted") return false;
 
   const now = new Date().toISOString();
 
   // D1 软删除
   await db
-    .prepare("UPDATE memories SET status = 'deleted', index_status = 'deleting', updated_at = ? WHERE id = ?")
-    .bind(now, id)
+    .prepare("UPDATE memories SET status = 'deleted', index_status = 'deleting', updated_at = ? WHERE id = ? AND user_id = ?")
+    .bind(now, id, userId)
     .run();
 
   // Vectorize 删除
@@ -346,12 +384,28 @@ export async function deleteMemory(db: D1Database, index: VectorizeIndex, id: st
 }
 
 // 清空用户所有记忆
-export async function clearUserMemories(db: D1Database, userId: string): Promise<number> {
+export async function clearUserMemories(
+  db: D1Database,
+  index: VectorizeIndex,
+  userId: string,
+): Promise<number> {
+  const memories = await listMemories(db, userId, { limit: 100 });
+  const memoryIds = memories.map((memory) => memory.id);
+  if (memoryIds.length === 0) return 0;
+
   const now = new Date().toISOString();
   const result = await db
-    .prepare("UPDATE memories SET status = 'deleted', updated_at = ? WHERE user_id = ? AND status = 'active'")
+    .prepare("UPDATE memories SET status = 'deleted', index_status = 'deleting', updated_at = ? WHERE user_id = ? AND status = 'active'")
     .bind(now, userId)
     .run();
+
+  try {
+    await index.deleteByIds(memoryIds);
+  } catch (error) {
+    await Promise.all(
+      memoryIds.map((memoryId) => createIndexJob(db, memoryId, "delete", "memory", error)),
+    );
+  }
 
   return (result.meta?.rows_written ?? 0) as number;
 }

@@ -34,6 +34,7 @@ export class TextSplitter {
   /**
    * 切分文档内容
    */
+  // 执行 split 对应的业务逻辑
   split(doc: {
     content: string;
     metadata: { source: string; filename: string };
@@ -55,6 +56,7 @@ export class TextSplitter {
    * 递归字符切分
    * 优先按段落（\n\n）切分，其次按句子（\n）切分，最后按字符切分
    */
+  // 执行 recursiveSplit 对应的业务逻辑
   private recursiveSplit(text: string): string[] {
     // 如果文本足够短，直接返回
     if (text.length <= this.chunkSize) {

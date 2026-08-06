@@ -39,6 +39,7 @@ const SENSITIVE_KEYS = new Set([
 /**
  * 对结构化数据递归脱敏 — 按 key 名过滤 + 对字符串值做内容级脱敏
  */
+// 执行 redactStructuredData 对应的业务逻辑
 export function redactStructuredData<T>(data: T): T {
   if (data === null || data === undefined) return data;
 
@@ -137,6 +138,7 @@ const CONTENT_REDACTION_RULES: RedactionRule[] = [
 /**
  * 对纯文本内容做内容级脱敏，替换敏感信息为占位符
  */
+// 执行 redactTextContent 对应的业务逻辑
 export function redactTextContent(text: string): string {
   let result = text;
   for (const rule of CONTENT_REDACTION_RULES) {
@@ -151,6 +153,7 @@ export function redactTextContent(text: string): string {
  * - 纯文本：内容级正则脱敏
  * - 其他类型：原样返回
  */
+// 执行 redactData 对应的业务逻辑
 export function redactData<T>(data: T): T {
   if (typeof data === "string") {
     return redactTextContent(data) as T;

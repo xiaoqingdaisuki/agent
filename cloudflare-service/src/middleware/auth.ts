@@ -7,6 +7,19 @@
 
 // 从请求头提取并验证 Bearer token
 export async function authMiddleware(c: any, next: any) {
+  const secret = c.env.SERVICE_SECRET?.trim() || "";
+  if (!secret) {
+    return c.json(
+      {
+        ok: false,
+        data: null,
+        error: { code: "MEMORY_SERVICE_MISCONFIGURED", message: "服务认证密钥未配置" },
+        meta: { request_id: c.get("requestId") },
+      },
+      503,
+    );
+  }
+
   const authHeader = c.req.header("Authorization");
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -22,7 +35,6 @@ export async function authMiddleware(c: any, next: any) {
   }
 
   const token = authHeader.slice(7);
-  const secret = c.env.SERVICE_SECRET || "";
 
   if (token !== secret) {
     return c.json(

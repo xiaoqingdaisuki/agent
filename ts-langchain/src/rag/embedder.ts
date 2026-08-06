@@ -28,6 +28,7 @@ export class Embedder {
   /**
    * 将文本向量化
    */
+  // 执行 embed 对应的业务逻辑
   async embed(text: string): Promise<number[]> {
     const response = await this.client.embeddings.create({
       model: this.model,
@@ -41,6 +42,7 @@ export class Embedder {
   /**
    * 批量向量化
    */
+  // 执行 embedBatch 对应的业务逻辑
   async embedBatch(texts: string[]): Promise<number[][]> {
     const response = await this.client.embeddings.create({
       model: this.model,

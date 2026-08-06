@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createToolAgent } from "../../agents/tool-agent.js";
-import { appendMessage, getHistory } from "../../memory/conversation.js";
+import { appendMessage, getHistoryBeforeInput } from "../../memory/conversation.js";
 import { ConversationService } from "../../services/index.js";
 import { MemoryService, ProfileService } from "../../profile/service.js";
 import {
@@ -16,6 +16,7 @@ import {
 import { AgentDeadline, isAgentDeadlineError } from "../../agents/deadline.js";
 import { maybeAppendContinuationHint } from "../../agents/response-handler.js";
 
+// 创建或注册 registerStreamRoutes 所需的数据
 export async function registerStreamRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
     "/stream",
@@ -28,14 +29,17 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       const threadId = thread_id || crypto.randomUUID();
 
       // 确保会话记录存在于 D1（前端传入的 thread_id 需关联 conversations 表）
-      try {
-        await ConversationService.ensure(threadId, user_id);
-      } catch {
-        // 会话创建失败不影响流式响应
-      }
+      await ConversationService.ensure(threadId, user_id);
 
       const command = executeAgentCommand(message, threadId);
       if (command) {
+        await ConversationService.appendUserMessage(threadId, message);
+        await ConversationService.appendAssistantMessage(threadId, {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: command.reply,
+          createdAt: new Date().toISOString(),
+        });
         reply.raw.setHeader("Content-Type", "text/event-stream");
         reply.raw.setHeader("Cache-Control", "no-cache");
         reply.raw.setHeader("Connection", "keep-alive");
@@ -58,7 +62,8 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       const toolAgent = await createToolAgent(
         getAgentPromptOverride(threadId, message),
       );
-      const history = await getHistory(threadId);
+      const history = await getHistoryBeforeInput(threadId, message);
+      await ConversationService.appendUserMessage(threadId, message);
 
       const toolContext = {
         request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -109,8 +114,14 @@ export async function registerStreamRoutes(app: FastifyInstance) {
 
         if (fullAnswer) {
           const finalAnswer = maybeAppendContinuationHint(fullAnswer);
-          appendMessage(threadId, new HumanMessage(message));
-          appendMessage(threadId, new AIMessage(finalAnswer));
+          await appendMessage(threadId, new HumanMessage(message));
+          await appendMessage(threadId, new AIMessage(finalAnswer));
+          await ConversationService.appendAssistantMessage(threadId, {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: finalAnswer,
+            createdAt: new Date().toISOString(),
+          });
         }
 
         reply.raw.write("data: [DONE]\n\n");
@@ -123,8 +134,14 @@ export async function registerStreamRoutes(app: FastifyInstance) {
           reply.raw.write(
             `data: ${JSON.stringify({ text: partialHint, partial: true })}\n\n`,
           );
-          appendMessage(threadId, new HumanMessage(message));
-          appendMessage(threadId, new AIMessage(partialHint));
+          await appendMessage(threadId, new HumanMessage(message));
+          await appendMessage(threadId, new AIMessage(partialHint));
+          await ConversationService.appendAssistantMessage(threadId, {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: partialHint,
+            createdAt: new Date().toISOString(),
+          });
         } else {
           // 无任何输出 → 返回错误
           const errMessage = isAgentDeadlineError(error)

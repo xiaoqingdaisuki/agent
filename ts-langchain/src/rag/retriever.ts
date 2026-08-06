@@ -34,6 +34,7 @@ export class Retriever {
   /**
    * 检索相关文档
    */
+  // 获取 retrieve 对应的数据
   async retrieve(
     query: string,
     topK: number = this.topK,
@@ -44,6 +45,7 @@ export class Retriever {
   /**
    * 批量检索
    */
+  // 获取 retrieveBatch 对应的数据
   async retrieveBatch(
     queries: string[],
   ): Promise<Array<SearchResult & { query: string }>> {

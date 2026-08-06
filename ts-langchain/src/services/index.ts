@@ -10,7 +10,7 @@
 
 import { createToolAgent } from "../agents/tool-agent.js";
 import {
-  getHistory,
+  getHistoryBeforeInput,
   clearHistory,
   appendMessage,
 } from "../memory/conversation.js";
@@ -21,7 +21,7 @@ import {
   ProfileService,
   HistoryService,
 } from "../profile/service.js";
-import { CloudflareMemoryClient } from "../clients/memory_gateway.js";
+import { CloudflareMemoryClient, MemoryGatewayError } from "../clients/memory_gateway.js";
 import { getRepositories } from "../repositories/index.js";
 import {
   AIMessage,
@@ -110,6 +110,7 @@ class ToolProgressChannel {
         resolve = nextResolve;
       },
     );
+    // 执行 waiter 对应的业务逻辑
     const waiter = (event: Extract<AgentStreamEvent, { type: "tool" }>) => {
       this.waiters.delete(waiter);
       resolve(event);
@@ -171,6 +172,7 @@ export enum BusinessErrorCode {
 }
 
 export class BusinessError extends Error {
+  // 初始化当前对象
   constructor(
     public code: BusinessErrorCode | string,
     message: string,
@@ -195,13 +197,14 @@ export class BusinessError extends Error {
 
 const conversations = new Map<string, Conversation>();
 const conversationMessages = new Map<string, Message[]>();
+const DEFAULT_CONVERSATION_USER_ID = "anonymous";
 
 export class ConversationService {
   // 创建新会话，分配唯一 ID 并初始化消息列表，同时持久化到 D1
   static async create(
     title: string,
     mode: "chat" | "knowledge" | "mixed" = "chat",
-    userId?: string,
+    userId: string = DEFAULT_CONVERSATION_USER_ID,
   ): Promise<Conversation> {
     const id = crypto.randomUUID();
     const conversation: Conversation = {
@@ -216,13 +219,17 @@ export class ConversationService {
     conversationMessages.set(id, []);
 
     // 持久化到 D1
-    if (userId) {
-      try {
-        const repos = getRepositories();
-        await repos.conversation.create(userId, title, mode);
-      } catch (err) {
-        console.warn(`[service] D1 create conversation failed: ${err}`);
-      }
+    try {
+      const repos = getRepositories();
+      await repos.conversation.create(userId, title, mode, id);
+    } catch (err) {
+      conversations.delete(id);
+      conversationMessages.delete(id);
+      throw new BusinessError(
+        BusinessErrorCode.INTERNAL_ERROR,
+        `会话持久化失败: ${err}`,
+        503,
+      );
     }
 
     return conversation;
@@ -231,21 +238,25 @@ export class ConversationService {
   // 注册一个已存在的会话 ID（前端传入的 thread_id），同步到内存和 D1
   static async ensure(
     conversationId: string,
-    userId?: string,
+    userId: string = DEFAULT_CONVERSATION_USER_ID,
     title: string = "New Chat",
     mode: "chat" | "knowledge" | "mixed" = "chat",
   ): Promise<Conversation> {
     // 检查 D1 是否已有记录
-    if (userId) {
-      try {
-        const repos = getRepositories();
-        const existing = await repos.conversation.get(conversationId);
-        if (!existing) {
-          await repos.conversation.create(userId, title, mode);
-        }
-      } catch (err) {
-        console.warn(`[service] D1 ensure conversation ${conversationId} failed: ${err}`);
+    let persistedConversationExists = false;
+    try {
+      const repos = getRepositories();
+      const existing = await repos.conversation.get(conversationId);
+      persistedConversationExists = existing !== null;
+      if (!existing) {
+        await repos.conversation.create(userId, title, mode, conversationId);
       }
+    } catch (err) {
+      throw new BusinessError(
+        BusinessErrorCode.INTERNAL_ERROR,
+        `会话持久化失败: ${err}`,
+        503,
+      );
     }
 
     // 注册到内存
@@ -259,7 +270,7 @@ export class ConversationService {
         userId,
       };
       conversations.set(conversationId, conversation);
-      conversationMessages.set(conversationId, []);
+      if (!persistedConversationExists) conversationMessages.set(conversationId, []);
     } else {
       // 更新 userId（ensure 可能先于 create 被调用）
       const existing = conversations.get(conversationId);
@@ -291,7 +302,6 @@ export class ConversationService {
         userId: data.user_id,
       };
       conversations.set(id, conversation);
-      conversationMessages.set(id, []);
       return conversation;
     } catch (err) {
       console.warn(`[service] D1 get conversation ${id} failed: ${err}`);
@@ -300,15 +310,17 @@ export class ConversationService {
   }
 
   // 列出所有会话，内存未命中时从 D1 加载
-  static async list(): Promise<Conversation[]> {
+  static async list(userId?: string): Promise<Conversation[]> {
     // 优先从 D1 加载（D1 为权威数据源）
     try {
       const repos = getRepositories();
       // 遍历已知 userId 从 D1 拉取，或尝试不带 userId 的 list
       const knownUserIds = new Set(
-        Array.from(conversations.values())
-          .map((c) => c.userId)
-          .filter((id): id is string => !!id),
+        userId
+          ? [userId]
+          : Array.from(conversations.values())
+              .map((c) => c.userId)
+              .filter((id): id is string => !!id),
       );
 
       const allConversations: Conversation[] = [];
@@ -363,24 +375,27 @@ export class ConversationService {
 
   // 删除会话及其关联的消息和命令状态，同时从 D1 删除
   static async delete(id: string): Promise<boolean> {
-    clearHistory(id);
+    await clearHistory(id);
     clearAgentCommandState(id);
     conversationMessages.delete(id);
-    const deleted = conversations.delete(id);
+    const deletedFromMemory = conversations.delete(id);
 
-    // 从 D1 删除（忽略错误）
+    // 从 D1 删除，以持久化结果作为重启后删除的依据
     try {
       const repos = getRepositories();
-      await repos.conversation.delete(id);
+      const deletedFromD1 = await repos.conversation.delete(id);
+      return deletedFromMemory || deletedFromD1;
     } catch (err) {
-      console.warn(`[service] D1 delete conversation ${id} failed: ${err}`);
+      throw new BusinessError(
+        BusinessErrorCode.SERVICE_UNAVAILABLE,
+        `会话删除持久化失败: ${err}`,
+        503,
+      );
     }
-
-    return deleted;
   }
 
   // 向会话追加一条用户消息，增加消息计数
-  static appendUserMessage(conversationId: string, content: string): Message {
+  static async appendUserMessage(conversationId: string, content: string): Promise<Message> {
     const conv = conversations.get(conversationId);
     if (!conv)
       throw new BusinessError(
@@ -397,18 +412,54 @@ export class ConversationService {
     };
 
     conv.messageCount++;
-    conversationMessages.get(conversationId)!.push(msg);
+    const messages = await this.getMessages(conversationId);
+    const sequenceNumber = messages.length;
+    messages.push(msg);
+    conversationMessages.set(conversationId, messages);
+
+    if (conv.userId) {
+      const repos = getRepositories();
+      await repos.message.createBatch(conversationId, conv.userId, [
+        {
+          id: msg.id,
+          conversation_id: conversationId,
+          user_id: conv.userId,
+          sequence_no: sequenceNumber,
+          role: "user",
+          content_json: content,
+          created_at: msg.createdAt,
+        },
+      ]);
+    }
 
     return msg;
   }
 
   // 向会话追加一条助手消息
-  static appendAssistantMessage(
+  static async appendAssistantMessage(
     conversationId: string,
     message: Message,
-  ): void {
-    const messages = conversationMessages.get(conversationId);
-    if (messages) messages.push(message);
+  ): Promise<void> {
+    const messages = await this.getMessages(conversationId);
+    const sequenceNumber = messages.length;
+    messages.push(message);
+    conversationMessages.set(conversationId, messages);
+
+    const conversation = conversations.get(conversationId);
+    if (conversation?.userId) {
+      const repos = getRepositories();
+      await repos.message.createBatch(conversationId, conversation.userId, [
+        {
+          id: message.id,
+          conversation_id: conversationId,
+          user_id: conversation.userId,
+          sequence_no: sequenceNumber,
+          role: "assistant",
+          content_json: message.content,
+          created_at: message.createdAt,
+        },
+      ]);
+    }
   }
 
   // 获取会话的全部消息列表
@@ -443,12 +494,14 @@ export class ConversationService {
   }
 
   // 清空会话消息列表和关联状态
-  static clearMessages(conversationId: string): void {
+  static async clearMessages(conversationId: string): Promise<void> {
     conversationMessages.set(conversationId, []);
     const conversation = conversations.get(conversationId);
     if (conversation) conversation.messageCount = 0;
-    clearHistory(conversationId);
+    await clearHistory(conversationId);
     clearAgentCommandState(conversationId);
+    const repos = getRepositories();
+    await repos.message.clear(conversationId);
   }
 }
 
@@ -470,11 +523,11 @@ export class AgentService {
           content: command.reply,
           createdAt: new Date().toISOString(),
         };
-        ConversationService.appendAssistantMessage(conversationId, reply);
+        await ConversationService.appendAssistantMessage(conversationId, reply);
         return reply;
       }
 
-      const history = await getHistory(conversationId);
+      const history = await getHistoryBeforeInput(conversationId, content);
       const memoryContext: SystemMessage[] = [];
 
       // 注入用户记忆
@@ -540,9 +593,9 @@ export class AgentService {
         reply.content = maybeAppendContinuationHint(reply.content, finishReason);
       }
 
-      appendMessage(conversationId, new HumanMessage(content));
-      appendMessage(conversationId, new AIMessage(reply.content));
-      ConversationService.appendAssistantMessage(conversationId, reply);
+      await appendMessage(conversationId, new HumanMessage(content));
+      await appendMessage(conversationId, new AIMessage(reply.content));
+      await ConversationService.appendAssistantMessage(conversationId, reply);
 
       // 记录问答历史 + 提取新记忆
       if (userId) {
@@ -610,12 +663,12 @@ export class AgentService {
           content: command.reply,
           createdAt: new Date().toISOString(),
         };
-        ConversationService.appendAssistantMessage(conversationId, reply);
+        await ConversationService.appendAssistantMessage(conversationId, reply);
         yield { type: "text", text: command.reply };
         return;
       }
 
-      const history = await getHistory(conversationId);
+      const history = await getHistoryBeforeInput(conversationId, content);
       const memoryContext: SystemMessage[] = [];
 
       if (userId) {
@@ -708,9 +761,9 @@ export class AgentService {
 
       if (fullAnswer) {
         const finalAnswer = maybeAppendContinuationHint(fullAnswer);
-        appendMessage(conversationId, new HumanMessage(content));
-        appendMessage(conversationId, new AIMessage(finalAnswer));
-        ConversationService.appendAssistantMessage(conversationId, {
+        await appendMessage(conversationId, new HumanMessage(content));
+        await appendMessage(conversationId, new AIMessage(finalAnswer));
+        await ConversationService.appendAssistantMessage(conversationId, {
           id: crypto.randomUUID(),
           role: "assistant",
           content: finalAnswer,
@@ -738,9 +791,9 @@ export class AgentService {
         // 超时但有部分结果 → 返回部分内容 + 继续提示
         if (fullAnswer) {
           const partial = maybeAppendContinuationHint(fullAnswer);
-          appendMessage(conversationId, new HumanMessage(content));
-          appendMessage(conversationId, new AIMessage(partial));
-          ConversationService.appendAssistantMessage(conversationId, {
+          await appendMessage(conversationId, new HumanMessage(content));
+          await appendMessage(conversationId, new AIMessage(partial));
+          await ConversationService.appendAssistantMessage(conversationId, {
             id: crypto.randomUUID(),
             role: "assistant",
             content: partial,
@@ -795,6 +848,7 @@ const KNOWLEDGE_USER_ID = "default";
 /**
  * 将 base64 内容解码为字符串（Cloudflare Workers 兼容）
  */
+// 执行 decodeBase64Content 对应的业务逻辑
 function decodeBase64Content(base64: string): { text: string; bytes: number } {
   const binaryString = atob(base64);
   const bytes = new Uint8Array(binaryString.length);
@@ -816,6 +870,7 @@ export class KnowledgeService {
   /**
    * 上传文档
    */
+  // 创建或注册 uploadDocument 所需的数据
   static async uploadDocument(
     buffer: Buffer,
     filename: string,
@@ -859,6 +914,7 @@ export class KnowledgeService {
   /**
    * 列出所有文档，D1 为权威数据源
    */
+  // 获取 listDocuments 对应的数据
   static async listDocuments(): Promise<Document[]> {
     // 优先从 D1 加载
     try {
@@ -896,6 +952,7 @@ export class KnowledgeService {
   /**
    * 获取文档详情，内存未命中时从 D1 加载
    */
+  // 获取 getDocument 对应的数据
   static async getDocument(id: string): Promise<Document | undefined> {
     const cached = documents.get(id);
     if (cached) return cached;
@@ -933,63 +990,45 @@ export class KnowledgeService {
   /**
    * 删除文档
    */
+  // 删除或清理 deleteDocument 对应的数据
   static async deleteDocument(id: string): Promise<boolean> {
-    if (!documents.has(id)) return false;
     try {
-      await this.client.deleteDocument(id);
-    } catch {
-      // 忽略 Gateway 错误，清理本地缓存
+      const deleted = await this.client.deleteDocument(id);
+      if (!deleted) return false;
+    } catch (error: any) {
+      throw new BusinessError(
+        BusinessErrorCode.INTERNAL_ERROR,
+        `文档删除失败: ${error.message}`,
+        500,
+      );
     }
     documentContents.delete(id);
-    return documents.delete(id);
+    documents.delete(id);
+    return true;
   }
 
   /**
    * 重新索引，内存无内容时从 D1 加载
    */
+  // 执行 reindexDocument 对应的业务逻辑
   static async reindexDocument(id: string): Promise<Document> {
-    const doc = documents.get(id);
-    if (!doc) {
-      throw new BusinessError(
-        BusinessErrorCode.NOT_FOUND,
-        "Document not found",
-        404,
-      );
-    }
-
-    // 优先从内存获取，回退到 D1
-    let source = documentContents.get(id);
-    if (!source) {
-      try {
-        const data = await this.client.getDocument(id);
-        if (data?.document.content_text) {
-          source = {
-            content: data.document.content_text,
-            filename: data.document.filename,
-          };
-          documentContents.set(id, source);
-        }
-      } catch {
-        // D1 加载失败，继续检查内存
-      }
-    }
-
-    if (!source) {
-      throw new BusinessError(
-        BusinessErrorCode.NOT_FOUND,
-        "Document content not found in memory or D1",
-        404,
-      );
-    }
-
     try {
-      // 先删除旧索引
-      await this.client.deleteDocument(id);
-
-      // 重新上传
-      const buffer = Buffer.from(source.content);
-      return this.uploadDocument(buffer, source.filename, doc.category);
+      await this.client.reindexDocument(id);
+      documents.delete(id);
+      const refreshed = await this.getDocument(id);
+      if (!refreshed) {
+        throw new BusinessError(
+          BusinessErrorCode.NOT_FOUND,
+          "Document not found",
+          404,
+        );
+      }
+      return refreshed;
     } catch (error: any) {
+      if (error instanceof BusinessError) throw error;
+      if (error instanceof MemoryGatewayError && error.code === "DOCUMENT_NOT_FOUND") {
+        throw new BusinessError(BusinessErrorCode.NOT_FOUND, "Document not found", 404);
+      }
       throw new BusinessError(
         BusinessErrorCode.INTERNAL_ERROR,
         `文档重新索引失败: ${error.message}`,
@@ -1001,6 +1040,7 @@ export class KnowledgeService {
   /**
    * 知识模式对话（搜索文档 + 生成回答）
    */
+  // 执行 chat 对应的业务逻辑
   static async chat(content: string, _history: any[] = []): Promise<any> {
     const results = await this.search(content, 5);
 
@@ -1025,6 +1065,7 @@ export class KnowledgeService {
   /**
    * 知识检索
    */
+  // 查询 search 对应的结果
   static async search(
     query: string,
     topK: number = 5,

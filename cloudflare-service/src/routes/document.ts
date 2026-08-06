@@ -28,6 +28,7 @@ import {
   DocumentListQuerySchema,
 } from "../schemas/document-models.js";
 
+// 创建或注册 registerDocumentRoutes 所需的数据
 export function registerDocumentRoutes(app: any) {
   // 上传文档
   app.post("/internal/v1/documents", async (c: any) => {

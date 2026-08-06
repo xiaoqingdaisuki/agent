@@ -36,12 +36,12 @@ class TestBuildToolAgent:
 
 class TestMemoryModule:
     def test_get_default_checkpointer(self):
-        """Should return a MemorySaver instance"""
+        """Should return the persistent D1 checkpointer"""
         from src.memory import get_default_checkpointer
-        from langgraph.checkpoint.memory import MemorySaver
+        from src.memory.d1_checkpointer import D1Checkpointer
 
         saver = get_default_checkpointer()
-        assert isinstance(saver, MemorySaver)
+        assert isinstance(saver, D1Checkpointer)
 
     def test_get_default_checkpointer_is_singleton(self):
         """Should return the same instance on repeated calls"""

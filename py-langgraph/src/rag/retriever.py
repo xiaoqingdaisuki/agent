@@ -8,6 +8,7 @@ from src.rag.vector_store import VectorStore
 class Retriever:
     """RAG 检索器"""
 
+    # 初始化当前对象
     def __init__(
         self,
         qdrant_url: str = "",
@@ -21,10 +22,12 @@ class Retriever:
         )
         self._top_k = top_k
 
+    # 获取 retrieve 对应的数据
     async def retrieve(self, query: str) -> list[dict]:
         """检索相关文档"""
         return await self._vector_store.search(query, top_k=self._top_k)
 
+    # 获取 retrieve with context 对应的数据
     async def retrieve_with_context(self, query: str, top_k: int | None = None) -> list[dict]:
         """检索并返回格式化的结果"""
         results = await self.retrieve(query)

@@ -73,6 +73,7 @@ def _tokenize(expr: str) -> list[dict]:
 def _eval_tokens(tokens: list[dict]) -> float:
     """递归下降解析器：处理运算符优先级"""
 
+    # 校验并判断 parse expr 对应的状态
     def parse_expr(pos: int) -> tuple[float, int]:
         """处理 + 和 -（最低优先级）"""
         left, pos = parse_term(pos)
@@ -87,6 +88,7 @@ def _eval_tokens(tokens: list[dict]) -> float:
 
         return left, pos
 
+    # 校验并判断 parse term 对应的状态
     def parse_term(pos: int) -> tuple[float, int]:
         """处理 * / %"""
         left, pos = parse_factor(pos)
@@ -112,6 +114,7 @@ def _eval_tokens(tokens: list[dict]) -> float:
 
         return left, pos
 
+    # 校验并判断 parse factor 对应的状态
     def parse_factor(pos: int) -> tuple[float, int]:
         """处理一元 +/- 和 **（幂运算）"""
         # 一元运算符
@@ -135,6 +138,7 @@ def _eval_tokens(tokens: list[dict]) -> float:
 
         return value, pos
 
+    # 校验并判断 parse primary 对应的状态
     def parse_primary(pos: int) -> tuple[float, int]:
         """处理数字和括号"""
         if pos >= len(tokens):
@@ -161,6 +165,7 @@ def _eval_tokens(tokens: list[dict]) -> float:
     return result
 
 
+# 执行 safe calculate 对应的业务逻辑
 def safe_calculate(expression: str) -> float:
     """
     安全计算数学表达式。
@@ -236,6 +241,7 @@ DESCRIPTOR = ToolDescriptor(
 
 
 @tool(args_schema=CalculatorInput)
+# 执行 calculator 对应的业务逻辑
 def calculator(expression: str) -> str:
     """安全计算数学表达式（四则运算、幂运算、括号）。"""
     try:

@@ -60,6 +60,7 @@ const TERMINAL_PUNCTUATION = new Set([
  *   c) 末字符是终端标点/空白 → 大概率完整
  *   d) 末字符不是终端标点且文本 > 200 字符 → 可能截断
  */
+// 校验并判断 isLikelyTruncated 对应的状态
 export function isLikelyTruncated(
   text: string,
   finishReason?: string,
@@ -92,6 +93,7 @@ export function isLikelyTruncated(
 /**
  * 从 LangChain AIMessage 的 response_metadata 中提取 finish_reason。
  */
+// 获取 getFinishReason 对应的数据
 export function getFinishReason(message: AIMessage): string | undefined {
   const meta = (message as any).response_metadata;
   if (!meta || typeof meta !== "object") return undefined;
@@ -115,6 +117,7 @@ const CONTINUATION_PROMPT = "\n\n---\n⚠️ 以上回答尚未完成。如需�
 /**
  * 为不完整响应追加继续提示，并返回完整文本。
  */
+// 创建或注册 appendContinuationHint 所需的数据
 export function appendContinuationHint(text: string): string {
   return text + CONTINUATION_PROMPT;
 }
@@ -123,6 +126,7 @@ export function appendContinuationHint(text: string): string {
  * 检查响应是否需要附加继续提示。
  * 如果已包含继续提示则不再重复添加。
  */
+// 执行 maybeAppendContinuationHint 对应的业务逻辑
 export function maybeAppendContinuationHint(
   text: string,
   finishReason?: string,
@@ -143,6 +147,7 @@ import type { AgentStep } from "@langchain/core/agents";
 /**
  * 判断 AgentStep 数组是否表明迭代已耗尽（至少有一条有效观察结果）。
  */
+// 校验并判断 hasCollectedObservations 对应的状态
 export function hasCollectedObservations(steps: AgentStep[]): boolean {
   return steps.some((step) => {
     const obs = step.observation;

@@ -124,6 +124,7 @@ class MetricsCollector:
 _metrics = MetricsCollector()
 
 
+# 获取 get metrics collector 对应的数据
 def get_metrics_collector() -> MetricsCollector:
     return _metrics
 
@@ -155,6 +156,7 @@ def _flush_metrics() -> None:
             for e in events
         ]
 
+        # 执行 do flush 对应的业务逻辑
         async def _do_flush():
             await client.write_tool_metrics(entries)
 
@@ -165,6 +167,7 @@ def _flush_metrics() -> None:
             else:
                 loop.run_until_complete(_do_flush())
         except RuntimeError:
+            # 执行 run 对应的业务逻辑
             def _run():
                 asyncio.run(_do_flush())
 
@@ -173,6 +176,7 @@ def _flush_metrics() -> None:
         pass  # 刷入失败静默降级
 
 
+# 更新或保存 record tool metric 对应的数据
 def record_tool_metric(
     tool_name: str,
     tool_version: str,

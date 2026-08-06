@@ -69,6 +69,7 @@ export interface MemorySearchResultData {
   final_score: number;
   created_at: string;
   updated_at: string;
+  source_conversation_id: string | null;
 }
 
 /** 搜索响应 */
@@ -102,7 +103,12 @@ export interface ProfileRepository {
  */
 export interface ConversationRepository {
   /** 创建会话 */
-  create(userId: string, title: string, mode?: string): Promise<ConversationData>;
+  create(
+    userId: string,
+    title: string,
+    mode?: string,
+    conversationId?: string,
+  ): Promise<ConversationData>;
 
   /** 获取会话详情 */
   get(conversationId: string): Promise<ConversationData | null>;

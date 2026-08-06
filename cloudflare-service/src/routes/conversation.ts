@@ -8,16 +8,21 @@
  */
 
 import { createConversation, getConversation, listConversationsByUser, deleteConversation } from "../repositories/conversation.js";
+import { getOrCreateProfile } from "../repositories/profile.js";
 import { ConversationCreateSchema } from "../schemas/memory-models.js";
 
+// 创建或注册 registerConversationRoutes 所需的数据
 export function registerConversationRoutes(app: any) {
   // 创建会话
   app.post("/internal/v1/conversations", async (c: any) => {
     const body = await c.req.json();
     const parsed = ConversationCreateSchema.parse(body);
 
+    // 会话外键依赖用户画像，新用户首次建会话时自动初始化画像
+    await getOrCreateProfile(c.env.DB, parsed.user_id);
+
     const conv = await createConversation(c.env.DB, {
-      id: crypto.randomUUID(),
+      id: parsed.id || crypto.randomUUID(),
       user_id: parsed.user_id,
       title: parsed.title.slice(0, 200),
       mode: parsed.mode || "chat",

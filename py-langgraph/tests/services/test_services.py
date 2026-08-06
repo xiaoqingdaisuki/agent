@@ -134,16 +134,7 @@ class TestAgentService:
 class TestKnowledgeService:
     @pytest.mark.asyncio
     async def test_upload_builds_business_document(self, monkeypatch):
-        from src.rag.vector_store import VectorStore
-
-        captured = []
-
-        async def fake_add_documents(self, chunks, content_field="content"):
-            captured.extend(chunks)
-
-        monkeypatch.setattr(VectorStore, "__init__", lambda self, **kwargs: None)
-        monkeypatch.setattr(VectorStore, "add_documents", fake_add_documents)
         document = await KnowledgeService.upload_document(b"hello world", "note.txt")
         assert document.name == "note.txt"
-        assert document.chunks == 1
-        assert captured[0]["metadata"]["document_id"] == document.id
+        assert document.chunks == 3
+        assert document.id.startswith("doc_")

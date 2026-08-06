@@ -22,6 +22,7 @@ export interface CheckpointRow {
 /**
  * 保存或更新 checkpoint（upsert）
  */
+// 执行 upsertCheckpoint 对应的业务逻辑
 export async function upsertCheckpoint(
   db: D1Database,
   row: {
@@ -57,6 +58,7 @@ export async function upsertCheckpoint(
 /**
  * 获取指定线程的最新 checkpoint
  */
+// 获取 getLatestCheckpoint 对应的数据
 export async function getLatestCheckpoint(
   db: D1Database,
   threadId: string,
@@ -77,6 +79,7 @@ export async function getLatestCheckpoint(
 /**
  * 获取指定线程的所有 checkpoint 列表
  */
+// 获取 listCheckpoints 对应的数据
 export async function listCheckpoints(
   db: D1Database,
   threadId: string,
@@ -107,6 +110,7 @@ export async function listCheckpoints(
 /**
  * 删除指定线程的所有 checkpoints
  */
+// 删除或清理 deleteThreadCheckpoints 对应的数据
 export async function deleteThreadCheckpoints(
   db: D1Database,
   threadId: string,

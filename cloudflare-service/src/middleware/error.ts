@@ -24,7 +24,24 @@ function isVectorizeError(error: any): boolean {
 
 // Workers AI 错误识别
 function isAIError(error: any): boolean {
-  return error?.message?.includes("AI") || error?.message?.includes("workers-ai");
+  const message = String(error?.message ?? "").toLowerCase();
+  return (
+    message.includes("workers ai") ||
+    message.includes("workers-ai") ||
+    message.includes("ai binding") ||
+    message.includes("ai.run") ||
+    message.includes("embedding")
+  );
+}
+
+// 从 D1 顶层、cause 或错误消息中识别约束错误码
+function getD1ErrorCode(error: any): string | undefined {
+  const candidates = [error?.code, error?.cause?.code];
+  for (const code of candidates) {
+    if (typeof code === "string" && D1_ERROR_MAP[code]) return code;
+  }
+  const message = String(error?.message ?? "");
+  return Object.keys(D1_ERROR_MAP).find((code) => message.includes(code));
 }
 
 // 构建 JSON 响应
@@ -54,8 +71,9 @@ export function errorHandler(error: any, c: any) {
   }
 
   // D1 错误
-  if (error?.code && D1_ERROR_MAP[error.code]) {
-    const code = D1_ERROR_MAP[error.code];
+  const d1ErrorCode = getD1ErrorCode(error);
+  if (d1ErrorCode) {
+    const code = D1_ERROR_MAP[d1ErrorCode];
     return jsonResponse(
       {
         ok: false,

@@ -27,12 +27,13 @@ class TestUserProfileContract:
 
     def test_update_updates_last_active(self):
         """update 会更新 last_active_at"""
-        profile = ProfileService.get_or_create("contract_user_3")
+        profile = ProfileService.get_or_create("contract_user_3", "Alice")
         original_ts = profile.last_active_at
         import time
         time.sleep(0.01)
         updated = ProfileService.update("contract_user_3")
         assert updated is not None
+        assert updated.name == "Alice"
         assert updated.last_active_at != original_ts
 
     def test_to_dict_serialization(self):
@@ -144,8 +145,10 @@ class TestQARecordContract:
         rec = history[0]
         assert "id" in rec
         assert "user_id" in rec
-        assert "content" in rec  # answer stored as content
-        assert "created_at" in rec  # timestamp
+        assert rec["conversation_id"] == "conv_1"
+        assert rec["question"] == "问题"
+        assert rec["answer"] == "回答"
+        assert "timestamp" in rec
 
     def test_filters_by_conversation_id(self):
         """get_history 按 conversation_id 过滤"""
@@ -154,7 +157,7 @@ class TestQARecordContract:
         HistoryService.record("contract_user_16", "conv_B", "Q2", "A2")
         conv_a = HistoryService.get_history("contract_user_16", "conv_A")
         assert len(conv_a) == 1
-        assert conv_a[0]["source_conversation_id"] == "conv_A"
+        assert conv_a[0]["conversation_id"] == "conv_A"
 
     def test_respects_limit(self):
         """get_history 的 limit 参数生效"""

@@ -43,7 +43,7 @@ export const ConversationSchema = z.object({
   id: z.string(),
   user_id: z.string(),
   title: z.string().default(""),
-  mode: ConversationModeSchema,
+  mode: ConversationModeSchema.default("chat"),
   created_at: z.string(),
   updated_at: z.string(),
   deleted_at: z.string().nullable(),
@@ -107,13 +107,15 @@ export const MemorySearchResultSchema = z.object({
   final_score: z.coerce.number(),
   created_at: z.string(),
   updated_at: z.string(),
+  source_conversation_id: z.string().nullable(),
 });
 
 /** 会话创建请求 */
 export const ConversationCreateSchema = z.object({
+  id: z.string().min(1).max(128).optional(),
   user_id: z.string(),
   title: z.string().max(200),
-  mode: ConversationModeSchema,
+  mode: ConversationModeSchema.default("chat"),
 });
 
 /** 消息批量写入请求 */
@@ -130,7 +132,7 @@ export const MessageBatchSchema = z.object({
 
 /** 画像保存请求 */
 export const ProfileSaveSchema = z.object({
-  name: z.string().max(100),
+  name: z.string().max(100).optional(),
   preferences: z.record(z.string(), z.unknown()).optional(),
 });
 

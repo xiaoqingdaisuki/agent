@@ -78,7 +78,7 @@ class FakeConversationRepository:
 
     def get(self, conversation_id: str):
         data = self._conversations.get(conversation_id)
-        return dict(data) if data else None
+        return dict(data) if data and data["deleted_at"] is None else None
 
     def list(self, user_id: str, limit: int = 20, offset: int = 0):
         all_convs = [
@@ -289,8 +289,19 @@ class FakeCloudflareMemoryClient:
         return self._repos.profile.update(user_id, name, preferences)
 
     # Conversation
-    async def create_conversation(self, user_id: str, title: str, mode: str = "chat"):
-        return self._repos.conversation.create(user_id, title, mode)
+    async def create_conversation(
+        self,
+        user_id: str,
+        title: str,
+        mode: str = "chat",
+        conversation_id: str = None,
+    ):
+        conversation = self._repos.conversation.create(user_id, title, mode)
+        if conversation_id and conversation["id"] != conversation_id:
+            self._repos.conversation._conversations.pop(conversation["id"], None)
+            conversation["id"] = conversation_id
+            self._repos.conversation._conversations[conversation_id] = conversation
+        return conversation
 
     async def list_conversations(self, user_id: str, limit: int = 20, offset: int = 0):
         return self._repos.conversation.list(user_id, limit, offset)
@@ -303,7 +314,16 @@ class FakeCloudflareMemoryClient:
 
     # Message
     async def create_messages_batch(self, conversation_id: str, user_id: str, messages: list[dict]):
-        return self._repos.message.create_batch(conversation_id, user_id, messages)
+        formatted = [
+            {
+                **message,
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "content_json": message.get("content_json", message.get("content", "")),
+            }
+            for message in messages
+        ]
+        return self._repos.message.create_batch(conversation_id, user_id, formatted)
 
     async def get_messages(self, conversation_id: str, limit: int = 50, offset: int = 0):
         return self._repos.message.get_messages(conversation_id, limit, offset)
@@ -333,7 +353,7 @@ class FakeCloudflareMemoryClient:
             options["category"] = category
         return self._repos.memory.list(user_id, options)
 
-    async def update_memory(self, memory_id: str, content: str = None, category: str = None,
+    async def update_memory(self, user_id: str, memory_id: str, content: str = None, category: str = None,
                             importance: int = None):
         changes = {}
         if content is not None:
@@ -344,7 +364,7 @@ class FakeCloudflareMemoryClient:
             changes["importance"] = importance
         return self._repos.memory.update(memory_id, changes)
 
-    async def delete_memory(self, memory_id: str):
+    async def delete_memory(self, user_id: str, memory_id: str):
         return self._repos.memory.delete(memory_id)
 
     async def clear_user_memories(self, user_id: str):
@@ -368,7 +388,7 @@ class FakeCloudflareMemoryClient:
             "deleted_at": None,
         }
 
-    def list_documents(self, user_id: str, limit: int = 20, offset: int = 0, category: str = None) -> dict:
+    async def list_documents(self, user_id: str, limit: int = 20, offset: int = 0, category: str = None) -> dict:
         return {"documents": [], "total": 0}
 
     async def get_document(self, document_id: str) -> dict | None:
@@ -376,6 +396,9 @@ class FakeCloudflareMemoryClient:
 
     async def delete_document(self, document_id: str) -> bool:
         return True
+
+    async def reindex_document(self, document_id: str) -> dict:
+        return {"chunk_count": 3, "degraded": False}
 
     async def search_documents(self, user_id: str, query: str, limit: int = 5, min_score: float = 0.6) -> dict:
         return {"results": [], "degraded": False}

@@ -29,11 +29,12 @@ describe("Profile Contract — UserProfile shape", () => {
   });
 
   it("UserProfile update updates last_active_at", async () => {
-    const before = (await ProfileService.getOrCreate("contract_user_3")).last_active_at;
+    const before = (await ProfileService.getOrCreate("contract_user_3", "Alice")).last_active_at;
     // 等待至少 1ms 以确保时间戳不同
     await new Promise((r) => setTimeout(r, 1));
     const updated = await ProfileService.update("contract_user_3");
     expect(updated).toBeDefined();
+    expect(updated!.name).toBe("Alice");
     expect(updated!.last_active_at).not.toBe(before);
   });
 });

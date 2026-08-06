@@ -32,7 +32,7 @@ type GatewayEnv = {
   DB: D1Database;
   MEMORY_INDEX: VectorizeIndex;
   AI: Ai;
-  MEMORY_GATEWAY_SECRET: string;
+  SERVICE_SECRET: string;
   EMBEDDING_MODEL: string;
   EMBEDDING_DIMENSIONS: string;
   MAX_MEMORIES_PER_USER: string;

@@ -6,6 +6,9 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
+
+vi.unmock("../../src/clients/memory_gateway.js");
+
 import { CloudflareMemoryClient, MemoryGatewayError } from "../../src/clients/memory_gateway.js";
 
 // ============ Mock fetch ============
@@ -335,36 +338,36 @@ describe("CloudflareMemoryClient", () => {
 
     it("deleteMemory returns true on success", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/__placeholder__/memories/mem_001",
+        "/internal/v1/users/usr_001/memories/mem_001",
         200,
         validMemory(),
       );
 
-      const result = await client.deleteMemory("mem_001");
+      const result = await client.deleteMemory("usr_001", "mem_001");
       expect(result).toBe(true);
     });
 
     it("deleteMemory returns false for 404", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/__placeholder__/memories/unknown",
+        "/internal/v1/users/usr_001/memories/unknown",
         404,
         {
           error: { code: "MEMORY_NOT_FOUND", message: "记忆不存在" },
         },
       );
 
-      const result = await client.deleteMemory("unknown");
+      const result = await client.deleteMemory("usr_001", "unknown");
       expect(result).toBe(false);
     });
 
     it("updateMemory updates memory fields", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/__placeholder__/memories/mem_001",
+        "/internal/v1/users/usr_001/memories/mem_001",
         200,
         validMemory({ content: "Updated content", category: "preference", importance: 5 }),
       );
 
-      const result = await client.updateMemory("mem_001", {
+      const result = await client.updateMemory("usr_001", "mem_001", {
         content: "Updated content",
         category: "preference",
         importance: 5,

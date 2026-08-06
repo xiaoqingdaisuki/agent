@@ -8,6 +8,7 @@
 
 import { createAuditLogs, getAuditLogs, clearAuditLogs } from "../repositories/audit-log.js";
 
+// 创建或注册 registerAuditLogRoutes 所需的数据
 export function registerAuditLogRoutes(app: any) {
   // 批量写入审计日志
   app.post("/internal/v1/audit-logs", async (c: any) => {

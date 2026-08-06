@@ -86,6 +86,7 @@ class NonRetryableSearchError extends Error {}
 /**
  * 将字符串安全地限制在整数范围内
  */
+// 执行 boundedInteger 对应的业务逻辑
 function boundedInteger(
   raw: string | undefined,
   fallback: number,
@@ -108,25 +109,19 @@ class Mutex {
   private _locked = false;
   private _waiters: Array<(unlock: () => void) => void> = [];
 
+  // 获取互斥锁；等待者会在前一持有者释放时直接接管锁
   async lock(): Promise<() => void> {
     if (!this._locked) {
       this._locked = true;
       return () => this._unlock();
     }
 
-    // 等待当前持有者释放锁
-    const release = await new Promise<() => void>((resolve) => {
+    return new Promise<() => void>((resolve) => {
       this._waiters.push(resolve);
     });
-
-    // 被唤醒后重新尝试获取
-    if (this._locked) {
-      return this.lock();
-    }
-    this._locked = true;
-    return () => this._unlock();
   }
 
+  // 释放互斥锁并把所有权交给队列中的下一个等待者
   private _unlock(): void {
     const next = this._waiters.shift();
     if (next) {
@@ -139,6 +134,7 @@ class Mutex {
 
 const stateMutex = new Mutex();
 
+// 获取 getSettings 对应的数据
 function getSettings(): SearchSettings {
   return {
     apiKey: process.env.TAVILY_API_KEY?.trim() || undefined,
@@ -161,6 +157,7 @@ function getSettings(): SearchSettings {
   };
 }
 
+// 执行 cleanHtml 对应的业务逻辑
 function cleanHtml(text: string): string {
   return text
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
@@ -176,6 +173,7 @@ function cleanHtml(text: string): string {
     .trim();
 }
 
+// 执行 normalizeUrl 对应的业务逻辑
 function normalizeUrl(rawUrl: string): string | null {
   try {
     const url = new URL(rawUrl);
@@ -394,9 +392,11 @@ async function executeSearch(
  * 多个并发请求共享同一个 Promise，任一请求完成后所有等待者同时收到结果。
  * 对齐 Python 的 InFlightSearch(event=Event(), result=None) 模式。
  */
+// 创建或注册 createInFlightEntry 所需的数据
 function createInFlightEntry(
   task: Promise<SearchOutcome>,
 ): InFlightSearch {
+  // 执行 resolveEntry 对应的业务逻辑
   let resolveEntry: (outcome: SearchOutcome) => void = () => {};
   const done = task.then((outcome) => {
     resolveEntry(outcome);
@@ -463,6 +463,7 @@ export async function multiSourceSearch(
 
 // ============ 格式化输出 ============
 
+// 查询 searchResultsToText 对应的结果
 export function searchResultsToText(
   outcome: SearchOutcome,
   query: string,

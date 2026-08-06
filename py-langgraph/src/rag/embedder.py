@@ -23,19 +23,23 @@ class Embedder:
         )
         self.model = model
 
+    # 执行 embed 对应的业务逻辑
     async def embed(self, text: str) -> list[float]:
         """单文本向量化"""
         result = await self.embeddings.aembed_query(text)
         return result
 
+    # 执行 embed batch 对应的业务逻辑
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """批量向量化"""
         return await self.embeddings.aembed_documents(texts)
 
+    # 执行 embed sync 对应的业务逻辑
     def embed_sync(self, text: str) -> list[float]:
         """同步向量化"""
         return self.embeddings.embed_query(text)
 
+    # 执行 embed batch sync 对应的业务逻辑
     def embed_batch_sync(self, texts: list[str]) -> list[list[float]]:
         """同步批量向量化"""
         return self.embeddings.embed_documents(texts)

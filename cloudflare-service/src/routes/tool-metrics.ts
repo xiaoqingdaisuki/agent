@@ -8,6 +8,7 @@
 
 import { createToolMetrics, getToolMetrics, getToolMetricsSnapshot } from "../repositories/tool-metrics.js";
 
+// 创建或注册 registerToolMetricsRoutes 所需的数据
 export function registerToolMetricsRoutes(app: any) {
   // 批量写入指标
   app.post("/internal/v1/tool-metrics", async (c: any) => {

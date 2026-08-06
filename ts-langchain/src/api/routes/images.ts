@@ -60,6 +60,7 @@ function getImageApiUrl(): string | null {
   }
 }
 
+// 创建或注册 registerImageRoutes 所需的数据
 export async function registerImageRoutes(app: FastifyInstance) {
   app.post<{ Body: { prompt?: string } }>(
     "/images/generations",

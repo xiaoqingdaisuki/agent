@@ -129,6 +129,7 @@ class ToolDefinition(Generic[TInput, TOutput]):
 
     descriptor: ToolDescriptor
 
+    # 执行 execute 对应的业务逻辑
     def execute(self, input: TInput, context: ToolCallContext) -> TOutput:
         raise NotImplementedError
 

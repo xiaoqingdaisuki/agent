@@ -22,6 +22,7 @@ import {
 import { validateMemoryContent, redactSensitive } from "../middleware/security.js";
 import { MemorySaveRequestSchema, MemorySearchRequestSchema } from "../schemas/memory-models.js";
 
+// 创建或注册 registerMemoryRoutes 所需的数据
 export function registerMemoryRoutes(app: any) {
   // 保存记忆（幂等，自动去重 + embedding + Vectorize）
   app.put("/internal/v1/users/:user_id/memories/:memory_id", async (c: any) => {
@@ -105,10 +106,11 @@ export function registerMemoryRoutes(app: any) {
 
   // 更新记忆（内容变更后 index_status 重置为 pending，触发重新 embedding）
   app.patch("/internal/v1/users/:user_id/memories/:memory_id", async (c: any) => {
+    const userId = c.req.param("user_id");
     const memoryId = c.req.param("memory_id");
     const body = await c.req.json();
 
-    const existing = await getMemoryById(c.env.DB, memoryId);
+    const existing = await getMemoryById(c.env.DB, memoryId, userId);
     if (!existing || existing.status === "deleted") {
       return c.json(
         {
@@ -141,7 +143,14 @@ export function registerMemoryRoutes(app: any) {
     if ((body as any).category) updates.category = (body as any).category;
     if ((body as any).importance) updates.importance = Math.min(Math.max((body as any).importance, 1), 5);
 
-    const updated = await updateMemory(c.env.DB, memoryId, updates);
+    const updated = await updateMemory(
+      c.env.DB,
+      c.env.MEMORY_INDEX,
+      c.env.AI,
+      userId,
+      memoryId,
+      updates,
+    );
     if (!updated) {
       return c.json(
         {
@@ -164,9 +173,10 @@ export function registerMemoryRoutes(app: any) {
 
   // 删除记忆（D1 软删除 + Vectorize deleteByIds）
   app.delete("/internal/v1/users/:user_id/memories/:memory_id", async (c: any) => {
+    const userId = c.req.param("user_id");
     const memoryId = c.req.param("memory_id");
 
-    const deleted = await deleteMemory(c.env.DB, c.env.MEMORY_INDEX, memoryId);
+    const deleted = await deleteMemory(c.env.DB, c.env.MEMORY_INDEX, userId, memoryId);
     if (!deleted) {
       return c.json(
         {
@@ -187,10 +197,10 @@ export function registerMemoryRoutes(app: any) {
     });
   });
 
-  // 清空用户所有记忆（批量软删除，不触发 Vectorize 逐条清理）
+  // 清空用户所有记忆并批量清理 Vectorize
   app.delete("/internal/v1/users/:user_id/memories", async (c: any) => {
     const userId = c.req.param("user_id");
-    const count = await clearUserMemories(c.env.DB, userId);
+    const count = await clearUserMemories(c.env.DB, c.env.MEMORY_INDEX, userId);
 
     return c.json({
       ok: true,

@@ -57,6 +57,7 @@ export interface DocumentSearchResult {
 /**
  * 简单文本切分：按段落分隔符拆分
  */
+// 执行 splitText 对应的业务逻辑
 export function splitText(text: string, chunkSize = 1000, chunkOverlap = 200): string[] {
   const separators = ["\n\n", "\n", "。", ". ", " "];
   const chunks: string[] = [];
@@ -91,6 +92,7 @@ export function splitText(text: string, chunkSize = 1000, chunkOverlap = 200): s
 /**
  * 计算文本的 SHA-256 哈希
  */
+// 校验并判断 hashContent 对应的状态
 export async function hashContent(content: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(content.toLowerCase().replace(/\s+/g, " ").trim());
@@ -105,6 +107,7 @@ export async function hashContent(content: string): Promise<string> {
 /**
  * 创建文档及其块
  */
+// 创建或注册 createDocument 所需的数据
 export async function createDocument(
   db: D1Database,
   index: VectorizeIndex,
@@ -192,7 +195,7 @@ export async function createDocument(
     const chunkId = `${doc.id}:chunk_${i}`;
     const vectorizeId = `doc_${chunkId}`;
 
-    chunkStmt
+    await chunkStmt
       .bind(
         chunkId,
         doc.id,
@@ -259,6 +262,7 @@ export async function createDocument(
 /**
  * 获取文档详情
  */
+// 获取 getDocument 对应的数据
 export async function getDocument(
   db: D1Database,
   documentId: string,
@@ -274,6 +278,7 @@ export async function getDocument(
 /**
  * 列出用户文档
  */
+// 获取 listDocuments 对应的数据
 export async function listDocuments(
   db: D1Database,
   userId: string,
@@ -308,6 +313,7 @@ export async function listDocuments(
 /**
  * 删除文档（软删除 + 清理 Vectorize）
  */
+// 删除或清理 deleteDocument 对应的数据
 export async function deleteDocument(
   db: D1Database,
   index: VectorizeIndex,
@@ -360,6 +366,7 @@ export async function deleteDocument(
 /**
  * 批量创建块
  */
+// 创建或注册 createChunksBatch 所需的数据
 export async function createChunksBatch(
   db: D1Database,
   chunks: Array<{
@@ -398,6 +405,7 @@ export async function createChunksBatch(
 /**
  * 获取文档的所有块
  */
+// 获取 getChunksByDocument 对应的数据
 export async function getChunksByDocument(
   db: D1Database,
   documentId: string,
@@ -413,6 +421,7 @@ export async function getChunksByDocument(
 /**
  * 删除文档的所有块
  */
+// 删除或清理 deleteChunksByDocument 对应的数据
 export async function deleteChunksByDocument(
   db: D1Database,
   documentId: string,
@@ -425,6 +434,7 @@ export async function deleteChunksByDocument(
 /**
  * 语义搜索文档块
  */
+// 查询 searchDocuments 对应的结果
 export async function searchDocuments(
   db: D1Database,
   index: VectorizeIndex,
@@ -458,8 +468,9 @@ export async function searchDocuments(
     const matchIds: string[] = [];
     const scoreMap: Record<string, number> = {};
     for (const m of vectorResults.matches) {
-      matchIds.push(m.id);
-      scoreMap[m.id] = m.score;
+      const chunkId = m.id.startsWith("doc_") ? m.id.slice(4) : m.id;
+      matchIds.push(chunkId);
+      scoreMap[chunkId] = m.score;
     }
 
     if (matchIds.length === 0) {
@@ -517,6 +528,7 @@ export async function searchDocuments(
 /**
  * 降级搜索：纯 SQL 全文匹配
  */
+// 执行 degradeSearch 对应的业务逻辑
 async function degradeSearch(
   db: D1Database,
   userId: string,

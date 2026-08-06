@@ -1,9 +1,7 @@
 /**
  * Conversation Memory — 对话历史管理
  *
- * 维护两层存储：
- * 1. 进程内 Map：当前 Agent 运行的上下文窗口（BaseMessage[]）
- * 2. Repository：跨进程/跨会话持久化（通过 Gateway 或内存）
+ * 维护 Agent 运行时上下文窗口；业务消息持久化统一由 ConversationService 负责，避免重复写入。
  *
  * 流式响应只在实际成功时落库，防止重复消息。
  */
@@ -19,6 +17,7 @@ const conversations = new Map<string, BaseMessage[]>();
 /**
  * 获取指定线程的对话历史，内存未命中时从 D1 加载
  */
+// 获取 getHistory 对应的数据
 export async function getHistory(threadId: string): Promise<BaseMessage[]> {
   const cached = conversations.get(threadId);
   if (cached && cached.length > 0) return cached;
@@ -46,40 +45,27 @@ export async function getHistory(threadId: string): Promise<BaseMessage[]> {
   }
 }
 
+// 返回不含当前重复用户输入的历史，避免同时作为 input 与 chat_history 发送
+export async function getHistoryBeforeInput(
+  threadId: string,
+  currentInput: string,
+): Promise<BaseMessage[]> {
+  const history = [...(await getHistory(threadId))];
+  const last = history.at(-1);
+  if (last?._getType() === "human" && last.content === currentInput) {
+    history.pop();
+  }
+  return history;
+}
+
 /**
  * 向指定线程追加一条消息，超出上限时裁剪旧消息
  *
- * 同时持久化到 Repository（异步，不阻塞主流程）。
  */
+// 创建或注册 appendMessage 所需的数据
 export async function appendMessage(threadId: string, message: BaseMessage): Promise<void> {
   const history = await getHistory(threadId);
   history.push(message);
-
-  const role = message._getType() === "human" ? "user" : "assistant";
-  const content =
-    typeof message.content === "string"
-      ? message.content
-      : JSON.stringify(message.content);
-
-  // 异步持久化到 Repository
-  try {
-    const repos = getRepositories();
-    // 确保存在一个会话（使用 threadId 作为 conversation_id）
-    // 注意：这里简化处理，实际应用中 conversation 应在 API 层创建
-    await repos.message.createBatch(threadId, "", [
-      {
-        id: crypto.randomUUID(),
-        conversation_id: threadId,
-        user_id: "",
-        sequence_no: history.length - 1,
-        role: role as "user" | "assistant",
-        content_json: content,
-        created_at: new Date().toISOString(),
-      },
-    ]);
-  } catch (err) {
-    console.error(`[memory] Failed to persist message to D1 for thread ${threadId}: ${err}`);
-  }
 
   // 裁剪超出上限的旧消息
   if (history.length > MAX_HISTORY_MESSAGES) {
@@ -95,16 +81,9 @@ export async function appendMessage(threadId: string, message: BaseMessage): Pro
 }
 
 /**
- * 清空指定线程的全部对话历史和会话存储
+ * 清空指定线程的 Agent 运行时对话历史
  */
+// 删除或清理 clearHistory 对应的数据
 export async function clearHistory(threadId: string): Promise<void> {
   conversations.delete(threadId);
-
-  // 异步清空 Repository 中的消息
-  try {
-    const repos = getRepositories();
-    await repos.message.clear(threadId);
-  } catch (err) {
-    console.warn(`[memory] D1 clear messages failed for thread ${threadId}: ${err}`);
-  }
 }

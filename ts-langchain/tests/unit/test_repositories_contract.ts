@@ -84,7 +84,12 @@ const mockCloudflareClient = {
     const keys = new Set(existing.map((m: any) => m.sequence_no));
     for (const msg of messages) {
       if (!keys.has(msg.sequence_no)) {
-        existing.push({ ...msg });
+        existing.push({
+          ...msg,
+          conversation_id: convId,
+          user_id: userId,
+          content_json: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? {}),
+        });
         keys.add(msg.sequence_no);
       }
     }
@@ -181,7 +186,7 @@ const mockCloudflareClient = {
     return memories.slice(0, options.limit ?? 50).map((m: any) => ({ ...m }));
   }),
 
-  updateMemory: vi.fn(async (memoryId: string, changes: any) => {
+  updateMemory: vi.fn(async (_userId: string, memoryId: string, changes: any) => {
     for (const memories of mockMemories.values()) {
       for (const m of memories) {
         if (m.id === memoryId && m.status !== "deleted") {
@@ -194,7 +199,7 @@ const mockCloudflareClient = {
     return null;
   }),
 
-  deleteMemory: vi.fn(async (memoryId: string) => {
+  deleteMemory: vi.fn(async (_userId: string, memoryId: string) => {
     for (const memories of mockMemories.values()) {
       for (const m of memories) {
         if (m.id === memoryId) {
@@ -446,7 +451,7 @@ describe("Repository Contract — CloudflareRepositories", () => {
     it("delete removes memory by id", async () => {
       const uid = "del-user";
       const mem = await repos.memory.save(uid, "mem_del", "To be deleted", "fact", 3);
-      const deleted = await repos.memory.delete(mem.id);
+      const deleted = await repos.memory.delete(uid, mem.id);
       expect(deleted).toBe(true);
 
       const memories = await repos.memory.list(uid);
@@ -454,7 +459,7 @@ describe("Repository Contract — CloudflareRepositories", () => {
     });
 
     it("delete returns false for nonexistent memory", async () => {
-      const deleted = await repos.memory.delete("nonexistent_mem_xyz");
+      const deleted = await repos.memory.delete("missing-user", "nonexistent_mem_xyz");
       expect(deleted).toBe(false);
     });
 

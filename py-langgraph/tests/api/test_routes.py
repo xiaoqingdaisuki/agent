@@ -179,3 +179,130 @@ class TestKnowledgeEndpoints:
         )
         assert response.status_code == 201
         assert response.json()["name"] == "note.txt"
+
+
+class TestCompleteApiContract:
+    @pytest.mark.asyncio
+    async def test_legacy_and_v1_business_routes(self, client: AsyncClient, monkeypatch):
+        from src.commands import DARK_MODE_COMMAND, DARK_MODE_ENABLED_REPLY
+        from src.services import Document, KnowledgeService
+
+        document = Document(
+            "contract.txt",
+            8,
+            chunks=1,
+            category="tech",
+            document_id="doc_contract",
+        )
+
+        async def fake_list_documents():
+            return [document.to_dict()]
+
+        async def fake_get_document(_doc_id: str):
+            return document
+
+        async def fake_reindex_document(_doc_id: str):
+            return document
+
+        async def fake_delete_document(_doc_id: str):
+            return True
+
+        async def fake_search(_query: str, _top_k: int = 5):
+            return [{"document_id": document.id, "content": "契约内容", "score": 0.9}]
+
+        monkeypatch.setattr(KnowledgeService, "list_documents", fake_list_documents)
+        monkeypatch.setattr(KnowledgeService, "get_document", fake_get_document)
+        monkeypatch.setattr(KnowledgeService, "reindex_document", fake_reindex_document)
+        monkeypatch.setattr(KnowledgeService, "delete_document", fake_delete_document)
+        monkeypatch.setattr(KnowledgeService, "search", fake_search)
+
+        user_id = "contract_user"
+        legacy_chat = await client.post(
+            "/chat",
+            json={"message": DARK_MODE_COMMAND, "user_id": user_id},
+        )
+        assert legacy_chat.status_code == 200
+        assert legacy_chat.json()["reply"] == DARK_MODE_ENABLED_REPLY
+
+        legacy_stream = await client.post(
+            "/stream",
+            json={"message": DARK_MODE_COMMAND, "user_id": user_id},
+        )
+        assert legacy_stream.status_code == 200
+        assert DARK_MODE_ENABLED_REPLY in legacy_stream.text
+        assert "data: [DONE]" in legacy_stream.text
+
+        created = await client.post(
+            "/api/v1/conversations",
+            json={"title": "契约会话", "mode": "chat", "user_id": user_id},
+        )
+        assert created.status_code == 201
+        conversation_id = created.json()["id"]
+
+        listed = await client.get(f"/api/v1/conversations?user_id={user_id}")
+        assert any(item["id"] == conversation_id for item in listed.json())
+        assert (await client.get(f"/api/v1/conversations/{conversation_id}")).status_code == 200
+
+        stream = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages/stream",
+            json={"content": DARK_MODE_COMMAND, "user_id": user_id},
+        )
+        assert stream.status_code == 200
+        assert DARK_MODE_ENABLED_REPLY in stream.text
+        assert "data: [DONE]" in stream.text
+
+        messages = await client.get(f"/api/v1/conversations/{conversation_id}/messages")
+        assert [(item["role"], item["content"]) for item in messages.json()] == [
+            ("user", DARK_MODE_COMMAND),
+            ("assistant", DARK_MODE_ENABLED_REPLY),
+        ]
+        cleared = await client.delete(f"/api/v1/conversations/{conversation_id}/messages")
+        assert cleared.json() == {"success": True}
+
+        profile = await client.get(f"/api/v1/profile?user_id={user_id}")
+        assert profile.status_code == 200
+        assert profile.json()["id"] == user_id
+        updated_profile = await client.patch(
+            f"/api/v1/profile?user_id={user_id}",
+            json={"name": "契约用户", "preferences": {"theme": "dark"}},
+        )
+        assert updated_profile.json()["name"] == "契约用户"
+        assert updated_profile.json()["preferences"] == {"theme": "dark"}
+
+        created_memory = await client.post(
+            f"/api/v1/memory?user_id={user_id}",
+            json={"content": "喜欢契约测试", "category": "preference", "importance": 4},
+        )
+        assert created_memory.status_code == 201
+        memory_id = created_memory.json()["id"]
+        memories = await client.get(f"/api/v1/memory?user_id={user_id}")
+        assert any(item["id"] == memory_id for item in memories.json()["memories"])
+        deleted_memory = await client.delete(
+            f"/api/v1/memory?user_id={user_id}&memory_id={memory_id}"
+        )
+        assert deleted_memory.json() == {"success": True}
+        history = await client.get(f"/api/v1/history?user_id={user_id}")
+        assert history.status_code == 200
+        assert isinstance(history.json()["history"], list)
+
+        documents = await client.get("/api/v1/knowledge/documents")
+        assert documents.json()[0]["id"] == document.id
+        assert (
+            await client.get(f"/api/v1/knowledge/documents/{document.id}")
+        ).json()["id"] == document.id
+        assert (
+            await client.post(f"/api/v1/knowledge/documents/{document.id}/reindex")
+        ).json()["id"] == document.id
+        search = await client.post(
+            "/api/v1/knowledge/search",
+            json={"query": "契约", "top_k": 3},
+        )
+        assert search.json()["results"][0]["document_id"] == document.id
+        assert (
+            await client.delete(f"/api/v1/knowledge/documents/{document.id}")
+        ).json() == {"success": True}
+
+        assert (await client.post("/images/generations", json={})).status_code == 422
+        assert (
+            await client.delete(f"/api/v1/conversations/{conversation_id}")
+        ).json() == {"success": True}

@@ -21,6 +21,7 @@ class StreamRequest(BaseModel):
 
 # 流式对话接口 — 使用 Server-Sent Events 逐字返回 AI 回复
 @router.post("")
+# 执行 stream 对应的业务逻辑
 async def stream(request: StreamRequest):
     """流式对话 — 使用 Server-Sent Events"""
     from fastapi.responses import StreamingResponse
@@ -28,15 +29,19 @@ async def stream(request: StreamRequest):
     thread_id = request.thread_id or str(uuid4())
 
     # 确保会话记录存在于 D1（前端传入的 thread_id 需关联 conversations 表）
-    try:
-        from src.services import ConversationService
-        ConversationService.ensure(thread_id, request.user_id or "")
-    except Exception:
-        pass
+    from src.services import ConversationService, Message
+
+    ConversationService.ensure(thread_id, request.user_id)
 
     command = execute_agent_command(request.message, thread_id)
 
     if command:
+        ConversationService.append_user_message(thread_id, request.message, request.user_id or "")
+        ConversationService.append_assistant_message(
+            thread_id,
+            Message("assistant", command.reply),
+            request.user_id or "",
+        )
         # 生成命令响应的 SSE 事件流
         async def command_event_generator():
             payload = json.dumps({"text": command.reply}, ensure_ascii=False)
@@ -45,6 +50,7 @@ async def stream(request: StreamRequest):
 
         return StreamingResponse(command_event_generator(), media_type="text/event-stream")
 
+    ConversationService.append_user_message(thread_id, request.message, request.user_id or "")
     agent = build_tool_agent(
         system_prompt_override=get_agent_prompt_override(thread_id, request.message)
     )
@@ -122,20 +128,18 @@ async def stream(request: StreamRequest):
 
             # 正常完成：保存完整回答
             if full_answer:
-                from src.services import ConversationService
                 ConversationService.append_assistant_message(
                     thread_id,
-                    type("Message", (), {"role": "assistant", "content": maybe_append_continuation_hint(full_answer)})(),
+                    Message("assistant", maybe_append_continuation_hint(full_answer)),
                     request.user_id or "",
                 )
         except TimeoutError:
             if full_answer:
                 # 超时但有部分结果 → 返回部分内容 + 继续提示
                 partial = maybe_append_continuation_hint(full_answer)
-                from src.services import ConversationService
                 ConversationService.append_assistant_message(
                     thread_id,
-                    type("Message", (), {"role": "assistant", "content": partial})(),
+                    Message("assistant", partial),
                     request.user_id or "",
                 )
                 yield f"data: {json.dumps({'text': partial, 'partial': True}, ensure_ascii=False)}\n\n"
@@ -149,10 +153,9 @@ async def stream(request: StreamRequest):
             logging.getLogger("agent.stream").exception("Stream failed")
             if full_answer:
                 partial = maybe_append_continuation_hint(full_answer)
-                from src.services import ConversationService
                 ConversationService.append_assistant_message(
                     thread_id,
-                    type("Message", (), {"role": "assistant", "content": partial})(),
+                    Message("assistant", partial),
                     request.user_id or "",
                 )
                 yield f"data: {json.dumps({'text': partial, 'partial': True}, ensure_ascii=False)}\n\n"

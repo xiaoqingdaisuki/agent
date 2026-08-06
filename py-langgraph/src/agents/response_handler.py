@@ -42,6 +42,7 @@ _TERMINAL_PUNCTUATION = frozenset(
 )
 
 
+# 校验并判断 is likely truncated 对应的状态
 def is_likely_truncated(text: str, finish_reason: str | None = None) -> bool:
     """检测文本是否可能被 LLM 截断。
 
@@ -67,6 +68,7 @@ def is_likely_truncated(text: str, finish_reason: str | None = None) -> bool:
     return last_char not in _TERMINAL_PUNCTUATION and last_char != "\n"
 
 
+# 获取 get finish reason 对应的数据
 def get_finish_reason(message) -> str | None:
     """从 LangChain AIMessage 中提取 finish_reason。"""
     meta = getattr(message, "response_metadata", None)
@@ -93,11 +95,13 @@ def get_finish_reason(message) -> str | None:
 _CONTINUATION_PROMPT = "\n\n---\n⚠️ 以上回答尚未完成。如需继续，请回复「继续」。"
 
 
+# 创建或注册 append continuation hint 所需的数据
 def append_continuation_hint(text: str) -> str:
     """为不完整响应追加继续提示。"""
     return text + _CONTINUATION_PROMPT
 
 
+# 执行 maybe append continuation hint 对应的业务逻辑
 def maybe_append_continuation_hint(text: str, finish_reason: str | None = None) -> str:
     """检查响应是否需要附加继续提示，需要则追加。"""
     if text.endswith(_CONTINUATION_PROMPT):

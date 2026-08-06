@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { multiSourceSearch, resetSearchStateForTests, searchResultsToText } from "../../src/tools/web-search.js";
 
-const SEARCH_ENV_KEYS = ["TAVILY_API_KEY", "SEARCH_CACHE_TTL_SECONDS", "TAVILY_SEARCH_DEPTH"] as const;
+const SEARCH_ENV_KEYS = [
+  "TAVILY_API_KEY",
+  "SEARCH_CACHE_TTL_SECONDS",
+  "SEARCH_MAX_ATTEMPTS",
+  "TAVILY_SEARCH_DEPTH",
+] as const;
 
 describe.sequential("Tavily web search", () => {
   const originalEnv = new Map<string, string | undefined>();
@@ -37,6 +42,7 @@ describe.sequential("Tavily web search", () => {
 
   it("retries a transient Tavily failure and returns canonicalized results", async () => {
     process.env.TAVILY_API_KEY = "test-key";
+    process.env.SEARCH_MAX_ATTEMPTS = "2";
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response("busy", { status: 503 }))
       .mockResolvedValueOnce(Response.json({ results: [

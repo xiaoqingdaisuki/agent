@@ -6,9 +6,15 @@
  * DELETE /internal/v1/conversations/{id}/messages        — 清空消息
  */
 
-import { createMessageBatch, getMessagesByConversation, clearMessages } from "../repositories/message.js";
+import {
+  clearMessages,
+  createMessageBatch,
+  getMessagesByConversation,
+  getNextSequenceNumber,
+} from "../repositories/message.js";
 import { MessageBatchSchema } from "../schemas/memory-models.js";
 
+// 创建或注册 registerMessageRoutes 所需的数据
 export function registerMessageRoutes(app: any) {
   // 批量写入消息
   app.post("/internal/v1/conversations/:conversation_id/messages:batch", async (c: any) => {
@@ -16,15 +22,25 @@ export function registerMessageRoutes(app: any) {
     const body = await c.req.json();
     const parsed = MessageBatchSchema.parse(body);
 
-    const formatted = parsed.messages.map((msg, index) => ({
+    let nextSequence = await getNextSequenceNumber(c.env.DB, conversationId);
+    const explicitSequences = new Set(
+      parsed.messages
+        .map((message) => message.sequence_no)
+        .filter((sequence): sequence is number => sequence !== undefined),
+    );
+    const formatted = parsed.messages.map((msg) => {
+      while (explicitSequences.has(nextSequence)) nextSequence += 1;
+      const sequenceNumber = msg.sequence_no ?? nextSequence++;
+      return {
       id: msg.id || crypto.randomUUID(),
       conversation_id: conversationId,
       user_id: parsed.user_id,
-      sequence_no: msg.sequence_no ?? index,
+      sequence_no: sequenceNumber,
       role: msg.role || "user",
       content_json: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content || {}),
       created_at: msg.created_at || new Date().toISOString(),
-    }));
+      };
+    });
 
     await createMessageBatch(c.env.DB, formatted);
 

@@ -104,6 +104,7 @@ export class ProfileService {
   /**
    * 懒加载用户画像（不存在时创建）
    */
+  // 获取 getOrCreate 对应的数据
   static async getOrCreate(userId: string, name: string = ""): Promise<UserProfile> {
     const repos = getRepos();
     const data = await repos.profile.getOrCreate(userId, name);
@@ -113,6 +114,7 @@ export class ProfileService {
   /**
    * 根据用户 ID 获取已有画像，不存在时返回 undefined
    */
+  // 获取 get 对应的数据
   static async get(userId: string): Promise<UserProfile | undefined> {
     const repos = getRepos();
     const data = await repos.profile.get(userId);
@@ -122,9 +124,10 @@ export class ProfileService {
   /**
    * 更新用户画像，支持部分字段更新
    */
+  // 更新或保存 update 对应的数据
   static async update(
     userId: string,
-    name: string = "",
+    name?: string,
     preferences?: Record<string, unknown>,
   ): Promise<UserProfile | undefined> {
     const repos = getRepos();
@@ -139,6 +142,7 @@ export class MemoryService {
   /**
    * 存储一条新的用户记忆
    */
+  // 创建或注册 add 所需的数据
   static async add(
     userId: string,
     content: string,
@@ -162,18 +166,17 @@ export class MemoryService {
   /**
    * 获取用户的高优先级记忆列表，按重要性排序
    */
+  // 获取 getRelevant 对应的数据
   static async getRelevant(userId: string, maxItems: number = 10): Promise<Memory[]> {
     const repos = getRepos();
-    const result = await repos.memory.search(userId, "", {
-      limit: maxItems,
-      minScore: 0,
-    });
-    return mapSearchResults(result.items, userId).slice(0, maxItems);
+    const items = await repos.memory.list(userId, { limit: maxItems });
+    return items.map(mapMemory).slice(0, maxItems);
   }
 
   /**
    * 按类别获取用户记忆
    */
+  // 获取 getByCategory 对应的数据
   static async getByCategory(userId: string, category: string): Promise<Memory[]> {
     const repos = getRepos();
     const items = await repos.memory.list(userId, { category, limit: 50 });
@@ -183,6 +186,7 @@ export class MemoryService {
   /**
    * 删除指定记忆，返回是否删除成功
    */
+  // 删除或清理 delete 对应的数据
   static async delete(userId: string, memoryId: string): Promise<boolean> {
     const repos = getRepos();
     return repos.memory.delete(userId, memoryId);
@@ -191,6 +195,7 @@ export class MemoryService {
   /**
    * 获取用户的所有记忆列表
    */
+  // 获取 listAll 对应的数据
   static async listAll(userId: string): Promise<Memory[]> {
     const repos = getRepos();
     const items = await repos.memory.list(userId, { limit: 50 });
@@ -200,6 +205,7 @@ export class MemoryService {
   /**
    * 将记忆组装成 prompt 片段，注入 System Prompt
    */
+  // 创建或注册 buildMemoryContext 所需的数据
   static async buildMemoryContext(userId: string): Promise<string> {
     const memories = await this.getRelevant(userId, 10);
     if (memories.length === 0) return "";
@@ -215,6 +221,7 @@ export class MemoryService {
   /**
    * 从对话中提取值得记忆的事实（正则 + LLM 双层提取）
    */
+  // 执行 extractMemoriesFromConversation 对应的业务逻辑
   static async extractMemoriesFromConversation(
     userId: string,
     question: string,
@@ -249,6 +256,7 @@ export class MemoryService {
   /**
    * 正则规则提取 — 匹配明显的偏好/个人信息句式
    */
+  // 执行 extractWithRegex 对应的业务逻辑
   private static _extractWithRegex(userId: string, question: string): Memory[] {
     const newMemories: Memory[] = [];
     const q = question.toLowerCase();
@@ -300,6 +308,7 @@ export class MemoryService {
    * 通过 LLM 分析用户问题，提取值得长期记忆的事实。
    * 只提取有明确长期价值的信息（偏好、个人信息、决定），不提取临时性内容。
    */
+  // 执行 extractWithLLM 对应的业务逻辑
   private static async _extractWithLLM(
     userId: string,
     question: string,
@@ -372,6 +381,7 @@ export class HistoryService {
   /**
    * 记录一条问答历史记录
    */
+  // 更新或保存 record 对应的数据
   static async record(
     userId: string,
     conversationId: string,
@@ -379,48 +389,107 @@ export class HistoryService {
     answer: string,
   ): Promise<Record<string, string>> {
     const repos = getRepos();
-    const memoryId = crypto.randomUUID();
-    const data = await repos.memory.save(
-      userId,
-      memoryId,
-      answer,
-      "fact",
-      3,
-      "conversation_extraction",
-      conversationId,
-    );
+    const existingConversation = await repos.conversation.get(conversationId);
+    if (!existingConversation) {
+      await repos.conversation.create(userId, "History", "chat", conversationId);
+    } else if (existingConversation.user_id !== userId) {
+      throw new Error("Conversation does not belong to the requested user");
+    }
+
+    const { messages } = await repos.message.getMessages(conversationId, 200, 0);
+    for (let index = messages.length - 1; index > 0; index--) {
+      const assistant = messages[index];
+      const user = messages[index - 1];
+      if (
+        assistant.role === "assistant" &&
+        user.role === "user" &&
+        user.content_json === question &&
+        assistant.content_json === answer
+      ) {
+        return {
+          id: assistant.id,
+          user_id: userId,
+          conversation_id: conversationId,
+          question,
+          answer,
+          timestamp: assistant.created_at,
+        };
+      }
+    }
+
+    const timestamp = new Date().toISOString();
+    const userMessageId = crypto.randomUUID();
+    const assistantMessageId = crypto.randomUUID();
+    await repos.message.createBatch(conversationId, userId, [
+      {
+        id: userMessageId,
+        conversation_id: conversationId,
+        user_id: userId,
+        sequence_no: messages.length,
+        role: "user",
+        content_json: question,
+        created_at: timestamp,
+      },
+      {
+        id: assistantMessageId,
+        conversation_id: conversationId,
+        user_id: userId,
+        sequence_no: messages.length + 1,
+        role: "assistant",
+        content_json: answer,
+        created_at: timestamp,
+      },
+    ]);
     return {
-      id: data.id,
+      id: assistantMessageId,
       user_id: userId,
       conversation_id: conversationId,
       question,
       answer,
-      timestamp: data.created_at,
+      timestamp,
     };
   }
 
   /**
    * 获取用户问答历史，支持按会话过滤
    */
+  // 获取 getHistory 对应的数据
   static async getHistory(
     userId: string,
     conversationId?: string,
     limit: number = 50,
   ): Promise<Record<string, string>[]> {
     const repos = getRepos();
-    // Cloudflare 模式：通过 search_memories 获取相关记忆
-    const result = await repos.memory.search(userId, "", {
-      category: undefined,
-      limit,
-      minScore: 0,
-    });
-    return result.items.map((item) => ({
-      id: item.id,
-      user_id: userId,
-      conversation_id: conversationId || "",
-      question: item.content.slice(0, 100),
-      answer: item.content,
-      timestamp: item.created_at,
-    }));
+    const conversations = conversationId
+      ? [await repos.conversation.get(conversationId)].filter(
+          (conversation): conversation is NonNullable<typeof conversation> =>
+            conversation !== null && conversation.user_id === userId,
+        )
+      : await repos.conversation.list(userId, Math.max(limit, 20), 0);
+    const records: Record<string, string>[] = [];
+
+    for (const conversation of conversations) {
+      const { messages } = await repos.message.getMessages(conversation.id, 200, 0);
+      let pendingQuestion: typeof messages[number] | undefined;
+      for (const message of messages) {
+        if (message.role === "user") {
+          pendingQuestion = message;
+        } else if (message.role === "assistant" && pendingQuestion) {
+          records.push({
+            id: message.id,
+            user_id: userId,
+            conversation_id: conversation.id,
+            question: pendingQuestion.content_json,
+            answer: message.content_json,
+            timestamp: message.created_at,
+          });
+          pendingQuestion = undefined;
+        }
+      }
+    }
+
+    return records
+      .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
+      .slice(0, limit);
   }
 }

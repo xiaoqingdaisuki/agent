@@ -28,6 +28,7 @@ export interface SearchResult {
 export class VectorStore {
   private client: CloudflareMemoryClient;
 
+  // 初始化当前对象
   constructor(config: CloudflareVectorStoreConfig) {
     this.client = new CloudflareMemoryClient({
       baseUrl: config.baseUrl,
@@ -38,6 +39,7 @@ export class VectorStore {
   /**
    * 确保 collection 存在（Cloudflare Vectorize 无需手动创建，此方法为空操作）
    */
+  // 执行 ensureCollection 对应的业务逻辑
   async ensureCollection(_dimensions: number): Promise<void> {
     // Vectorize index 在 cloudflare-service 部署时已创建，无需前端调用
     return;
@@ -46,6 +48,7 @@ export class VectorStore {
   /**
    * 上传文档（通过 Gateway）
    */
+  // 创建或注册 uploadDocument 所需的数据
   async uploadDocument(
     userId: string,
     filename: string,
@@ -59,6 +62,7 @@ export class VectorStore {
   /**
    * 搜索相似文档
    */
+  // 查询 search 对应的结果
   async search(
     userId: string,
     query: string,
@@ -75,6 +79,7 @@ export class VectorStore {
   /**
    * 删除文档
    */
+  // 删除或清理 deleteDocument 对应的数据
   async deleteDocument(documentId: string): Promise<void> {
     await this.client.deleteDocument(documentId);
   }
@@ -82,6 +87,7 @@ export class VectorStore {
   /**
    * 删除 collection（Cloudflare Vectorize 不支持前端删除，此方法为兼容接口）
    */
+  // 删除或清理 deleteCollection 对应的数据
   async deleteCollection(): Promise<void> {
     return;
   }
@@ -89,6 +95,7 @@ export class VectorStore {
   /**
    * 列出用户文档
    */
+  // 获取 listDocuments 对应的数据
   async listDocuments(userId: string, limit = 20, offset = 0): Promise<any> {
     return this.client.listDocuments(userId, { limit, offset });
   }
@@ -96,6 +103,7 @@ export class VectorStore {
   /**
    * 获取文档详情
    */
+  // 获取 getDocument 对应的数据
   async getDocument(documentId: string): Promise<any> {
     return this.client.getDocument(documentId);
   }

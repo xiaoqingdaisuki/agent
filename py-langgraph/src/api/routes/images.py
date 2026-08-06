@@ -54,6 +54,7 @@ async def _request_with_retry(url: str, api_key: str, prompt: str) -> httpx.Resp
 
 # 生成图片并返回 base64 编码的 data URL
 @router.post("/generations", response_model=ImageGenerationResponse)
+# 执行 generate image 对应的业务逻辑
 async def generate_image(request: ImageGenerationRequest):
     if not settings.openai_api_key or not settings.openai_base_url:
         raise HTTPException(status_code=503, detail="Image model is not configured")

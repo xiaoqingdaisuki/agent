@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createToolAgent } from "../../agents/tool-agent.js";
-import { getHistory, appendMessage } from "../../memory/conversation.js";
+import { appendMessage, getHistoryBeforeInput } from "../../memory/conversation.js";
 import { MemoryService, ProfileService } from "../../profile/service.js";
 import {
   HumanMessage,
@@ -21,7 +21,9 @@ import {
   isLikelyTruncated,
   maybeAppendContinuationHint,
 } from "../../agents/response-handler.js";
+import { ConversationService } from "../../services/index.js";
 
+// 创建或注册 registerChatRoutes 所需的数据
 export async function registerChatRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
     "/chat",
@@ -33,9 +35,17 @@ export async function registerChatRoutes(app: FastifyInstance) {
         }
 
         const threadId = thread_id || crypto.randomUUID();
+        await ConversationService.ensure(threadId, user_id);
+        await ConversationService.appendUserMessage(threadId, message);
 
         const command = executeAgentCommand(message, threadId);
         if (command) {
+          await ConversationService.appendAssistantMessage(threadId, {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: command.reply,
+            createdAt: new Date().toISOString(),
+          });
           return { reply: command.reply, thread_id: threadId };
         }
 
@@ -56,7 +66,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
         const agent = await createToolAgent(
           getAgentPromptOverride(threadId, message),
         );
-        const history = await getHistory(threadId);
+        const history = await getHistoryBeforeInput(threadId, message);
 
         // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
         const toolContext = {
@@ -99,8 +109,14 @@ export async function registerChatRoutes(app: FastifyInstance) {
           replyText = maybeAppendContinuationHint(replyText, finishReason);
         }
 
-        appendMessage(threadId, new HumanMessage(message));
-        appendMessage(threadId, new AIMessage(replyText));
+        await appendMessage(threadId, new HumanMessage(message));
+        await appendMessage(threadId, new AIMessage(replyText));
+        await ConversationService.appendAssistantMessage(threadId, {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: replyText,
+          createdAt: new Date().toISOString(),
+        });
 
         return { reply: replyText, thread_id: threadId };
       } catch (error: any) {

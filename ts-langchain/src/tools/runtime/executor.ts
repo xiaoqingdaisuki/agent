@@ -43,6 +43,7 @@ interface AuditEntry {
 const auditLog: AuditEntry[] = [];
 let gatewayClient: any = null;
 
+// 获取 getGatewayClient 对应的数据
 function getGatewayClient() {
   if (!gatewayClient) {
     const { CloudflareMemoryClient } = require("../../clients/memory_gateway.js");
@@ -80,10 +81,12 @@ async function flushAuditLogs(): Promise<void> {
   }
 }
 
+// 获取 getAuditLog 对应的数据
 export function getAuditLog(): ReadonlyArray<AuditEntry> {
   return auditLog;
 }
 
+// 删除或清理 clearAuditLog 对应的数据
 export function clearAuditLog(): void {
   auditLog.length = 0;
 }
@@ -104,6 +107,7 @@ const PERMISSION_CACHE_TTL_MS = 5_000;
  *
  * TODO: Phase 0.4 替换为真正的 RBAC 引擎
  */
+// 执行 permissionCheck 对应的业务逻辑
 export function permissionCheck(
   context: ToolCallContext,
   descriptor: ToolDescriptor,
@@ -146,6 +150,7 @@ export function permissionCheck(
  *
  * 严格模式：拒绝额外字段。
  */
+// 校验并判断 validateInput 对应的状态
 export function validateInput<T>(
   schema: { parse: (input: unknown) => T },
   rawInput: unknown,
@@ -184,6 +189,7 @@ const SENSITIVE_KEYS = new Set([
   "credentials",
 ]);
 
+// 执行 sanitizeResult 对应的业务逻辑
 export function sanitizeResult<T>(data: T): T {
   if (data === null || data === undefined) return data;
 
@@ -230,10 +236,12 @@ interface ToolRuntimeContext {
 
 const runtimeStorage = new AsyncLocalStorage<ToolRuntimeContext>();
 
+// 执行 reportToolProgress 对应的业务逻辑
 function reportToolProgress(event: ToolProgressEvent): void {
   runtimeStorage.getStore()?.onToolProgress?.(event);
 }
 
+// 创建或注册 createBudgetState 所需的数据
 function createBudgetState(): BudgetState {
   return {
     toolCallsThisRound: 0,
@@ -246,14 +254,17 @@ function createBudgetState(): BudgetState {
 // 仅供没有请求上下文的直接调用使用；Agent 请求使用 AsyncLocalStorage 隔离预算。
 const fallbackBudgetState = createBudgetState();
 
+// 获取 getBudgetState 对应的数据
 function getBudgetState(): BudgetState {
   return runtimeStorage.getStore()?.budget ?? fallbackBudgetState;
 }
 
+// 执行 resetRoundBudget 对应的业务逻辑
 export function resetRoundBudget(): void {
   getBudgetState().toolCallsThisRound = 0;
 }
 
+// 执行 budgetGuard 对应的业务逻辑
 export function budgetGuard(): ToolRuntimeResult<null> | null {
   const budgetState = getBudgetState();
   if (budgetState.toolCallsThisRound >= budgetState.maxPerRound) {
@@ -339,6 +350,7 @@ export interface ToolExecutor<TInput, TOutput> {
  * 统一执行管线：
  *   validate → permission_check → budget_guard → execute → sanitize → audit
  */
+// 执行 invokeTool 对应的业务逻辑
 export async function invokeTool<TInput, TOutput>(
   executor: ToolExecutor<TInput, TOutput>,
   rawInput: unknown,
@@ -570,6 +582,7 @@ export function createToolCallScope(
     seenMemorySaves: new Set<string>(),
   };
   return {
+    // 执行 run 对应的业务逻辑
     run<T>(callback: () => T): T {
       return runtimeStorage.run(store, callback);
     },
@@ -592,11 +605,13 @@ import { redactTextContent, redactStructuredData } from "./data-redaction.js";
  * @param schema Zod schema（用于参数校验，可选）
  * @returns 新的 DynamicStructuredTool，func 已包装
  */
+// 执行 wrapToolWithRuntime 对应的业务逻辑
 export function wrapToolWithRuntime(
   tool: DynamicStructuredTool,
   descriptor: ToolDescriptor,
   schema?: { parse: (input: unknown) => unknown },
 ): DynamicStructuredTool {
+  // 执行 wrappedFunc 对应的业务逻辑
   const wrappedFunc = async (rawInput: unknown): Promise<string> => {
     const context = getToolCallContext();
     if (!context) {

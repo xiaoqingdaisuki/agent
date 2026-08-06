@@ -13,6 +13,7 @@
  * Gateway 请求失败异常
  */
 export class MemoryGatewayError extends Error {
+  // 初始化当前对象
   constructor(
     public code: string,
     message: string,
@@ -50,6 +51,7 @@ import {
 /**
  * 校验 Gateway 统一响应信封
  */
+// 校验并判断 validateGatewayResponse 对应的状态
 function validateGatewayResponse(raw: unknown) {
   return GatewayResponseSchema.parse(raw);
 }
@@ -57,6 +59,7 @@ function validateGatewayResponse(raw: unknown) {
 /**
  * 校验用户画像数据
  */
+// 校验并判断 validateProfile 对应的状态
 function validateProfile(data: unknown) {
   return UserProfileSchema.parse(data);
 }
@@ -64,6 +67,7 @@ function validateProfile(data: unknown) {
 /**
  * 校验会话数据
  */
+// 校验并判断 validateConversation 对应的状态
 function validateConversation(data: unknown) {
   return ConversationSchema.parse(data);
 }
@@ -71,6 +75,7 @@ function validateConversation(data: unknown) {
 /**
  * 校验会话数组
  */
+// 校验并判断 validateConversationList 对应的状态
 function validateConversationList(data: unknown) {
   return z.array(ConversationSchema).parse(data);
 }
@@ -78,6 +83,7 @@ function validateConversationList(data: unknown) {
 /**
  * 校验消息分页数据
  */
+// 校验并判断 validateMessagesPage 对应的状态
 function validateMessagesPage(data: unknown) {
   return MessagesPageSchema.parse(data);
 }
@@ -85,6 +91,7 @@ function validateMessagesPage(data: unknown) {
 /**
  * 校验记忆数据
  */
+// 校验并判断 validateMemory 对应的状态
 function validateMemory(data: unknown) {
   return MemorySchema.parse(data);
 }
@@ -92,6 +99,7 @@ function validateMemory(data: unknown) {
 /**
  * 校验记忆数组
  */
+// 校验并判断 validateMemoryList 对应的状态
 function validateMemoryList(data: unknown) {
   return z.array(MemorySchema).parse(data);
 }
@@ -99,6 +107,7 @@ function validateMemoryList(data: unknown) {
 /**
  * 校验搜索结果
  */
+// 校验并判断 validateSearchResponse 对应的状态
 function validateSearchResponse(data: unknown) {
   return SearchResponseSchema.parse(data);
 }
@@ -125,6 +134,7 @@ export class CloudflareMemoryClient {
   private readonly secret: string;
   private readonly timeoutMs: number;
 
+  // 初始化当前对象
   constructor(options: MemoryGatewayClientOptions = {}) {
     this.baseUrl = (options.baseUrl || "").replace(/\/$/, "");
     this.secret = options.secret || "";
@@ -140,6 +150,7 @@ export class CloudflareMemoryClient {
    * @param body 请求体（可选）
    * @param idempotencyKey 幂等性键（可选）
    */
+  // 执行 request 对应的业务逻辑
   private async request(
     method: string,
     path: string,
@@ -243,6 +254,7 @@ export class CloudflareMemoryClient {
    * 获取用户画像
    * @returns 画像数据，不存在时返回 null
    */
+  // 获取 getProfile 对应的数据
   async getProfile(userId: string): Promise<UserProfileData | null> {
     try {
       const result = validateGatewayResponse(await this.request(
@@ -261,12 +273,16 @@ export class CloudflareMemoryClient {
   /**
    * 创建或更新用户画像
    */
+  // 更新或保存 putProfile 对应的数据
   async putProfile(
     userId: string,
-    name: string = "",
+    name?: string,
     preferences?: Record<string, unknown>,
   ): Promise<UserProfileData> {
-    const body: Record<string, unknown> = { name };
+    const body: Record<string, unknown> = {};
+    if (name !== undefined) {
+      body.name = name;
+    }
     if (preferences !== undefined) {
       body.preferences = preferences;
     }
@@ -283,15 +299,19 @@ export class CloudflareMemoryClient {
   /**
    * 创建会话
    */
+  // 创建或注册 createConversation 所需的数据
   async createConversation(
     userId: string,
     title: string,
     mode: string = "chat",
+    conversationId?: string,
   ): Promise<ConversationData> {
+    const body: Record<string, string> = { user_id: userId, title, mode };
+    if (conversationId) body.id = conversationId;
     const result = validateGatewayResponse(await this.request(
       "POST",
       "/internal/v1/conversations",
-      { user_id: userId, title, mode },
+      body,
     )) as { data: unknown };
     return validateConversation(result.data);
   }
@@ -299,6 +319,7 @@ export class CloudflareMemoryClient {
   /**
    * 列出用户的会话（分页）
    */
+  // 获取 listConversations 对应的数据
   async listConversations(
     userId: string,
     limit: number = 20,
@@ -314,6 +335,7 @@ export class CloudflareMemoryClient {
   /**
    * 获取会话详情
    */
+  // 获取 getConversation 对应的数据
   async getConversation(
     conversationId: string,
   ): Promise<ConversationData | null> {
@@ -334,6 +356,7 @@ export class CloudflareMemoryClient {
   /**
    * 删除会话（软删除）
    */
+  // 删除或清理 deleteConversation 对应的数据
   async deleteConversation(conversationId: string): Promise<boolean> {
     try {
       await this.request(
@@ -354,6 +377,7 @@ export class CloudflareMemoryClient {
   /**
    * 批量写入消息
    */
+  // 创建或注册 createMessagesBatch 所需的数据
   async createMessagesBatch(
     conversationId: string,
     userId: string,
@@ -369,6 +393,7 @@ export class CloudflareMemoryClient {
   /**
    * 获取会话消息列表
    */
+  // 获取 getMessages 对应的数据
   async getMessages(
     conversationId: string,
     limit: number = 50,
@@ -384,6 +409,7 @@ export class CloudflareMemoryClient {
   /**
    * 清空会话消息
    */
+  // 删除或清理 clearMessages 对应的数据
   async clearMessages(conversationId: string): Promise<void> {
     await this.request(
       "DELETE",
@@ -398,6 +424,7 @@ export class CloudflareMemoryClient {
    * @param memoryId 记忆 ID（建议 UUID/ULID）
    * @param idempotencyKey 幂等性键，相同键+相同内容幂等返回
    */
+  // 更新或保存 saveMemory 对应的数据
   async saveMemory(
     userId: string,
     memoryId: string,
@@ -426,6 +453,7 @@ export class CloudflareMemoryClient {
   /**
    * 列出用户的长期记忆
    */
+  // 获取 listMemories 对应的数据
   async listMemories(
     userId: string,
     options: { category?: string; limit?: number } = {},
@@ -443,6 +471,7 @@ export class CloudflareMemoryClient {
   /**
    * 更新记忆
    */
+  // 更新或保存 updateMemory 对应的数据
   async updateMemory(
     userId: string,
     memoryId: string,
@@ -466,6 +495,7 @@ export class CloudflareMemoryClient {
   /**
    * 删除记忆（软删除）
    */
+  // 删除或清理 deleteMemory 对应的数据
   async deleteMemory(userId: string, memoryId: string): Promise<boolean> {
     try {
       await this.request(
@@ -485,6 +515,7 @@ export class CloudflareMemoryClient {
    * 语义搜索记忆
    * @returns 搜索结果对象 { items, degraded }
    */
+  // 查询 searchMemories 对应的结果
   async searchMemories(
     userId: string,
     query: string,
@@ -511,6 +542,7 @@ export class CloudflareMemoryClient {
   /**
    * 上传文档
    */
+  // 创建或注册 uploadDocument 所需的数据
   async uploadDocument(
     userId: string,
     filename: string,
@@ -537,6 +569,7 @@ export class CloudflareMemoryClient {
   /**
    * 列出用户文档
    */
+  // 获取 listDocuments 对应的数据
   async listDocuments(
     userId: string,
     options: { limit?: number; offset?: number; category?: string } = {},
@@ -557,6 +590,7 @@ export class CloudflareMemoryClient {
   /**
    * 获取文档详情
    */
+  // 获取 getDocument 对应的数据
   async getDocument(documentId: string): Promise<{ document: DocumentData; chunks: ChunkData[] } | null> {
     try {
       const result = validateGatewayResponse(await this.request(
@@ -575,6 +609,7 @@ export class CloudflareMemoryClient {
   /**
    * 删除文档
    */
+  // 删除或清理 deleteDocument 对应的数据
   async deleteDocument(documentId: string): Promise<boolean> {
     try {
       await this.request(
@@ -590,9 +625,19 @@ export class CloudflareMemoryClient {
     }
   }
 
+  // 请求 Gateway 原地重建文档索引并保留文档 ID
+  async reindexDocument(documentId: string): Promise<{ chunk_count: number; degraded: boolean }> {
+    const result = validateGatewayResponse(await this.request(
+      "POST",
+      `/internal/v1/documents/${encodeURIComponent(documentId)}/reindex`,
+    )) as { data: { chunk_count: number; degraded: boolean } };
+    return result.data;
+  }
+
   /**
    * 语义搜索文档
    */
+  // 查询 searchDocuments 对应的结果
   async searchDocuments(
     userId: string,
     query: string,
@@ -620,6 +665,7 @@ export class CloudflareMemoryClient {
   /**
    * 批量写入审计日志（异步，不阻塞工具执行）
    */
+  // 更新或保存 writeAuditLogs 对应的数据
   async writeAuditLogs(
     entries: Array<{
       user_id: string;
@@ -651,6 +697,7 @@ export class CloudflareMemoryClient {
   /**
    * 批量写入工具指标（异步，不阻塞工具执行）
    */
+  // 更新或保存 writeToolMetrics 对应的数据
   async writeToolMetrics(
     entries: Array<{
       tool_name: string;

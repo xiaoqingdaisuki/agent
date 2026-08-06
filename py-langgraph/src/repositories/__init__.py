@@ -17,6 +17,7 @@ from src.config.settings import settings
 _repositories = None
 
 
+# 执行 get or create event loop 对应的业务逻辑
 def _get_or_create_event_loop() -> asyncio.AbstractEventLoop:
     """获取或创建事件循环（线程安全）"""
     try:
@@ -40,27 +41,38 @@ def _get_or_create_event_loop() -> asyncio.AbstractEventLoop:
     return loop
 
 
+# 执行 run sync 对应的业务逻辑
 def _run_sync(coro) -> Any:
     """在同步上下文中运行异步协程"""
     loop = _get_or_create_event_loop()
     if loop is None:
         # 在 pytest-asyncio 等框架中，需要在新的线程中运行
         # 使用 nest_asyncio 的思路：如果 loop 正在运行，创建一个线程
-        result = {}
+        result: dict[str, Any] = {}
+        failure: dict[str, BaseException] = {}
+
+        # 在独立线程事件循环中执行协程并保留异常
         def run_in_new_loop():
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
-            result["value"] = new_loop.run_until_complete(coro)
-            new_loop.close()
+            try:
+                result["value"] = new_loop.run_until_complete(coro)
+            except BaseException as exc:
+                failure["error"] = exc
+            finally:
+                new_loop.close()
 
         thread = threading.Thread(target=run_in_new_loop)
         thread.start()
         thread.join()
+        if "error" in failure:
+            raise failure["error"]
         return result["value"]
 
     return loop.run_until_complete(coro)
 
 
+# 获取 get repositories 对应的数据
 def get_repositories():
     """创建 Cloudflare 仓储实例（带模块级缓存）"""
     global _repositories
@@ -77,61 +89,86 @@ def get_repositories():
 class Repositories:
     """Cloudflare Service 仓储实现"""
 
+    # 初始化当前对象
     def __init__(self, client):
         self._client = client
 
     # Profile
+    # 获取 get or create profile 对应的数据
     def get_or_create_profile(self, user_id: str, name: str = "") -> dict:
         return _run_sync(self._client.put_profile(user_id, name))
 
+    # 获取 get profile 对应的数据
     def get_profile(self, user_id: str) -> dict | None:
         return _run_sync(self._client.get_profile(user_id))
 
-    def update_profile(self, user_id: str, name: str = "", preferences: dict | None = None) -> dict | None:
+    # 更新或保存 update profile 对应的数据
+    def update_profile(self, user_id: str, name: str | None = None, preferences: dict | None = None) -> dict | None:
         return _run_sync(self._client.put_profile(user_id, name, preferences))
 
     # Conversation
-    def create_conversation(self, user_id: str, title: str, mode: str = "chat") -> dict:
-        return _run_sync(self._client.create_conversation(user_id, title, mode))
+    # 创建或注册 create conversation 所需的数据
+    def create_conversation(
+        self,
+        user_id: str,
+        title: str,
+        mode: str = "chat",
+        conversation_id: str | None = None,
+    ) -> dict:
+        return _run_sync(
+            self._client.create_conversation(user_id, title, mode, conversation_id)
+        )
 
+    # 获取 get conversation 对应的数据
     def get_conversation(self, conversation_id: str) -> dict | None:
         return _run_sync(self._client.get_conversation(conversation_id))
 
+    # 获取 list conversations 对应的数据
     def list_conversations(self, user_id: str, limit: int = 20, offset: int = 0) -> list[dict]:
         return _run_sync(self._client.list_conversations(user_id, limit, offset))
 
+    # 删除或清理 delete conversation 对应的数据
     def delete_conversation(self, conversation_id: str) -> bool:
         return _run_sync(self._client.delete_conversation(conversation_id))
 
     # Message
+    # 创建或注册 create message batch 所需的数据
     def create_message_batch(self, conversation_id: str, user_id: str, messages: list[dict]) -> None:
         return _run_sync(self._client.create_messages_batch(conversation_id, user_id, messages))
 
+    # 获取 get messages 对应的数据
     def get_messages(self, conversation_id: str, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
         return _run_sync(self._client.get_messages(conversation_id, limit, offset))
 
+    # 删除或清理 clear messages 对应的数据
     def clear_messages(self, conversation_id: str) -> None:
         return _run_sync(self._client.clear_messages(conversation_id))
 
     # Memory
+    # 更新或保存 save memory 对应的数据
     def save_memory(self, user_id: str, content: str, category: str = "fact", importance: int = 3, source: str = "user_explicit", source_conversation_id: str | None = None) -> dict:
         import uuid
         return _run_sync(self._client.save_memory(user_id, str(uuid.uuid4()), content, category, importance, source, source_conversation_id))
 
+    # 查询 search memories 对应的结果
     def search_memories(self, user_id: str, query: str, category: str | None = None, limit: int = 10, min_score: float = 0.65) -> dict:
         return _run_sync(self._client.search_memories(user_id, query, category, limit, min_score))
 
+    # 获取 list memories 对应的数据
     def list_memories(self, user_id: str, category: str | None = None, limit: int = 50) -> list[dict]:
         return _run_sync(self._client.list_memories(user_id, category, limit))
 
+    # 更新或保存 update memory 对应的数据
     def update_memory(self, user_id: str, memory_id: str, **changes) -> dict | None:
         return _run_sync(self._client.update_memory(user_id, memory_id, **changes))
 
+    # 删除或清理 delete memory 对应的数据
     def delete_memory(self, user_id: str, memory_id: str) -> bool:
         return _run_sync(self._client.delete_memory(user_id, memory_id))
 
+    # 删除或清理 clear user memories 对应的数据
     def clear_user_memories(self, user_id: str) -> int:
-        memories = _run_sync(self._client.list_user_memories(user_id, limit=100))
+        memories = _run_sync(self._client.list_memories(user_id, limit=100))
         count = 0
         for m in memories:
             if _run_sync(self._client.delete_memory(user_id, m["id"])):

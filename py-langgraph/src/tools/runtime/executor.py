@@ -231,6 +231,7 @@ def _flush_audit_logs() -> None:
 
         client = CloudflareMemoryClient()
 
+        # 执行 do flush 对应的业务逻辑
         async def _do_flush():
             await client.write_audit_logs(entries)
 
@@ -245,6 +246,7 @@ def _flush_audit_logs() -> None:
             # 无事件循环，创建新线程运行
             import threading
 
+            # 执行 run 对应的业务逻辑
             def _run():
                 asyncio.run(_do_flush())
 

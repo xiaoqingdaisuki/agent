@@ -36,10 +36,12 @@ interface ToolEntry {
 class ToolRegistry {
   private tools = new Map<string, ToolEntry>();
 
+  // 初始化当前对象
   constructor() {
     this.registerDefaults();
   }
 
+  // 创建或注册 registerDefaults 所需的数据
   private registerDefaults(): void {
     this.register(weatherTool, weatherDescriptor);
     this.register(webSearchTool, webSearchDescriptor);
@@ -52,26 +54,32 @@ class ToolRegistry {
     this.register(memoryUserSaveTool, userMemorySaveDescriptor);
   }
 
+  // 创建或注册 register 所需的数据
   register(tool: DynamicStructuredTool, descriptor: ToolDescriptor): void {
     this.tools.set(descriptor.name, { tool, descriptor });
   }
 
+  // 获取 getDescriptor 对应的数据
   getDescriptor(name: string): ToolDescriptor | undefined {
     return this.tools.get(name)?.descriptor;
   }
 
+  // 获取 getDescriptors 对应的数据
   getDescriptors(): ToolDescriptor[] {
     return Array.from(this.tools.values()).map((e) => e.descriptor);
   }
 
+  // 获取 getTool 对应的数据
   getTool(name: string): DynamicStructuredTool | undefined {
     return this.tools.get(name)?.tool;
   }
 
+  // 获取 getAllTools 对应的数据
   getAllTools(): DynamicStructuredTool[] {
     return Array.from(this.tools.values()).map((e) => e.tool);
   }
 
+  // 获取 getVisibleTools 对应的数据
   getVisibleTools(userPermissions: string[]): DynamicStructuredTool[] {
     const visible: DynamicStructuredTool[] = [];
 
@@ -98,6 +106,7 @@ class ToolRegistry {
     return visible;
   }
 
+  // 获取 getVisibleDescriptors 对应的数据
   getVisibleDescriptors(
     userPermissions: string[],
   ): Array<Record<string, unknown>> {
@@ -124,6 +133,7 @@ class ToolRegistry {
     return result;
   }
 
+  // 获取 getCategories 对应的数据
   getCategories(): Record<
     string,
     Array<{ name: string; title: string; risk_level: string }>
@@ -152,6 +162,7 @@ class ToolRegistry {
 
 export const registry = new ToolRegistry();
 
+// 获取 getToolsForUser 对应的数据
 export function getToolsForUser(
   userPermissions: string[] = ["*"],
 ): DynamicStructuredTool[] {
@@ -162,6 +173,7 @@ export function getToolsForUser(
   return registry.getVisibleTools(userPermissions);
 }
 
+// 获取 getToolMetadata 对应的数据
 export function getToolMetadata(
   userPermissions: string[] = ["*"],
 ): Array<Record<string, unknown>> {

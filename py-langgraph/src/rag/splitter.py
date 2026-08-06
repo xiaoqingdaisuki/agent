@@ -25,6 +25,7 @@ class TextSplitter:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
+    # 执行 split 对应的业务逻辑
     def split(self, content: str, filename: str, source: str) -> list[TextChunk]:
         """切分文档内容"""
         chunks = self._recursive_split(content)
@@ -43,6 +44,7 @@ class TextSplitter:
             for i, chunk in enumerate(chunks)
         ]
 
+    # 执行 recursive split 对应的业务逻辑
     def _recursive_split(self, text: str) -> list[str]:
         """递归切分"""
         if len(text) <= self.chunk_size:

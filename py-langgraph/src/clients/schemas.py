@@ -115,6 +115,7 @@ class MemorySearchResultData(BaseModel):
     final_score: float
     created_at: str
     updated_at: str
+    source_conversation_id: str | None = None
 
     model_config = {"from_attributes": True}
 

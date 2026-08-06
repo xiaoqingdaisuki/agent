@@ -14,6 +14,7 @@ from src.memory.d1_checkpointer import D1Checkpointer
 _checkpointer: D1Checkpointer | None = None
 
 
+# 获取 get default checkpointer 对应的数据
 def get_default_checkpointer() -> D1Checkpointer:
     """获取默认 checkpointer（单例）"""
     global _checkpointer
@@ -27,6 +28,7 @@ def get_default_checkpointer() -> D1Checkpointer:
     return _checkpointer
 
 
+# 获取 get memory saver 对应的数据
 def get_memory_saver():
     """获取纯内存 checkpointer（用于不需要持久化的场景）"""
     from langgraph.checkpoint.memory import MemorySaver

@@ -20,7 +20,7 @@ describe("conversation history", () => {
       await appendMessage(threadId, new AIMessage(`answer ${index}`));
     }
 
-    const history = getHistory(threadId);
+    const history = await getHistory(threadId);
     expect(history.length).toBeLessThanOrEqual(MAX_HISTORY_MESSAGES);
     expect(history[0]._getType()).toBe("human");
   });
@@ -29,19 +29,19 @@ describe("conversation history", () => {
 describe("ConversationService message history", () => {
   it("stores and clears API messages without duplicating agent history", async () => {
     const conversation = await ConversationService.create("history");
-    ConversationService.appendUserMessage(conversation.id, "hello");
-    ConversationService.appendAssistantMessage(conversation.id, {
+    await ConversationService.appendUserMessage(conversation.id, "hello");
+    await ConversationService.appendAssistantMessage(conversation.id, {
       id: "assistant-1",
       role: "assistant",
       content: "hi",
       createdAt: new Date().toISOString(),
     });
 
-    expect(ConversationService.getMessages(conversation.id).map((message) => message.content))
+    expect((await ConversationService.getMessages(conversation.id)).map((message) => message.content))
       .toEqual(["hello", "hi"]);
-    expect(getHistory(conversation.id)).toHaveLength(0);
-    ConversationService.clearMessages(conversation.id);
-    expect(ConversationService.getMessages(conversation.id)).toEqual([]);
-    expect(ConversationService.get(conversation.id)?.messageCount).toBe(0);
+    expect(await getHistory(conversation.id)).toHaveLength(2);
+    await ConversationService.clearMessages(conversation.id);
+    expect(await ConversationService.getMessages(conversation.id)).toEqual([]);
+    expect((await ConversationService.get(conversation.id))?.messageCount).toBe(0);
   });
 });

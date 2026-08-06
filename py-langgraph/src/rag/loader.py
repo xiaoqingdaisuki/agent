@@ -14,6 +14,7 @@ class Document:
 
     # 从文件加载文档
     @classmethod
+    # 执行 from file 对应的业务逻辑
     def from_file(cls, file_path: str) -> "Document":
         """从文件加载文档"""
         filename = os.path.basename(file_path)
@@ -37,6 +38,7 @@ class Document:
 
     # 从字节流加载文档（用于上传场景）
     @classmethod
+    # 执行 from bytes 对应的业务逻辑
     def from_bytes(cls, content: bytes, filename: str) -> "Document":
         """从字节流加载（用于上传场景）"""
         ext = os.path.splitext(filename)[1].lower()

@@ -37,6 +37,7 @@ from src.tools.memory_user import (
 class ToolRegistry:
     """工具注册表 — 管理所有工具及其元数据"""
 
+    # 初始化当前对象
     def __init__(self):
         self._tools: dict[str, Any] = {}
         self._descriptors: dict[str, ToolDescriptor] = {}

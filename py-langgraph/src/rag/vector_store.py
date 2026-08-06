@@ -11,6 +11,7 @@ from src.config.settings import settings
 class VectorStore:
     """通过 Cloudflare Service Gateway 操作文档向量"""
 
+    # 初始化当前对象
     def __init__(
         self,
         url: str = "",
@@ -24,10 +25,12 @@ class VectorStore:
         )
         self._collection_name = collection_name
 
+    # 执行 ensure collection 对应的业务逻辑
     async def ensure_collection(self, dimensions: int = 1536) -> None:
         """确保 collection 存在（Cloudflare Vectorize 无需手动创建）"""
         return
 
+    # 创建或注册 add documents 所需的数据
     async def add_documents(self, chunks: list[dict], content_field: str = "content") -> None:
         """上传文档到 Cloudflare Service"""
         import base64
@@ -48,6 +51,7 @@ class VectorStore:
             category="general",
         )
 
+    # 查询 search 对应的结果
     async def search(
         self,
         query: str,
@@ -68,9 +72,11 @@ class VectorStore:
             for r in result.get("results", [])
         ]
 
+    # 删除或清理 delete document 对应的数据
     async def delete_document(self, document_id: str) -> None:
         """删除一份文档的全部向量"""
         await self._client.delete_document(document_id)
 
+    # 删除或清理 delete collection 对应的数据
     def delete_collection(self) -> None:
         """删除 collection（Cloudflare Vectorize 不支持前端删除）"""

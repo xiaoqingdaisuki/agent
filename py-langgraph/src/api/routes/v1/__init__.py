@@ -71,6 +71,7 @@ class SearchRequest(BaseModel):
 
 
 @router.get("/health")
+# 执行 health 对应的业务逻辑
 async def health():
     return {
         "status": "ok",
@@ -86,7 +87,7 @@ async def health():
 # 创建新会话
 async def create_conversation(req: CreateConversationRequest):
     try:
-        conv = ConversationService.create(req.title, req.mode, req.user_id or "")
+        conv = ConversationService.create(req.title, req.mode, req.user_id)
         return conv.to_dict()
     except Exception:
         raise HTTPException(
@@ -97,8 +98,8 @@ async def create_conversation(req: CreateConversationRequest):
 
 @router.get("/conversations")
 # 列出所有会话
-async def list_conversations():
-    return ConversationService.list()
+async def list_conversations(user_id: str = None):
+    return ConversationService.list(user_id)
 
 
 @router.get("/conversations/{conv_id}")
@@ -145,10 +146,7 @@ async def get_messages(conv_id: str):
 async def send_message(conv_id: str, req: SendMessageRequest):
     try:
         # 确保会话存在于 D1
-        try:
-            ConversationService.ensure(conv_id, req.user_id or "")
-        except Exception:
-            pass
+        ConversationService.ensure(conv_id, req.user_id)
 
         conv = ConversationService.get(conv_id)
         if not conv:
@@ -183,10 +181,7 @@ async def send_message(conv_id: str, req: SendMessageRequest):
 # 向会话发送消息并流式返回 AI 回复
 async def stream_message(conv_id: str, req: SendMessageRequest):
     # 确保会话记录存在于 D1（前端可能直接请求已有的 thread_id）
-    try:
-        ConversationService.ensure(conv_id, req.user_id or "")
-    except Exception:
-        pass
+    ConversationService.ensure(conv_id, req.user_id)
 
     conversation = ConversationService.get(conv_id)
     if not conversation:
@@ -204,6 +199,7 @@ async def stream_message(conv_id: str, req: SendMessageRequest):
 
     ConversationService.append_user_message(conv_id, req.content, req.user_id or "")
 
+    # 执行 event generator 对应的业务逻辑
     async def event_generator():
         metadata = json.dumps({"conversation_id": conv_id}, ensure_ascii=False)
         yield f"data: {metadata}\n\n"
@@ -302,13 +298,13 @@ async def upload_document(request: Request):
 @router.get("/knowledge/documents")
 # 列出所有已索引文档
 async def list_documents():
-    return KnowledgeService.list_documents()
+    return await KnowledgeService.list_documents()
 
 
 @router.get("/knowledge/documents/{doc_id}")
 # 获取指定文档详情
 async def get_document(doc_id: str):
-    doc = KnowledgeService.get_document(doc_id)
+    doc = await KnowledgeService.get_document(doc_id)
     if not doc:
         raise HTTPException(
             status_code=404,

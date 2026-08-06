@@ -15,6 +15,15 @@ export interface Message {
   created_at: string;
 }
 
+// 获取会话下一条可用消息序号
+export async function getNextSequenceNumber(db: D1Database, conversationId: string): Promise<number> {
+  const result = await db
+    .prepare("SELECT COALESCE(MAX(sequence_no), -1) + 1 AS next_sequence FROM messages WHERE conversation_id = ?")
+    .bind(conversationId)
+    .first<{ next_sequence: number }>();
+  return result?.next_sequence ?? 0;
+}
+
 // 批量写入消息（一个完整 turn）
 export async function createMessageBatch(db: D1Database, messages: Message[]): Promise<void> {
   if (messages.length === 0) return;
@@ -23,7 +32,9 @@ export async function createMessageBatch(db: D1Database, messages: Message[]): P
   messages.sort((a, b) => a.sequence_no - b.sequence_no);
 
   const stmt = db.prepare(
-    "INSERT OR REPLACE INTO messages (id, conversation_id, user_id, sequence_no, role, content_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    `INSERT INTO messages (id, conversation_id, user_id, sequence_no, role, content_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET role = excluded.role, content_json = excluded.content_json`,
   );
 
   for (const msg of messages) {

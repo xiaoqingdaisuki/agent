@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import { buildApp } from "./api/index.js";
 import { config } from "./config/index.js";
 
+// 执行 main 对应的业务逻辑
 async function main() {
   const app = await buildApp();
 

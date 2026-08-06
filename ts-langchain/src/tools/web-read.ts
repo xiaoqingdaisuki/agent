@@ -151,6 +151,7 @@ async function readTextWithLimit(
 
 // ============ 正文清洗 ============
 
+// 执行 cleanHtml 对应的业务逻辑
 function cleanHtml(html: string): string {
   let text = html
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
@@ -181,6 +182,7 @@ const TEXT_CONTENT_TYPES = new Set([
   "application/xhtml+xml",
 ]);
 
+// 校验并判断 isTextContent 对应的状态
 function isTextContent(contentType: string): boolean {
   const ct = contentType.split(";")[0].trim().toLowerCase();
   return TEXT_CONTENT_TYPES.has(ct) || ct.startsWith("text/");

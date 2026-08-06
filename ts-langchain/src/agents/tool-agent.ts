@@ -128,6 +128,7 @@ const MAX_SYNTHESIS_INPUT_CHARS = 12_000;
 /**
  * 使用 LLM 将多轮工具调用的原始结果汇总为结构化部分答案
  */
+// 执行 synthesizePartialAnswer 对应的业务逻辑
 async function synthesizePartialAnswer(
   userQuestion: string,
   observations: Array<{ index: number; toolName: string; observation: string }>,
@@ -223,6 +224,7 @@ ${truncatedBlock}
   return `由于内部处理异常，以下是我在迭代限制内收集到的原始数据：\n\n${redactTextContent(fallback).slice(0, 10_000)}`;
 }
 
+// 创建或注册 buildToolAgent 所需的数据
 async function buildToolAgent(
   systemPromptOverride?: string,
 ): Promise<AgentExecutor> {

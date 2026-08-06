@@ -29,7 +29,7 @@ export async function createConversation(db: D1Database, conv: Omit<Conversation
 // 获取会话
 export async function getConversation(db: D1Database, id: string): Promise<Conversation | null> {
   const result = await db
-    .prepare("SELECT id, user_id, title, mode, created_at, updated_at, deleted_at FROM conversations WHERE id = ?")
+    .prepare("SELECT id, user_id, title, mode, created_at, updated_at, deleted_at FROM conversations WHERE id = ? AND deleted_at IS NULL")
     .bind(id)
     .first<Conversation>();
 

@@ -4,7 +4,7 @@
  * 所有测试自动使用 FakeRepositories，避免真实 HTTP 请求。
  */
 
-import { vi } from "vitest";
+import { beforeEach, vi } from "vitest";
 
 // ============ Fake 数据存储 ============
 
@@ -24,7 +24,7 @@ export function resetMocks() {
 
 // ============ Mock CloudflareMemoryClient ============
 
-const mockCloudflareClient = {
+export const mockCloudflareClient = {
   // Profile
   putProfile: vi.fn(async (userId: string, name: string = "", preferences?: any) => {
     const now = new Date().toISOString();
@@ -51,8 +51,13 @@ const mockCloudflareClient = {
   }),
 
   // Conversation
-  createConversation: vi.fn(async (userId: string, title: string, mode: string = "chat") => {
-    const id = crypto.randomUUID();
+  createConversation: vi.fn(async (
+    userId: string,
+    title: string,
+    mode: string = "chat",
+    conversationId?: string,
+  ) => {
+    const id = conversationId ?? crypto.randomUUID();
     const now = new Date().toISOString();
     const conv = { id, user_id: userId, title, mode, created_at: now, updated_at: now, deleted_at: null };
     mockConversations.set(id, conv);
@@ -84,7 +89,12 @@ const mockCloudflareClient = {
     const keys = new Set(existing.map((m: any) => m.sequence_no));
     for (const msg of messages) {
       if (!keys.has(msg.sequence_no)) {
-        existing.push({ ...msg });
+        existing.push({
+          ...msg,
+          conversation_id: convId,
+          user_id: userId,
+          content_json: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? {}),
+        });
         keys.add(msg.sequence_no);
       }
     }
@@ -182,7 +192,7 @@ const mockCloudflareClient = {
     return memories.slice(0, options.limit ?? 50).map((m: any) => ({ ...m }));
   }),
 
-  updateMemory: vi.fn(async (memoryId: string, changes: any) => {
+  updateMemory: vi.fn(async (_userId: string, memoryId: string, changes: any) => {
     for (const memories of mockMemories.values()) {
       for (const m of memories) {
         if (m.id === memoryId && m.status !== "deleted") {
@@ -195,7 +205,7 @@ const mockCloudflareClient = {
     return null;
   }),
 
-  deleteMemory: vi.fn(async (memoryId: string) => {
+  deleteMemory: vi.fn(async (_userId: string, memoryId: string) => {
     for (const memories of mockMemories.values()) {
       for (const m of memories) {
         if (m.id === memoryId) {
@@ -207,10 +217,42 @@ const mockCloudflareClient = {
     }
     return false;
   }),
+
+  uploadDocument: vi.fn(async (
+    userId: string,
+    filename: string,
+    content: string,
+    fileType?: string,
+    category = "general",
+  ) => ({
+    id: "doc_test",
+    user_id: userId,
+    name: filename,
+    filename,
+    file_type: fileType ?? "text/plain",
+    size: content.length,
+    category,
+    status: "indexed",
+    chunk_count: 1,
+    content_text: "hello",
+    content_filename: filename,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    deleted_at: null,
+  })),
+  listDocuments: vi.fn(async () => ({ documents: [], total: 0 })),
+  getDocument: vi.fn(async () => null),
+  deleteDocument: vi.fn(async () => true),
+  reindexDocument: vi.fn(async () => ({ chunk_count: 1, degraded: false })),
 };
 
+beforeEach(() => {
+  resetMocks();
+  vi.clearAllMocks();
+});
+
 // Mock the module
-vi.mock("../../src/clients/memory_gateway", () => ({
+vi.mock("../src/clients/memory_gateway.js", () => ({
   CloudflareMemoryClient: vi.fn(() => mockCloudflareClient),
   MemoryGatewayError: class extends Error {
     constructor(code: string, message: string, statusCode?: number) {

@@ -13,6 +13,7 @@ import type { ToolDescriptor } from "./contracts.js";
 // ============ 安全表达式解析器 ============
 
 class ParseError extends Error {
+  // 初始化当前对象
   constructor(message: string) {
     super(message);
     this.name = "ParseError";
@@ -25,6 +26,7 @@ interface Token {
   numValue?: number;
 }
 
+// 执行 tokenize 对应的业务逻辑
 function tokenize(expr: string): Token[] {
   const tokens: Token[] = [];
 
@@ -65,6 +67,7 @@ function tokenize(expr: string): Token[] {
   return tokens;
 }
 
+// 校验并判断 parseExpr 对应的状态
 function parseExpr(
   tokens: Token[],
   pos: number,
@@ -86,6 +89,7 @@ function parseExpr(
   return { value, pos: p };
 }
 
+// 校验并判断 parseTerm 对应的状态
 function parseTerm(
   tokens: Token[],
   pos: number,
@@ -120,6 +124,7 @@ function parseTerm(
   return { value, pos: p };
 }
 
+// 校验并判断 parseFactor 对应的状态
 function parseFactor(
   tokens: Token[],
   pos: number,
@@ -156,6 +161,7 @@ function parseFactor(
   return result;
 }
 
+// 校验并判断 parsePrimary 对应的状态
 function parsePrimary(
   tokens: Token[],
   pos: number,

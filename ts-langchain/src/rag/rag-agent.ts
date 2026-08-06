@@ -32,6 +32,7 @@ export interface RAGOptions {
  * 创建检索器工具
  * 将 RAG 检索包装成 LangChain Tool，Agent 可以自主调用
  */
+// 创建或注册 createRetrieverTool 所需的数据
 function createRetrieverTool(retriever: Retriever) {
   return new DynamicStructuredTool({
     name: "search_knowledge_base",
@@ -67,6 +68,7 @@ export class RAGAgent {
   private retriever: Retriever;
   private agent: Promise<AgentExecutor>;
 
+  // 初始化当前对象
   constructor(options: RAGOptions) {
     this.retriever = new Retriever(
       {
@@ -81,6 +83,7 @@ export class RAGAgent {
   /**
    * 创建 RAG Agent — 声明式配置
    */
+  // 创建或注册 createAgent 所需的数据
   private async createAgent(options: RAGOptions): Promise<AgentExecutor> {
     const model = new ChatOpenAI({
       modelName: options.model || process.env.OPENAI_MODEL || "gpt-4o-mini",
@@ -126,6 +129,7 @@ Be concise and accurate in your responses.`,
   /**
    * 对话
    */
+  // 执行 chat 对应的业务逻辑
   async chat(message: string, history: any[] = []) {
     const agent = await this.agent;
     const result = await agent.invoke(
