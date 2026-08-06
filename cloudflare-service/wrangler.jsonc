@@ -1,34 +1,47 @@
 {
-	"name": "cloudflare-service",
-	"main": "src/index.ts",
-	"compatibility_flags": [
-		"nodejs_compat"
-	],
-	"compatibility_date": "2025-01-01",
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_name": "agent-db",
-			"database_id": "0391d7cf-e7f8-4228-b168-d70e0a8fb3ae"
-		}
-	],
-	"vectorize": [
-		{
-			"binding": "MEMORY_INDEX",
-			"index_name": "memory-embeddings"
-		}
-	],
-	"ai": {
-		"binding": "AI"
-	},
-	"vars": {
-		"EMBEDDING_MODEL": "@cf/baai/bge-m3",
-		"EMBEDDING_DIMENSIONS": 1024,
-		"MAX_MEMORIES_PER_USER": 50,
-		"INDEX_JOB_BATCH_SIZE": 20,
-		"INDEX_JOB_MAX_RETRIES": 5
-	},
-	"dev": {
-		"port": 6100
-	}
+  "name": "cloudflare-service",
+  "main": "src/index.ts",
+  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_date": "2025-01-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "agent-db",
+      "database_id": "0391d7cf-e7f8-4228-b168-d70e0a8fb3ae",
+    },
+  ],
+  "vectorize": [
+    {
+      "binding": "MEMORY_INDEX",
+      "index_name": "memory-embeddings",
+    },
+  ],
+  "ai": {
+    "binding": "AI",
+  },
+  "vars": {
+    "EMBEDDING_MODEL": "@cf/baai/bge-m3",
+    "EMBEDDING_DIMENSIONS": 1024,
+    "MAX_MEMORIES_PER_USER": 50,
+    "INDEX_JOB_BATCH_SIZE": 20,
+    "INDEX_JOB_MAX_RETRIES": 5,
+  },
+  "dev": {
+    "port": 6100,
+  },
+  "observability": {
+    "enabled": false,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true,
+    },
+    "traces": {
+      "enabled": false,
+      "persist": true,
+      "head_sampling_rate": 1,
+    },
+  },
 }

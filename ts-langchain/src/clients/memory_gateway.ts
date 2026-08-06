@@ -227,8 +227,19 @@ export class CloudflareMemoryClient {
       }
 
       // 校验响应信封格式
-      validateGatewayResponse(parsed);
-      return parsed;
+      const envelope = validateGatewayResponse(parsed);
+
+      // Worker 返回 HTTP 200 但业务失败（降级模式等）
+      if (!envelope.ok) {
+        const errData = envelope.error ?? { code: "MEMORY_INTERNAL_ERROR", message: "Gateway 返回错误" };
+        throw new MemoryGatewayError(
+          errData.code,
+          errData.message,
+          response.status,
+        );
+      }
+
+      return envelope;
     } catch (error) {
       if (error instanceof MemoryGatewayError) throw error;
       if ((error as any)?.name === "AbortError") {
