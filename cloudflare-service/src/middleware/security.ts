@@ -43,13 +43,20 @@ export function validatePagination(limit?: number, offset?: number): { limit: nu
 // 请求日志中间件
 export async function requestLogMiddleware(c: any, next: () => Promise<void>) {
   const start = Date.now();
-  await next();
-  const duration = Date.now() - start;
-  const method = c.req.method;
-  const path = c.req.path;
-  const status = c.res?.status || 0;
-
-  if (status >= 400 || duration > 1000) {
-    console.log(`[GW] ${method} ${path} → ${status} (${duration}ms)`);
+  try {
+    await next();
+  } finally {
+    const duration = Date.now() - start;
+    const method = c.req.method;
+    const path = c.req.path;
+    let status = 0;
+    try {
+      status = c.res?.status || 0;
+    } catch {
+      // c.res 在某些环境下可能不可访问
+    }
+    if (status >= 400 || duration > 1000) {
+      console.log(`[GW] ${method} ${path} → ${status} (${duration}ms)`);
+    }
   }
 }

@@ -15,8 +15,8 @@ from src.tools.registry import (
 )
 
 from .calculator import calculator
-from .fetcher import web_read
-from .file_reader import file_read
+from .web_read import web_read
+from .file_read import file_read
 from .knowledge import knowledge_search
 from .memory_session import memory_session_search
 from .memory_user import memory_user_search, memory_user_save

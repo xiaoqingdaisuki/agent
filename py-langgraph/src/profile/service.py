@@ -134,7 +134,7 @@ class MemoryService:
     @staticmethod
     def delete(user_id: str, memory_id: str) -> bool:
         repos = _get_repositories()
-        return repos.delete_memory(memory_id)
+        return repos.delete_memory(user_id, memory_id)
 
     @staticmethod
     def list_all(user_id: str) -> list[dict]:

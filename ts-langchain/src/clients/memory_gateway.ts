@@ -34,6 +34,7 @@ import {
   type SearchResponseData,
   type DocumentData,
   type ChunkData,
+  type DocumentSearchResultData,
   type DocumentSearchResponseData,
   GatewayResponseSchema,
   UserProfileSchema,
@@ -443,13 +444,14 @@ export class CloudflareMemoryClient {
    * 更新记忆
    */
   async updateMemory(
+    userId: string,
     memoryId: string,
     changes: { content?: string; category?: string; importance?: number },
   ): Promise<MemoryData | null> {
     try {
       const result = validateGatewayResponse(await this.request(
         "PATCH",
-        `/internal/v1/users/__placeholder__/memories/${encodeURIComponent(memoryId)}`,
+        `/internal/v1/users/${encodeURIComponent(userId)}/memories/${encodeURIComponent(memoryId)}`,
         changes,
       )) as { data: unknown };
       return result.data ? validateMemory(result.data) : null;
@@ -464,11 +466,11 @@ export class CloudflareMemoryClient {
   /**
    * 删除记忆（软删除）
    */
-  async deleteMemory(memoryId: string): Promise<boolean> {
+  async deleteMemory(userId: string, memoryId: string): Promise<boolean> {
     try {
       await this.request(
         "DELETE",
-        `/internal/v1/users/__placeholder__/memories/${encodeURIComponent(memoryId)}`,
+        `/internal/v1/users/${encodeURIComponent(userId)}/memories/${encodeURIComponent(memoryId)}`,
       );
       return true;
     } catch (error) {
@@ -548,8 +550,8 @@ export class CloudflareMemoryClient {
     const result = validateGatewayResponse(await this.request(
       "GET",
       `/internal/v1/documents?${params.toString()}`,
-    )) as { data: unknown };
-    return result.data as { documents: DocumentData[]; total: number };
+    )) as { data: { documents: DocumentData[]; total: number } };
+    return result.data;
   }
 
   /**
@@ -560,8 +562,8 @@ export class CloudflareMemoryClient {
       const result = validateGatewayResponse(await this.request(
         "GET",
         `/internal/v1/documents/${encodeURIComponent(documentId)}`,
-      )) as { data: unknown };
-      return result.data as { document: DocumentData; chunks: ChunkData[] };
+      )) as { data: { document: DocumentData; chunks: ChunkData[] } };
+      return result.data;
     } catch (error) {
       if ((error as MemoryGatewayError).code === "DOCUMENT_NOT_FOUND") {
         return null;
@@ -606,7 +608,10 @@ export class CloudflareMemoryClient {
       "POST",
       "/internal/v1/documents:search",
       body,
-    )) as { data: unknown };
-    return result.data as DocumentSearchResponseData;
+    )) as { data: { results: DocumentSearchResultData[]; degraded: boolean } };
+    return {
+      results: result.data.results,
+      degraded: result.data.degraded,
+    };
   }
 }

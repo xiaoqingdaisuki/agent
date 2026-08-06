@@ -86,15 +86,15 @@ export const MemorySaveRequestSchema = z.object({
   category: MemoryCategorySchema,
   importance: z.coerce.number().int().min(1).max(5),
   source: MemorySourceSchema,
-  source_conversation_id: z.string().nullable(),
+  source_conversation_id: z.string().nullable().optional(),
 });
 
 /** 记忆搜索请求 */
 export const MemorySearchRequestSchema = z.object({
   query: z.string().min(1).max(500),
-  category: MemoryCategorySchema.nullable(),
+  category: MemoryCategorySchema.nullable().optional(),
   limit: z.coerce.number().int().min(1).max(50),
-  min_score: z.coerce.number().min(0).max(1),
+  min_score: z.coerce.number().min(0).max(1).optional(),
 });
 
 /** 记忆搜索结果 */
@@ -128,10 +128,10 @@ export const MessageBatchSchema = z.object({
   })).min(1),
 });
 
-/** 画像更新请求 */
+/** 画像保存请求 */
 export const ProfileSaveSchema = z.object({
   name: z.string().max(100),
-  preferences: z.record(z.string(), z.unknown()),
+  preferences: z.record(z.string(), z.unknown()).optional(),
 });
 
 // ============ 统一响应格式 ==========

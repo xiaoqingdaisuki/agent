@@ -22,12 +22,12 @@ export function registerProfileRoutes(app: any) {
       preferences_json: preferencesJson,
     });
 
-    const response = GatewayResponseSchema.parse({
+    const response = {
       ok: true,
       data: updated ?? profile,
       error: null,
       meta: { request_id: c.get("requestId") },
-    });
+    };
     return c.json(response);
   });
 

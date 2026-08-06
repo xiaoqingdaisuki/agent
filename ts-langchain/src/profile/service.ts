@@ -185,7 +185,7 @@ export class MemoryService {
    */
   static async delete(userId: string, memoryId: string): Promise<boolean> {
     const repos = getRepos();
-    return repos.memory.delete(memoryId);
+    return repos.memory.delete(userId, memoryId);
   }
 
   /**

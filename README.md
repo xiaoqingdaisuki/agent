@@ -1,4 +1,4 @@
-# TypeScript / Python双版本Agent项目
+# Agent 双版本项目
 
 使用 **TypeScript + LangChain** 和 **Python + LangGraph** 实现同一个 Agent 需求，作为框架对比学习项目。
 
@@ -10,15 +10,49 @@
 | 控制流 | 隐式（框架内部处理循环） | 显式（自己定义每个节点和边） |
 | 条件路由 | middleware 层面 | `add_conditional_edges()` 一等公民 |
 | 状态管理 | 隐式消息列表 | 显式 TypedDict State |
-| 持久化 | 无 checkpoint（会话记忆存内存 Map） | `checkpointer` 内置（PostgresSaver，对话可暂停/恢复） |
+| 持久化 | 通过 Cloudflare Service（D1 + Vectorize） | 通过 Cloudflare Service（D1 + Vectorize） |
 | 人机协同 | 需自行实现 | `interrupt_before` 原生支持（工具调用前可插入人工确认） |
 | 多 Agent | 需自行编排 | supervisor + `Command` 路由 |
+
+## Cloudflare 持久化服务
+
+`cloudflare-service/` 是独立部署在 Cloudflare Workers 上的长期记忆网关，负责：
+
+- 用户画像（Profile）CRUD
+- 会话与消息管理（Conversation + Message）
+- 长期记忆存储与语义搜索（Memory + Vectorize）
+- 知识库文档管理（Document + RAG）
+- 统一 Bearer Secret 认证
+
+ts-langchain 和 py-langgraph 均通过 HTTP 调用此服务，不直接持有数据库凭证。
 
 ## 项目结构
 
 ```text
 agent/
-├── ts-langchain/           # TS 版：纯 LangChain 声明式配置
+├── cloudflare-service/       # Cloudflare Workers — 长期记忆网关（独立部署）
+│   ├── src/
+│   │   ├── index.ts               # Hono 入口，注册路由 + 中间件
+│   │   ├── middleware/
+│   │   │   ├── auth.ts            # Bearer Secret 鉴权
+│   │   │   ├── error.ts           # 统一错误处理（Hono 4 兼容）
+│   │   │   └── security.ts        # 请求日志 + 内容脱敏
+│   │   ├── routes/
+│   │   │   ├── health.ts          # 健康检查
+│   │   │   ├── profile.ts         # PUT/GET /users/{id}/profile
+│   │   │   ├── conversation.ts    # 会话 CRUD
+│   │   │   ├── message.ts         # 消息批量写入/查询/清空
+│   │   │   ├── memory.ts          # 记忆 CRUD + 语义搜索
+│   │   │   ├── document.ts        # 文档上传/列表/搜索/重新索引
+│   │   │   └── openapi.ts         # GET /openapi.json
+│   │   ├── repositories/          # D1 数据访问层
+│   │   ├── services/              # 业务服务（embedding, index-job）
+│   │   └── schemas/               # Zod 4 数据模型
+│   ├── migrations/                # D1 迁移 SQL
+│   ├── wrangler.jsonc             # Worker 配置（bindings: D1, Vectorize, AI）
+│   └── package.json
+│
+├── ts-langchain/              # TS 版：纯 LangChain 声明式配置
 │   ├── src/
 │   │   ├── agents/
 │   │   │   ├── chat-agent.ts       # 对话 Agent（ChatOpenAI 封装）
@@ -53,6 +87,9 @@ agent/
 │   │   │   ├── memory-session.ts   # 会话记忆检索
 │   │   │   ├── memory-user.ts      # 用户长期记忆（读写）
 │   │   │   └── observability.ts    # 可观测性（审计日志）
+│   │   ├── clients/
+│   │   │   └── memory_gateway.ts   # Cloudflare Service HTTP 客户端
+│   │   ├── repositories/           # 仓储层（Cloudflare + InMemory）
 │   │   ├── api/
 │   │   │   ├── routes/
 │   │   │   │   ├── v1/             # External API（前端 UI 使用）
@@ -77,7 +114,7 @@ agent/
 │   ├── tsconfig.json
 │   └── .env.example
 │
-├── py-langgraph/           # Python 版：LangGraph 显式图编排
+├── py-langgraph/              # Python 版：LangGraph 显式图编排
 │   ├── src/
 │   │   ├── agents/
 │   │   │   ├── base.py            # 通用图构建基类（AgentState, get_llm）
@@ -111,8 +148,11 @@ agent/
 │   │   │       ├── __init__.py    # 运行时导出
 │   │   │       ├── executor.py    # ToolExecutor 安全执行器
 │   │   │       └── data_redaction.py # 数据脱敏
+│   │   ├── clients/
+│   │   │   └── memory_gateway.py  # Cloudflare Service HTTP 客户端
+│   │   ├── repositories/           # 仓储层（Cloudflare Service）
 │   │   ├── profile/
-│   │   │   ├── models.py          # UserProfile / Memory / QARecord / ProfileStore
+│   │   │   ├── models.py          # UserProfile / Memory / QARecord 模型
 │   │   │   └── service.py         # ProfileService（画像 + 记忆 + 问答历史）
 │   │   ├── api/
 │   │   │   ├── routes/
@@ -157,13 +197,24 @@ bash deploy-ecs.sh python
 bash deploy-ecs.sh all
 ```
 
+### Cloudflare Service（记忆网关）
+
+```bash
+cd cloudflare-service
+npm install
+npx wrangler d1 migrations apply agent-db --local    # 初始化本地 D1
+npx wrangler dev                                     # 本地开发 (localhost:8787)
+npx wrangler secret put SERVICE_SECRET               # 设置 Bearer Secret
+npx wrangler deploy                                  # 部署到线上
+```
+
 ### TypeScript 版本
 
 ```bash
 cd ts-langchain
 npm install
 cp .env.example .env
-# 编辑 .env 填入 OPENAI_API_KEY
+# 编辑 .env 填入 OPENAI_API_KEY + CLOUDFLARE_MEMORY_SECRET
 npm run dev
 ```
 
@@ -224,9 +275,38 @@ GET  /tools                             可用工具列表
 POST /images/generations                图片生成
 ```
 
-生产环境的超时应按从内到外递增配置：`AGENT_DEADLINE_MS=30000`、
-`SERVER_REQUEST_TIMEOUT_MS=40000`（外部网关读超时也至少 40 秒）、Vibe
-`AGENT_REQUEST_TIMEOUT_MS=45000`。流式路由需要关闭代理缓冲，以便会话元数据立即作为首个 SSE 事件发出。
+## Cloudflare Service 内部 API
+
+ts-langchain 和 py-langgraph 通过以下内部 API 与 Cloudflare Service 通信（Bearer Secret 认证）：
+
+```
+PUT   /internal/v1/users/{user_id}/profile          创建/更新画像
+GET   /internal/v1/users/{user_id}/profile          获取画像
+
+POST  /internal/v1/conversations                    创建会话
+GET   /internal/v1/users/{user_id}/conversations    列出会话
+GET   /internal/v1/conversations/{id}               会话详情
+DELETE /internal/v1/conversations/{id}              删除会话
+
+POST  /internal/v1/conversations/{id}/messages:batch 批量写入消息
+GET   /internal/v1/conversations/{id}/messages       查询消息
+DELETE /internal/v1/conversations/{id}/messages       清空消息
+
+PUT   /internal/v1/users/{user_id}/memories/{id}    保存记忆
+GET   /internal/v1/users/{user_id}/memories         列出记忆
+PATCH /internal/v1/users/{user_id}/memories/{id}    更新记忆
+DELETE /internal/v1/users/{user_id}/memories/{id}   删除记忆
+POST  /internal/v1/users/{user_id}/memories:search  语义搜索记忆
+
+POST  /internal/v1/documents                        上传文档
+GET   /internal/v1/documents                        列出文档
+GET   /internal/v1/documents/{id}                   文档详情
+DELETE /internal/v1/documents/{id}                  删除文档
+POST  /internal/v1/documents/{id}/reindex           重新索引
+POST  /internal/v1/documents:search                 语义搜索文档
+
+GET   /internal/v1/openapi.json                     OpenAPI 规范
+```
 
 ## 开发工作流
 
@@ -244,6 +324,7 @@ POST /images/generations                图片生成
 - **Agent 框架**：LangChain (`createOpenAIToolsAgent` + `AgentExecutor`)
 - **工具定义**：Zod
 - **API 框架**：Fastify
+- **持久化**：Cloudflare Service (D1 + Vectorize)
 - **测试**：Vitest
 
 ### Python 版
@@ -253,5 +334,16 @@ POST /images/generations                图片生成
 - **工具定义**：Pydantic
 - **Checkpoint**：LangGraph 内置（PostgresSaver / SqliteSaver）
 - **API 框架**：FastAPI
+- **持久化**：Cloudflare Service (D1 + Vectorize)
 - **测试**：pytest + pytest-asyncio
 - **追踪**：LangSmith
+
+### Cloudflare Service
+
+- **运行时**：Cloudflare Workers
+- **框架**：Hono 4
+- **Schema**：Zod 4
+- **数据库**：D1 (SQLite)
+- **向量索引**：Vectorize
+- **Embedding**：Workers AI (`@cf/baai/bge-m3`)
+- **部署**：`wrangler deploy`

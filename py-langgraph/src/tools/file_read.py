@@ -316,4 +316,4 @@ def file_read(filepath: str, offset: int = 0, limit: int = 100) -> str:
 
 # ============ 导出 ============
 
-__all__ = ["ALLOWED_EXTENSIONS", "_DESCRIPTOR", "FileReadInput", "_resolve_safe_path", "file_read"]
+__all__ = ["ALLOWED_EXTENSIONS", "_DESCRIPTOR", "FileReadInput", "_detect_encoding", "_mask_sensitive", "_resolve_safe_path", "file_read"]

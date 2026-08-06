@@ -22,4 +22,4 @@ Thumbs.db
 
 .claude
 *.md
-.dev.vars
+.wrangler/

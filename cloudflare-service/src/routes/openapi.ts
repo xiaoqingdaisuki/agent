@@ -24,69 +24,125 @@ import {
  * 将 Zod schema 转换为 OpenAPI Schema Object
  * 基于 Zod 4 API
  */
+/**
+ * 将 Zod Schema 实例属性提取为 OpenAPI 约束条件（Zod 4 兼容）
+ */
+function getStringConstraints(schema: any): Record<string, unknown> {
+  const constraints: Record<string, unknown> = {};
+  if (schema.minLength != null) constraints.minLength = schema.minLength;
+  if (schema.maxLength != null) constraints.maxLength = schema.maxLength;
+  return constraints;
+}
+
+/**
+ * 将 Zod Schema 实例的数字约束提取为 OpenAPI 约束条件（Zod 4 兼容）
+ */
+function getNumberConstraints(schema: any): Record<string, unknown> {
+  const constraints: Record<string, unknown> = {};
+  if (schema.isInt) constraints.type = "integer";
+  if (schema.minValue != null) constraints.minimum = schema.minValue;
+  if (schema.maxValue != null) constraints.maximum = schema.maxValue;
+  return constraints;
+}
+
+/**
+ * 获取 Zod schema 内部类型标识（Zod 4: _def.type / Zod 3: _def.typeName）
+ */
+function getSchemaType(schema: any): string {
+  return schema._def?.type || "";
+}
+
+/**
+ * 将 Zod Schema 转换为 OpenAPI Schema Object
+ * 适配 Zod 4 内部 API（_def.type 替代 _def.typeName，实例属性替代 checks[].kind）
+ */
 function zodToOpenApi(schema: z.ZodTypeAny): Record<string, unknown> {
   const anySchema = schema as any;
+  const type = getSchemaType(anySchema);
 
-  if (anySchema._def?.typeName === "ZodString") {
+  // String
+  if (type === "string") {
     const result: Record<string, unknown> = { type: "string" };
+    Object.assign(result, getStringConstraints(anySchema));
+    // Regex pattern (best-effort, Zod 4 存储在 _def.checks 中)
     const checks = anySchema._def?.checks || [];
     for (const check of checks) {
-      if (check.kind === "max_length") result.maxLength = check.value;
-      if (check.kind === "min_length") result.minLength = check.value;
-      if (check.kind === "regex") result.pattern = check.regex.source;
+      const checkDef = check._def || check;
+      if ((checkDef as any)?.check === "regex" && (checkDef as any)?.regex) {
+        result.pattern = (checkDef as any).regex.source;
+      }
     }
     return result;
   }
-  if (anySchema._def?.typeName === "ZodNumber") {
-    const checks = anySchema._def?.checks || [];
-    let type = "number";
-    if (checks.some((c: any) => c.kind === "int")) type = "integer";
-    const result: Record<string, unknown> = { type };
-    for (const check of checks) {
-      if (check.kind === "min") result.minimum = check.value;
-      if (check.kind === "max") result.maximum = check.value;
-    }
+
+  // Number
+  if (type === "number") {
+    const result: Record<string, unknown> = { type: "number" };
+    Object.assign(result, getNumberConstraints(anySchema));
     return result;
   }
-  if (anySchema._def?.typeName === "ZodBoolean") {
+
+  // Boolean
+  if (type === "boolean") {
     return { type: "boolean" };
   }
-  if (anySchema._def?.typeName === "ZodArray") {
-    return { type: "array", items: zodToOpenApi((anySchema._def?.type as z.ZodTypeAny) || z.unknown() as any) };
+
+  // Array
+  if (type === "array") {
+    return {
+      type: "array",
+      items: zodToOpenApi((anySchema._def?.element as z.ZodTypeAny) || z.unknown() as any),
+    };
   }
-  if (anySchema._def?.typeName === "ZodOptional") {
+
+  // Optional
+  if (type === "optional") {
     return zodToOpenApi((anySchema._def?.innerType as z.ZodTypeAny) || z.unknown() as any);
   }
-  if (anySchema._def?.typeName === "ZodDefault") {
+
+  // Default
+  if (type === "default") {
     return zodToOpenApi((anySchema._def?.innerType as z.ZodTypeAny) || z.unknown() as any);
   }
-  if (anySchema._def?.typeName === "ZodNullable") {
+
+  // Nullable
+  if (type === "nullable") {
     return zodToOpenApi((anySchema._def?.innerType as z.ZodTypeAny) || z.unknown() as any);
   }
-  if (anySchema._def?.typeName === "ZodEnum") {
-    return { type: "string", enum: anySchema._def?.values };
+
+  // Enum
+  if (type === "enum") {
+    return { type: "string", enum: Object.values(anySchema._def?.entries || {}) };
   }
-  if (anySchema._def?.typeName === "ZodObject") {
+
+  // Object
+  if (type === "object") {
     const shape = anySchema._def?.shape || {};
     const properties: Record<string, unknown> = {};
     const required: string[] = [];
     for (const [key, value] of Object.entries(shape)) {
       properties[key] = zodToOpenApi(value as z.ZodTypeAny);
       const valAny = value as any;
-      const isOptional = valAny._def?.typeName === "ZodOptional" || valAny._def?.typeName === "ZodDefault";
+      const valType = getSchemaType(valAny);
+      const isOptional = valType === "optional" || valType === "default";
       if (!isOptional) {
         required.push(key);
       }
     }
     return { type: "object", properties, required };
   }
-  if (anySchema._def?.typeName === "ZodRecord") {
+
+  // Record
+  if (type === "record") {
     return { type: "object", additionalProperties: {} };
   }
-  if (anySchema._def?.typeName === "ZodUnion") {
+
+  // Union
+  if (type === "union") {
     const options = (anySchema._def?.options || []).map((o: any) => zodToOpenApi(o));
     return options.length === 1 ? options[0] : { oneOf: options };
   }
+
   return {};
 }
 

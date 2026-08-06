@@ -124,12 +124,16 @@ class Repositories:
     def list_memories(self, user_id: str, category: str | None = None, limit: int = 50) -> list[dict]:
         return _run_sync(self._client.list_memories(user_id, category, limit))
 
-    def update_memory(self, memory_id: str, **changes) -> dict | None:
-        return _run_sync(self._client.update_memory(memory_id, **changes))
+    def update_memory(self, user_id: str, memory_id: str, **changes) -> dict | None:
+        return _run_sync(self._client.update_memory(user_id, memory_id, **changes))
 
-    def delete_memory(self, memory_id: str) -> bool:
-        return _run_sync(self._client.delete_memory(memory_id))
+    def delete_memory(self, user_id: str, memory_id: str) -> bool:
+        return _run_sync(self._client.delete_memory(user_id, memory_id))
 
     def clear_user_memories(self, user_id: str) -> int:
-        result = _run_sync(self._client.delete_memory(user_id))  # 简化：实际应调用 clear_user_memories
-        return 1 if result else 0
+        memories = _run_sync(self._client.list_user_memories(user_id, limit=100))
+        count = 0
+        for m in memories:
+            if _run_sync(self._client.delete_memory(user_id, m["id"])):
+                count += 1
+        return count

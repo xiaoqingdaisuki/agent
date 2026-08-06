@@ -4,7 +4,7 @@ import pytest
 from src.tools.weather import get_weather
 from src.tools.calculator import calculator
 from src.tools.search import web_search
-from src.tools.fetcher import _is_safe_url, web_read
+from src.tools.web_read import _is_safe_url, web_read
 
 
 class TestWeatherTool:
@@ -41,7 +41,7 @@ class TestWebSearchTool:
 class TestWebReadTool:
     def test_rejects_hostname_resolving_to_private_ip(self, monkeypatch):
         monkeypatch.setattr(
-            "src.tools.fetcher.socket.getaddrinfo",
+            "src.tools.web_read.socket.getaddrinfo",
             lambda *args, **kwargs: [(2, 1, 6, "", ("10.0.0.8", 80))],
         )
         safe, reason = _is_safe_url("https://attacker.example/path")

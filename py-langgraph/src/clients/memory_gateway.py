@@ -211,7 +211,7 @@ class CloudflareMemoryClient:
         data = result.get("data", [])
         return [MemoryData.model_validate(item).model_dump() for item in data]
 
-    async def update_memory(self, memory_id: str, content: str | None = None, category: str | None = None, importance: int | None = None) -> dict | None:
+    async def update_memory(self, user_id: str, memory_id: str, content: str | None = None, category: str | None = None, importance: int | None = None) -> dict | None:
         """更新记忆"""
         body: dict[str, Any] = {}
         if content is not None:
@@ -222,7 +222,7 @@ class CloudflareMemoryClient:
             body["importance"] = importance
 
         try:
-            result = await self._request("PATCH", f"/internal/v1/users/__placeholder__/memories/{memory_id}", body)
+            result = await self._request("PATCH", f"/internal/v1/users/{user_id}/memories/{memory_id}", body)
             data = result.get("data")
             return MemoryData.model_validate(data).model_dump() if data else None
         except MemoryGatewayError as e:
@@ -299,3 +299,19 @@ class CloudflareMemoryClient:
         }
         result = await self._request("POST", "/internal/v1/documents:search", body)
         return DocumentSearchResponseData.model_validate(result.get("data", {})).model_dump()
+
+    async def delete_memory(self, user_id: str, memory_id: str) -> bool:
+        """删除记忆（软删除）"""
+        try:
+            await self._request("DELETE", f"/internal/v1/users/{user_id}/memories/{memory_id}")
+            return True
+        except MemoryGatewayError as e:
+            if e.code == "MEMORY_NOT_FOUND":
+                return False
+            raise
+
+    async def list_user_memories(self, user_id: str, limit: int = 100) -> list[dict]:
+        """列出用户所有记忆（用于清空）"""
+        result = await self._request("GET", f"/internal/v1/users/{user_id}/memories?limit={limit}")
+        data = result.get("data", [])
+        return [MemoryData.model_validate(item).model_dump() for item in data]

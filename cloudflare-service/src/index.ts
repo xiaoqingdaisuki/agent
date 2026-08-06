@@ -69,7 +69,7 @@ app.use("*", async (c, next) => {
     await next();
     return;
   }
-  await authMiddleware(c, next);
+  return await authMiddleware(c, next);
 });
 
 // 注册路由

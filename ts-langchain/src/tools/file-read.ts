@@ -57,6 +57,18 @@ const ALLOWED_EXTENSIONS = new Set([
   ".readme",
 ]);
 
+/** 禁止读取的敏感文件名 */
+const BLOCKED_FILENAMES = new Set([
+  ".env",
+  ".env.local",
+  ".env.production",
+  ".env.dev",
+  "id_rsa",
+  "id_dsa",
+  "id_ecdsa",
+  "id_ed25519",
+]);
+
 const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1MB
 const MAX_READ_CHARS = 50_000;
 
@@ -79,6 +91,36 @@ const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
     replacement: "***REDACTED***",
   },
 ];
+
+// ============ 编码检测 ============
+
+/**
+ * 依次尝试 UTF-8 / GBK / Latin-1，返回首个可成功解码的编码名
+ */
+function detectEncoding(buffer: Buffer): string {
+  // UTF-8
+  try {
+    buffer.toString("utf-8");
+    return "utf-8";
+  } catch {
+    // fall through
+  }
+  // GBK: Node.js 不原生支持 GBK，通过 try/catch 探测
+  try {
+    buffer.toString("gbk" as BufferEncoding);
+    return "gbk";
+  } catch {
+    // fall through
+  }
+  // Latin-1: 1:1 字节映射，总是成功
+  try {
+    buffer.toString("latin1");
+    return "latin-1";
+  } catch {
+    // fall through
+  }
+  return "utf-8";
+}
 
 // ============ 安全路径解析 ============
 
@@ -118,6 +160,30 @@ export function resolveSafePath(
   return { path: fullPath };
 }
 
+/**
+ * 检查符号链接是否指向工作区外
+ */
+async function checkSymlink(
+  safePath: string,
+  workspaceRoot: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const realRoot = await fs.realpath(workspaceRoot);
+    const realPath = await fs.realpath(safePath);
+    const relative = path.relative(realRoot, realPath);
+    if (
+      relative.startsWith(`..${path.sep}`) ||
+      relative === ".." ||
+      path.isAbsolute(relative)
+    ) {
+      return { ok: false, error: "符号链接指向工作区外" };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "无法解析符号链接（可能指向循环链接）" };
+  }
+}
+
 // 对文本内容进行敏感信息脱敏处理
 export function maskSensitive(content: string): string {
   let masked = content;
@@ -127,7 +193,7 @@ export function maskSensitive(content: string): string {
   return masked;
 }
 
-// ============ Tool Descriptor ============
+// ============ Tool Descriptor ==========
 
 export const fileReadInputSchema = z.object({
   filepath: z.string().describe("要读取的文件路径，如 'README.md' 或 'src/main.py'"),
@@ -152,7 +218,7 @@ export const fileReadDescriptor: ToolDescriptor = {
   input_schema: fileReadInputSchema,
 };
 
-// ============ LangChain Tool ============
+// ============ LangChain Tool ==========
 
 export const fileReadTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "file_read",
@@ -169,54 +235,59 @@ export const fileReadTool: DynamicStructuredTool = new DynamicStructuredTool({
       return `❌ 路径安全拒绝：${error}`;
     }
 
-    // 2. 检查文件是否存在（Node.js fs）
+    const filename = path.basename(safePath);
+
+    // 2. 检查禁止的文件名
+    if (BLOCKED_FILENAMES.has(filename)) {
+      return `❌ 安全拒绝：禁止读取敏感文件 ${filename}`;
+    }
+
+    // 3. 检查文件是否存在
     try {
-      const realRoot = await fs.realpath(workspaceRoot);
-      const realPath = await fs.realpath(safePath);
-      const relative = path.relative(realRoot, realPath);
-      if (
-        relative.startsWith(`..${path.sep}`) ||
-        relative === ".." ||
-        path.isAbsolute(relative)
-      ) {
-        return `❌ 符号链接安全拒绝：${filepath}`;
-      }
-
-      const stat = await fs.stat(realPath);
-      if (!stat) {
-        return `❌ 文件不存在：${filepath}`;
-      }
-
+      const stat = await fs.stat(safePath);
       if (!stat.isFile()) {
         return `❌ 路径不是文件：${filepath}`;
       }
 
-      // 3. 检查文件大小
+      // 4. 检查文件大小
       if (stat.size > MAX_FILE_SIZE) {
         return `❌ 文件过大（${(stat.size / 1024).toFixed(0)}KB），最大允许 ${MAX_FILE_SIZE / 1024}KB`;
       }
 
-      // 4. 检查扩展名
-      const ext = path.extname(realPath).toLowerCase();
+      // 5. 检查扩展名
+      const ext = path.extname(safePath).toLowerCase();
       if (!ALLOWED_EXTENSIONS.has(ext)) {
         return `❌ 不支持的文件类型：${ext}`;
       }
 
-      // 5. 读取文件
-      const content = await fs.readFile(realPath, "utf-8");
+      // 6. 检查符号链接
+      const symlinkCheck = await checkSymlink(safePath, workspaceRoot);
+      if (!symlinkCheck.ok) {
+        return `❌ 符号链接安全拒绝：${symlinkCheck.error}`;
+      }
 
-      // 6. 敏感内容脱敏
+      // 7. 读取文件内容（先读字节，再检测编码解码）
+      const buffer = await fs.readFile(safePath);
+      const encoding = detectEncoding(buffer);
+      const content = buffer.toString(encoding as BufferEncoding);
+
+      // 8. 敏感内容脱敏
       const masked = maskSensitive(content);
 
-      // 7. 分段读取
+      // 9. 分段读取
       const lines = masked.split("\n");
       const totalLines = lines.length;
+
+      if (offset > 0 && offset >= totalLines) {
+        return `❌ 偏移量超出文件行数（共 ${totalLines} 行）`;
+      }
+
       const end = Math.min(offset + limit, totalLines);
       const selected = lines.slice(offset, end);
 
-      // 8. 构建返回
+      // 10. 构建返回
       let header = `📄 文件：${filepath}\n`;
-      header += `大小：${(stat.size / 1024).toFixed(1)}KB | 行数：${totalLines}\n`;
+      header += `编码：${encoding} | 大小：${(buffer.length / 1024).toFixed(1)}KB | 行数：${totalLines}\n`;
 
       if (offset > 0 || end < totalLines) {
         header += `显示第 ${offset + 1}-${end} 行（共 ${totalLines} 行）\n`;

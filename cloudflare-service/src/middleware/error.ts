@@ -3,6 +3,9 @@
  *
  * 将内部错误映射为 Gateway 统一响应格式：
  * { ok: false, error: { code, message }, meta: { request_id, degraded, warnings } }
+ *
+ * 注意：Hono 4 的 onError 处理器中 c.json() 不可用，
+ * 必须返回原生 Response 对象。
  */
 
 import { HTTPException } from "hono/http-exception";
@@ -24,14 +27,22 @@ function isAIError(error: any): boolean {
   return error?.message?.includes("AI") || error?.message?.includes("workers-ai");
 }
 
-// 默认错误处理器
-export function errorHandler(c: any, error: any) {
-  const requestId = c.var.requestId || generateRequestId();
+// 构建 JSON 响应
+function jsonResponse(body: Record<string, unknown>, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+// 默认错误处理器 — Hono 4 兼容（参数顺序: error, context）
+export function errorHandler(error: any, c: any) {
+  const requestId = c.get?.("requestId") || `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const warnings: string[] = [];
 
   // HTTPException — Hono 原生异常
   if (error instanceof HTTPException) {
-    return c.json(
+    return jsonResponse(
       {
         ok: false,
         data: null,
@@ -45,7 +56,7 @@ export function errorHandler(c: any, error: any) {
   // D1 错误
   if (error?.code && D1_ERROR_MAP[error.code]) {
     const code = D1_ERROR_MAP[error.code];
-    return c.json(
+    return jsonResponse(
       {
         ok: false,
         data: null,
@@ -59,7 +70,7 @@ export function errorHandler(c: any, error: any) {
   // Vectorize 不可用 — 返回降级响应
   if (isVectorizeError(error)) {
     warnings.push("Vectorize unavailable, degraded to SQL");
-    return c.json(
+    return jsonResponse(
       {
         ok: false,
         data: null,
@@ -73,7 +84,7 @@ export function errorHandler(c: any, error: any) {
   // Workers AI 不可用
   if (isAIError(error)) {
     warnings.push("Embedding service unavailable, degraded to SQL");
-    return c.json(
+    return jsonResponse(
       {
         ok: false,
         data: null,
@@ -86,7 +97,7 @@ export function errorHandler(c: any, error: any) {
 
   // 未知错误
   console.error("Unhandled gateway error:", error);
-  return c.json(
+  return jsonResponse(
     {
       ok: false,
       data: null,
@@ -95,8 +106,4 @@ export function errorHandler(c: any, error: any) {
     },
     500,
   );
-}
-
-function generateRequestId(): string {
-  return `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }

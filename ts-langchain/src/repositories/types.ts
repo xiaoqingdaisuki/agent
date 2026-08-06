@@ -167,12 +167,13 @@ export interface MemoryRepository {
 
   /** 更新记忆 */
   update(
+    userId: string,
     memoryId: string,
     changes: { content?: string; category?: string; importance?: number },
   ): Promise<MemoryData | null>;
 
   /** 删除记忆 */
-  delete(memoryId: string): Promise<boolean>;
+  delete(userId: string, memoryId: string): Promise<boolean>;
 
   /** 清空用户所有记忆 */
   clearUser(userId: string): Promise<number>;

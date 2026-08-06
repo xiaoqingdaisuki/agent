@@ -5,7 +5,7 @@ Tests for file.read Tool
 import os
 import tempfile
 import pytest
-from src.tools.file_reader import (
+from src.tools.file_read import (
     file_read,
     _DESCRIPTOR,
     _resolve_safe_path,

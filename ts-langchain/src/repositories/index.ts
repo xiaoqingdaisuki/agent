@@ -74,9 +74,8 @@ class CloudflareProfileRepository implements ProfileRepository {
     name: string = "",
     preferences?: Record<string, unknown>,
   ): Promise<UserProfileData | null> {
-    // 先检查 profile 是否存在
-    const existing = await this._client.getProfile(userId);
-    if (!existing) return null;
+    // putProfile 内部已处理 getOrCreate，直接调用即可
+    // 如果 profile 不存在，putProfile 会创建它（符合 update-or-create 语义）
     const data = await this._client.putProfile(userId, name, preferences);
     return data as unknown as UserProfileData | null;
   }
@@ -193,15 +192,16 @@ class CloudflareMemoryRepository implements MemoryRepository {
   }
 
   async update(
+    userId: string,
     memoryId: string,
     changes: { content?: string; category?: string; importance?: number },
   ): Promise<MemoryData | null> {
-    const data = await this._client.updateMemory(memoryId, changes);
+    const data = await this._client.updateMemory(userId, memoryId, changes);
     return data as unknown as MemoryData | null;
   }
 
-  async delete(memoryId: string): Promise<boolean> {
-    return this._client.deleteMemory(memoryId);
+  async delete(userId: string, memoryId: string): Promise<boolean> {
+    return this._client.deleteMemory(userId, memoryId);
   }
 
   async clearUser(userId: string): Promise<number> {
@@ -209,7 +209,7 @@ class CloudflareMemoryRepository implements MemoryRepository {
     let count = 0;
     const memList = memories as any[];
     for (const m of memList) {
-      const deleted = await this._client.deleteMemory(m.id);
+      const deleted = await this._client.deleteMemory(userId, m.id);
       if (deleted) count++;
     }
     return count;

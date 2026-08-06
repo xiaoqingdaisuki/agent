@@ -13,12 +13,15 @@
  * - 缓存键使用 query 的小写规范化形式，保证命中一致性
  * - stale 缓存允许在上游不可用时返回降级结果，而非硬失败
  * - resetSearchStateForTests 暴露内部状态，便于单元测试隔离
+ * - Mutex 保护共享状态（缓存、电路 breaker），对齐 Python threading.Lock
  */
 
 import { DynamicStructuredTool } from "langchain/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";
+
+// ============ 类型定义 ============
 
 export interface SearchResultItem {
   title: string;
@@ -45,6 +48,7 @@ interface SearchSettings {
   cacheTtlMs: number;
   staleTtlMs: number;
   searchDepth: "basic" | "advanced";
+  maxAttempts: number;
 }
 
 interface CacheEntry {
@@ -58,8 +62,18 @@ interface CircuitState {
   openUntil: number;
 }
 
+interface InFlightSearch {
+  /** 结果就绪时 resolve，多个等待者共享同一个 Promise */
+  done: Promise<SearchOutcome>;
+  /** resolve 函数 — 由执行者调用以通知所有等待者 */
+  resolve: (outcome: SearchOutcome) => void;
+  outcome: SearchOutcome | null;
+}
+
+// ============ 共享状态 ============
+
 const cache = new Map<string, CacheEntry>();
-const inFlight = new Map<string, Promise<SearchOutcome>>();
+const inFlight = new Map<string, InFlightSearch>();
 let circuit: CircuitState = { failures: 0, openUntil: 0 };
 const CIRCUIT_FAILURE_THRESHOLD = 3;
 const CIRCUIT_COOLDOWN_MS = 30_000;
@@ -67,6 +81,11 @@ const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 class NonRetryableSearchError extends Error {}
 
+// ============ 辅助函数 ============
+
+/**
+ * 将字符串安全地限制在整数范围内
+ */
 function boundedInteger(
   raw: string | undefined,
   fallback: number,
@@ -78,6 +97,47 @@ function boundedInteger(
     ? Math.min(max, Math.max(min, Math.trunc(parsed)))
     : fallback;
 }
+
+/**
+ * Mutex — 保护共享状态的并发访问
+ *
+ * TS 单线程事件循环中，await 会交出控制权，可能导致状态不一致。
+ * 使用显式 Mutex 确保关键区段原子性，对齐 Python 的 threading.Lock。
+ */
+class Mutex {
+  private _locked = false;
+  private _waiters: Array<(unlock: () => void) => void> = [];
+
+  async lock(): Promise<() => void> {
+    if (!this._locked) {
+      this._locked = true;
+      return () => this._unlock();
+    }
+
+    // 等待当前持有者释放锁
+    const release = await new Promise<() => void>((resolve) => {
+      this._waiters.push(resolve);
+    });
+
+    // 被唤醒后重新尝试获取
+    if (this._locked) {
+      return this.lock();
+    }
+    this._locked = true;
+    return () => this._unlock();
+  }
+
+  private _unlock(): void {
+    const next = this._waiters.shift();
+    if (next) {
+      next(() => this._unlock());
+    } else {
+      this._locked = false;
+    }
+  }
+}
+
+const stateMutex = new Mutex();
 
 function getSettings(): SearchSettings {
   return {
@@ -97,6 +157,7 @@ function getSettings(): SearchSettings {
       1_000,
     searchDepth:
       process.env.TAVILY_SEARCH_DEPTH === "advanced" ? "advanced" : "basic",
+    maxAttempts: boundedInteger(process.env.SEARCH_MAX_ATTEMPTS, 1, 1, 2),
   };
 }
 
@@ -129,12 +190,14 @@ function normalizeUrl(rawUrl: string): string | null {
   }
 }
 
+// ============ HTTP 请求 ============
+
 // 向 Tavily API 发送搜索请求并返回原始响应
 async function fetchTavily(
   settings: SearchSettings,
   query: string,
 ): Promise<Response> {
-  const attempts = 2;
+  const attempts = settings.maxAttempts;
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
@@ -207,14 +270,16 @@ async function searchTavily(
   return results;
 }
 
+// ============ 搜索执行（mutex 保护共享状态） ============
+
 // 执行搜索，处理缓存、熔断和重试逻辑
 async function executeSearch(
   query: string,
   cacheKey: string,
   settings: SearchSettings,
+  cached: CacheEntry | undefined,
 ): Promise<SearchOutcome> {
   const now = Date.now();
-  const cached = cache.get(cacheKey);
   if (!settings.apiKey) {
     return {
       results: [],
@@ -224,16 +289,24 @@ async function executeSearch(
       stale: false,
     };
   }
-  if (circuit.openUntil > now) {
-    if (cached && cached.staleUntil > now)
-      return { ...cached.outcome, cached: true, stale: true };
-    return {
-      results: [],
-      providers: [],
-      failedProviders: ["tavily:circuit_open"],
-      cached: false,
-      stale: false,
-    };
+
+  // mutex 保护电路 breaker 状态读取
+  const release = await stateMutex.lock();
+  try {
+    if (circuit.openUntil > now) {
+      if (cached && cached.staleUntil > now) {
+        return { ...cached.outcome, cached: true, stale: true };
+      }
+      return {
+        results: [],
+        providers: [],
+        failedProviders: ["tavily:circuit_open"],
+        cached: false,
+        stale: false,
+      };
+    }
+  } finally {
+    release();
   }
 
   const startedAt = Date.now();
@@ -241,7 +314,7 @@ async function executeSearch(
     const results = await searchTavily(query, settings);
     if (results.length === 0)
       throw new Error("Tavily returned an empty result set");
-    circuit = { failures: 0, openUntil: 0 };
+
     const outcome: SearchOutcome = {
       results: results.slice(0, settings.maxResults),
       providers: ["tavily"],
@@ -249,11 +322,20 @@ async function executeSearch(
       cached: false,
       stale: false,
     };
-    cache.set(cacheKey, {
-      outcome,
-      freshUntil: now + settings.cacheTtlMs,
-      staleUntil: now + settings.cacheTtlMs + settings.staleTtlMs,
-    });
+
+    // mutex 保护缓存写入和电路 breaker 重置
+    const release2 = await stateMutex.lock();
+    try {
+      circuit = { failures: 0, openUntil: 0 };
+      cache.set(cacheKey, {
+        outcome,
+        freshUntil: now + settings.cacheTtlMs,
+        staleUntil: now + settings.cacheTtlMs + settings.staleTtlMs,
+      });
+    } finally {
+      release2();
+    }
+
     console.info(
       JSON.stringify({
         event: "web_search_succeeded",
@@ -264,10 +346,18 @@ async function executeSearch(
     );
     return outcome;
   } catch (error) {
-    circuit.failures += 1;
-    if (circuit.failures >= CIRCUIT_FAILURE_THRESHOLD)
-      circuit.openUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
     const reason = error instanceof Error ? error.message : "unknown error";
+
+    // mutex 保护电路 breaker 递增
+    const release3 = await stateMutex.lock();
+    try {
+      circuit.failures += 1;
+      if (circuit.failures >= CIRCUIT_FAILURE_THRESHOLD)
+        circuit.openUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
+    } finally {
+      release3();
+    }
+
     console.warn(
       JSON.stringify({
         event: "web_search_failed",
@@ -277,8 +367,16 @@ async function executeSearch(
         consecutive_failures: circuit.failures,
       }),
     );
-    if (cached && cached.staleUntil > now)
-      return { ...cached.outcome, cached: true, stale: true };
+
+    // mutex 保护缓存读取
+    const release4 = await stateMutex.lock();
+    try {
+      if (cached && cached.staleUntil > now)
+        return { ...cached.outcome, cached: true, stale: true };
+    } finally {
+      release4();
+    }
+
     return {
       results: [],
       providers: [],
@@ -289,23 +387,81 @@ async function executeSearch(
   }
 }
 
-export async function multiSourceSearch(query: string): Promise<SearchOutcome> {
+// ============ In-Flight 去重 ============
+
+/**
+ * 创建一个带 Event 信号的 in-flight 条目。
+ * 多个并发请求共享同一个 Promise，任一请求完成后所有等待者同时收到结果。
+ * 对齐 Python 的 InFlightSearch(event=Event(), result=None) 模式。
+ */
+function createInFlightEntry(
+  task: Promise<SearchOutcome>,
+): InFlightSearch {
+  let resolveEntry: (outcome: SearchOutcome) => void = () => {};
+  const done = task.then((outcome) => {
+    resolveEntry(outcome);
+    return outcome;
+  });
+
+  return {
+    done,
+    resolve: (outcome: SearchOutcome) => resolveEntry(outcome),
+    outcome: null,
+  };
+}
+
+// 多源搜索入口：处理缓存、去重和并发合并
+export async function multiSourceSearch(
+  query: string,
+): Promise<SearchOutcome> {
   const normalizedQuery = query.trim().replace(/\s+/g, " ");
   const cacheKey = normalizedQuery.toLocaleLowerCase();
   const settings = getSettings();
   const now = Date.now();
-  const cached = cache.get(cacheKey);
-  if (cached && cached.freshUntil > now)
-    return { ...cached.outcome, cached: true, stale: false };
 
-  const running = inFlight.get(cacheKey);
-  if (running) return running;
-  const request = executeSearch(normalizedQuery, cacheKey, settings).finally(
-    () => inFlight.delete(cacheKey),
-  );
-  inFlight.set(cacheKey, request);
-  return request;
+  // mutex 保护缓存读取和 in-flight map 操作
+  const release = await stateMutex.lock();
+  let entry: InFlightSearch | undefined;
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached && cached.freshUntil > now) {
+      return { ...cached.outcome, cached: true, stale: false };
+    }
+
+    // 检查是否有相同查询的在飞请求
+    entry = inFlight.get(cacheKey);
+    if (entry) {
+      // 已有请求在飞：等待其完成（对齐 Python InFlightSearch.event.wait）
+      return entry.done;
+    }
+
+    // 创建新的 in-flight 条目并注册
+    entry = createInFlightEntry(
+      executeSearch(normalizedQuery, cacheKey, settings, cached),
+    );
+    inFlight.set(cacheKey, entry);
+  } finally {
+    release();
+  }
+
+  // 不在锁内 await，避免阻塞其他请求
+  try {
+    return await entry.done;
+  } finally {
+    // 清理 in-flight 条目
+    const release2 = await stateMutex.lock();
+    try {
+      const current = inFlight.get(cacheKey);
+      if (current === entry) {
+        inFlight.delete(cacheKey);
+      }
+    } finally {
+      release2();
+    }
+  }
 }
+
+// ============ 格式化输出 ============
 
 export function searchResultsToText(
   outcome: SearchOutcome,
@@ -337,6 +493,8 @@ export function resetSearchStateForTests(): void {
   inFlight.clear();
   circuit = { failures: 0, openUntil: 0 };
 }
+
+// ============ Tool 定义 ============
 
 export const webSearchInputSchema = z.object({
   query: z.string().trim().min(1).max(400).describe("简洁明确的搜索关键词"),

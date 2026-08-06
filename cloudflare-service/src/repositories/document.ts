@@ -232,7 +232,12 @@ export async function createDocument(
       }
     } catch (err) {
       console.error("Vectorize upsert failed, creating compensation job:", err);
-      await createIndexJob(db, doc.id, "upsert", "document_chunk", err);
+      // 补偿任务可能因 FK 约束失败（document_id 不是 memory_id），静默降级
+      try {
+        await createIndexJob(db, doc.id, "upsert", "document_chunk", err);
+      } catch {
+        // 忽略补偿任务创建失败，文档和块已持久化
+      }
       document.status = "failed";
       await db
         .prepare("UPDATE documents SET status = ? WHERE id = ?")

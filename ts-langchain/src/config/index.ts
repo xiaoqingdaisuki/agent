@@ -41,6 +41,37 @@ const envSchema = z.object({
     .default(30_000),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(2).default(1),
   MAX_AGENT_ITERATIONS: z.coerce.number().int().min(1).max(8).default(6),
+
+  // ============ Anthropic 配置 ============
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_MODEL: z.string().default("claude-3-5-haiku-20241022"),
+
+  // ============ Tavily 搜索配置 ============
+  TAVILY_API_KEY: z.string().optional(),
+  TAVILY_SEARCH_DEPTH: z.string().default("basic"),
+
+  // ============ 搜索运行时配置 ============
+  SEARCH_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(15_000)
+    .default(4_500),
+  SEARCH_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(2).default(1),
+  SEARCH_MAX_RESULTS: z.coerce.number().int().min(1).max(20).default(8),
+  SEARCH_CACHE_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(3_600)
+    .default(30),
+  SEARCH_STALE_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(86_400)
+    .default(600),
+
   PORT: z.coerce.number().default(6001),
   CORS_ORIGIN: z
     .string()

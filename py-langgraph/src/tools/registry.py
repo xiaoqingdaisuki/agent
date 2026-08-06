@@ -15,10 +15,10 @@ from src.tools.contracts import ToolDescriptor, ToolCategory
 from src.tools.runtime.executor import ToolExecutor, invoke_tool, get_audit_log, clear_audit_log
 from src.tools.weather import get_weather, _DESCRIPTOR as WEATHER_DESCRIPTOR
 from src.tools.search import web_search, _DESCRIPTOR as SEARCH_DESCRIPTOR
-from src.tools.fetcher import web_read, _DESCRIPTOR as READ_DESCRIPTOR
+from src.tools.web_read import web_read, _DESCRIPTOR as READ_DESCRIPTOR
 from src.tools.calculator import calculator, DESCRIPTOR as CALC_DESCRIPTOR
 from src.tools.knowledge import knowledge_search, _DESCRIPTOR as KNOWLEDGE_DESCRIPTOR
-from src.tools.file_reader import file_read, _DESCRIPTOR as FILE_READ_DESCRIPTOR
+from src.tools.file_read import file_read, _DESCRIPTOR as FILE_READ_DESCRIPTOR
 from src.tools.memory_session import (
     memory_session_search,
     _SESSION_DESCRIPTOR as SESSION_DESCRIPTOR,
