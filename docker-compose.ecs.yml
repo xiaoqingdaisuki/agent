@@ -33,6 +33,8 @@ x-agent-environment: &agent-environment
 services:
   ts-agent:
     <<: *agent-common
+    environment:
+      <<: *agent-environment
     profiles: ["typescript"]
     build:
       context: ./ts-langchain

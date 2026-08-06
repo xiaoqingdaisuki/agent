@@ -245,9 +245,19 @@ export async function registerV1Routes(app: FastifyInstance) {
               "处理请求时发生错误",
               500,
             );
-      reply.raw.write(`data: ${JSON.stringify(businessError.toJSON())}\n\n`);
+      try {
+        reply.raw.write(
+          `data: ${JSON.stringify(businessError.toJSON())}\n\n`,
+        );
+      } catch {
+        // raw response already closed / unreachable — nothing to write
+      }
     } finally {
-      reply.raw.write("data: [DONE]\n\n");
+      try {
+        reply.raw.write("data: [DONE]\n\n");
+      } catch {
+        // ignore write errors on teardown
+      }
       reply.raw.end();
     }
   });
