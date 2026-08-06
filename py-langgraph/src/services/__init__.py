@@ -127,15 +127,44 @@ _conversations: dict[str, Conversation] = {}
 
 
 class ConversationService:
-    # 创建新会话并注册到内存存储
+    # 创建新会话并注册到内存存储，同时持久化到 D1
     @staticmethod
-    def create(title: str, mode: str = "chat") -> Conversation:
+    def create(title: str, mode: str = "chat", user_id: str = "") -> Conversation:
         conv = Conversation(title, mode)
         _conversations[conv.id] = conv
+
+        # 持久化到 D1
+        if user_id:
+            try:
+                from src.repositories import get_repositories
+                get_repositories().create_conversation(user_id, title, mode)
+            except Exception:
+                pass
+
         return conv
 
     @staticmethod
-    # 根据 ID 获取会话详情
+    # 确保会话存在于 D1，不存在则创建；同时注册到内存
+    def ensure(conv_id: str, user_id: str = "", title: str = "New Chat", mode: str = "chat") -> Conversation:
+        # 先检查 D1
+        if user_id:
+            try:
+                from src.repositories import get_repositories
+                existing = get_repositories().get_conversation(conv_id)
+                if not existing:
+                    get_repositories().create_conversation(user_id, title, mode)
+            except Exception:
+                pass
+
+        # 注册到内存
+        if conv_id not in _conversations:
+            conv = Conversation(title, mode)
+            conv.id = conv_id
+            _conversations[conv_id] = conv
+        return _conversations[conv_id]
+
+    @staticmethod
+    # 根据 ID 获取会话详情，不存在时返回 None
     def get(conv_id: str) -> Conversation | None:
         return _conversations.get(conv_id)
 
@@ -149,33 +178,68 @@ class ConversationService:
         )
 
     @staticmethod
-    # 删除会话及其关联的消息和命令状态
+    # 删除会话及其关联的消息和命令状态，同时从 D1 删除
     def delete(conv_id: str) -> bool:
         if conv_id in _conversations:
             from src.commands import clear_agent_command_state
 
             clear_agent_command_state(conv_id)
             del _conversations[conv_id]
+
+            # 从 D1 删除（忽略错误）
+            try:
+                from src.repositories import get_repositories
+                get_repositories().delete_conversation(conv_id)
+            except Exception:
+                pass
+
             return True
         return False
 
     @staticmethod
-    # 向会话追加一条用户消息
-    def append_user_message(conv_id: str, content: str) -> Message:
+    # 向会话追加一条用户消息，同时持久化到 D1
+    def append_user_message(conv_id: str, content: str, user_id: str = "") -> Message:
         conv = _conversations.get(conv_id)
         if not conv:
             raise BusinessError(BusinessErrorCode.NOT_FOUND, "Conversation not found", 404)
         conv.message_count += 1
         message = Message("user", content)
         conv.messages.append(message)
+
+        # 持久化到 D1
+        try:
+            from src.repositories import get_repositories
+            repos = get_repositories()
+            repos.create_message_batch(conv_id, user_id, [{
+                "id": message.id,
+                "role": "user",
+                "content": content,
+                "created_at": message.created_at,
+            }])
+        except Exception:
+            pass
+
         return message
 
     @staticmethod
-    # 向会话追加一条助手消息
-    def append_assistant_message(conv_id: str, message: Message) -> None:
+    # 向会话追加一条助手消息，同时持久化到 D1
+    def append_assistant_message(conv_id: str, message: Message, user_id: str = "") -> None:
         conv = _conversations.get(conv_id)
         if conv:
             conv.messages.append(message)
+
+        # 持久化到 D1
+        try:
+            from src.repositories import get_repositories
+            repos = get_repositories()
+            repos.create_message_batch(conv_id, user_id, [{
+                "id": message.id,
+                "role": "assistant",
+                "content": message.content,
+                "created_at": message.created_at,
+            }])
+        except Exception:
+            pass
 
     @staticmethod
     # 获取会话的全部消息列表
@@ -357,7 +421,7 @@ class AgentService:
             command = execute_agent_command(content, conversation_id)
             if command:
                 reply = Message("assistant", command.reply)
-                ConversationService.append_assistant_message(conversation_id, reply)
+                ConversationService.append_assistant_message(conversation_id, reply, user_id or "")
                 return reply
 
             if user_id:
@@ -411,7 +475,7 @@ class AgentService:
                 reply_content = maybe_append_continuation_hint(reply_content, finish_reason)
 
             reply = Message("assistant", reply_content)
-            ConversationService.append_assistant_message(conversation_id, reply)
+            ConversationService.append_assistant_message(conversation_id, reply, user_id or "")
 
             # 记录问答历史 + 提取新记忆
             if user_id:
@@ -469,6 +533,7 @@ class AgentService:
                 ConversationService.append_assistant_message(
                     conversation_id,
                     Message("assistant", command.reply),
+                    user_id or "",
                 )
                 yield {"type": "text", "text": command.reply}
                 return
@@ -532,6 +597,7 @@ class AgentService:
                 ConversationService.append_assistant_message(
                     conversation_id,
                     Message("assistant", final_answer),
+                    user_id or "",
                 )
 
             # Record Q&A + extract memories
@@ -549,6 +615,7 @@ class AgentService:
                 ConversationService.append_assistant_message(
                     conversation_id,
                     Message("assistant", partial),
+                    user_id or "",
                 )
                 yield {"type": "text", "text": partial, "partial": True}
             else:

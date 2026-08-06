@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { createToolAgent } from "../../agents/tool-agent.js";
 import { appendMessage, getHistory } from "../../memory/conversation.js";
+import { ConversationService } from "../../services/index.js";
 import { MemoryService, ProfileService } from "../../profile/service.js";
 import {
   AIMessage,
@@ -25,6 +26,13 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       }
 
       const threadId = thread_id || crypto.randomUUID();
+
+      // 确保会话记录存在于 D1（前端传入的 thread_id 需关联 conversations 表）
+      try {
+        await ConversationService.ensure(threadId, user_id);
+      } catch {
+        // 会话创建失败不影响流式响应
+      }
 
       const command = executeAgentCommand(message, threadId);
       if (command) {

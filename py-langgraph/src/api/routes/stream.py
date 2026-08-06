@@ -26,6 +26,14 @@ async def stream(request: StreamRequest):
     from fastapi.responses import StreamingResponse
 
     thread_id = request.thread_id or str(uuid4())
+
+    # 确保会话记录存在于 D1（前端传入的 thread_id 需关联 conversations 表）
+    try:
+        from src.services import ConversationService
+        ConversationService.ensure(thread_id, request.user_id or "")
+    except Exception:
+        pass
+
     command = execute_agent_command(request.message, thread_id)
 
     if command:
@@ -118,6 +126,7 @@ async def stream(request: StreamRequest):
                 ConversationService.append_assistant_message(
                     thread_id,
                     type("Message", (), {"role": "assistant", "content": maybe_append_continuation_hint(full_answer)})(),
+                    request.user_id or "",
                 )
         except TimeoutError:
             if full_answer:
@@ -127,6 +136,7 @@ async def stream(request: StreamRequest):
                 ConversationService.append_assistant_message(
                     thread_id,
                     type("Message", (), {"role": "assistant", "content": partial})(),
+                    request.user_id or "",
                 )
                 yield f"data: {json.dumps({'text': partial, 'partial': True}, ensure_ascii=False)}\n\n"
             else:
@@ -143,6 +153,7 @@ async def stream(request: StreamRequest):
                 ConversationService.append_assistant_message(
                     thread_id,
                     type("Message", (), {"role": "assistant", "content": partial})(),
+                    request.user_id or "",
                 )
                 yield f"data: {json.dumps({'text': partial, 'partial': True}, ensure_ascii=False)}\n\n"
             else:

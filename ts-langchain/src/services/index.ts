@@ -22,6 +22,7 @@ import {
   HistoryService,
 } from "../profile/service.js";
 import { CloudflareMemoryClient } from "../clients/memory_gateway.js";
+import { getRepositories } from "../repositories/index.js";
 import {
   AIMessage,
   HumanMessage,
@@ -195,11 +196,12 @@ const conversations = new Map<string, Conversation>();
 const conversationMessages = new Map<string, Message[]>();
 
 export class ConversationService {
-  // 创建新会话，分配唯一 ID 并初始化消息列表
-  static create(
+  // 创建新会话，分配唯一 ID 并初始化消息列表，同时持久化到 D1
+  static async create(
     title: string,
     mode: "chat" | "knowledge" | "mixed" = "chat",
-  ): Conversation {
+    userId?: string,
+  ): Promise<Conversation> {
     const id = crypto.randomUUID();
     const conversation: Conversation = {
       id,
@@ -210,7 +212,54 @@ export class ConversationService {
     };
     conversations.set(id, conversation);
     conversationMessages.set(id, []);
+
+    // 持久化到 D1
+    if (userId) {
+      try {
+        const repos = getRepositories();
+        await repos.conversation.create(userId, title, mode);
+      } catch {
+        // D1 持久化失败不影响内存中的会话
+      }
+    }
+
     return conversation;
+  }
+
+  // 注册一个已存在的会话 ID（前端传入的 thread_id），同步到内存和 D1
+  static async ensure(
+    conversationId: string,
+    userId?: string,
+    title: string = "New Chat",
+    mode: "chat" | "knowledge" | "mixed" = "chat",
+  ): Promise<Conversation> {
+    // 检查 D1 是否已有记录
+    if (userId) {
+      try {
+        const repos = getRepositories();
+        const existing = await repos.conversation.get(conversationId);
+        if (!existing) {
+          await repos.conversation.create(userId, title, mode);
+        }
+      } catch {
+        // D1 检查/创建失败不影响内存
+      }
+    }
+
+    // 注册到内存
+    if (!conversations.has(conversationId)) {
+      const conversation: Conversation = {
+        id: conversationId,
+        title,
+        mode,
+        createdAt: new Date().toISOString(),
+        messageCount: 0,
+      };
+      conversations.set(conversationId, conversation);
+      conversationMessages.set(conversationId, []);
+    }
+
+    return conversations.get(conversationId)!;
   }
 
   // 根据 ID 获取会话，不存在时返回 undefined
@@ -226,12 +275,22 @@ export class ConversationService {
     );
   }
 
-  // 删除会话及其关联的消息和命令状态
-  static delete(id: string): boolean {
+  // 删除会话及其关联的消息和命令状态，同时从 D1 删除
+  static async delete(id: string): Promise<boolean> {
     clearHistory(id);
     clearAgentCommandState(id);
     conversationMessages.delete(id);
-    return conversations.delete(id);
+    const deleted = conversations.delete(id);
+
+    // 从 D1 删除（忽略错误）
+    try {
+      const repos = getRepositories();
+      await repos.conversation.delete(id);
+    } catch {
+      // 非阻塞
+    }
+
+    return deleted;
   }
 
   // 向会话追加一条用户消息，增加消息计数

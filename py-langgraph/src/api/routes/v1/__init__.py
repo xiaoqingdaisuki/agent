@@ -29,6 +29,7 @@ router = APIRouter()
 class CreateConversationRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=100)
     mode: str = Field(default="chat", pattern="^(chat|knowledge|mixed)$")
+    user_id: str | None = Field(None, description="用户标识")
 
 
 class SendMessageRequest(BaseModel):
@@ -85,7 +86,7 @@ async def health():
 # 创建新会话
 async def create_conversation(req: CreateConversationRequest):
     try:
-        conv = ConversationService.create(req.title, req.mode)
+        conv = ConversationService.create(req.title, req.mode, req.user_id or "")
         return conv.to_dict()
     except Exception:
         raise HTTPException(
@@ -143,6 +144,12 @@ async def get_messages(conv_id: str):
 # 向会话发送用户消息并获取 AI 回复
 async def send_message(conv_id: str, req: SendMessageRequest):
     try:
+        # 确保会话存在于 D1
+        try:
+            ConversationService.ensure(conv_id, req.user_id or "")
+        except Exception:
+            pass
+
         conv = ConversationService.get(conv_id)
         if not conv:
             raise HTTPException(
@@ -150,7 +157,7 @@ async def send_message(conv_id: str, req: SendMessageRequest):
                 detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
             )
 
-        ConversationService.append_user_message(conv_id, req.content)
+        ConversationService.append_user_message(conv_id, req.content, req.user_id or "")
         reply = await AgentService.chat(conv_id, req.content, user_id=req.user_id)
 
         return reply.to_dict()
@@ -168,6 +175,12 @@ async def send_message(conv_id: str, req: SendMessageRequest):
 @router.post("/conversations/{conv_id}/messages/stream")
 # 向会话发送消息并流式返回 AI 回复
 async def stream_message(conv_id: str, req: SendMessageRequest):
+    # 确保会话记录存在于 D1（前端可能直接请求已有的 thread_id）
+    try:
+        ConversationService.ensure(conv_id, req.user_id or "")
+    except Exception:
+        pass
+
     conversation = ConversationService.get(conv_id)
     if not conversation:
         raise HTTPException(
@@ -175,7 +188,7 @@ async def stream_message(conv_id: str, req: SendMessageRequest):
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
 
-    ConversationService.append_user_message(conv_id, req.content)
+    ConversationService.append_user_message(conv_id, req.content, req.user_id or "")
 
     async def event_generator():
         metadata = json.dumps({"conversation_id": conv_id}, ensure_ascii=False)

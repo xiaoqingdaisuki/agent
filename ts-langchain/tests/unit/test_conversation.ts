@@ -27,8 +27,8 @@ describe("conversation history", () => {
 });
 
 describe("ConversationService message history", () => {
-  it("stores and clears API messages without duplicating agent history", () => {
-    const conversation = ConversationService.create("history");
+  it("stores and clears API messages without duplicating agent history", async () => {
+    const conversation = await ConversationService.create("history");
     ConversationService.appendUserMessage(conversation.id, "hello");
     ConversationService.appendAssistantMessage(conversation.id, {
       id: "assistant-1",

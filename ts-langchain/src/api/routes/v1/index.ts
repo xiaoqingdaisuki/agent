@@ -85,7 +85,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         });
       }
 
-      const conv = ConversationService.create(title, mode);
+      const conv = await ConversationService.create(title, mode);
       return reply.status(201).send(serializeConversation(conv));
     } catch (error: any) {
       if (error instanceof BusinessError) {
@@ -120,7 +120,7 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>(
     "/conversations/:id",
     async (request, reply) => {
-      const deleted = ConversationService.delete(request.params.id);
+      const deleted = await ConversationService.delete(request.params.id);
       if (!deleted) {
         return reply.status(404).send({
           error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
@@ -150,8 +150,17 @@ export async function registerV1Routes(app: FastifyInstance) {
     Body: { content: string; user_id?: string };
   }>("/conversations/:id/messages", async (request, reply) => {
     try {
-      const { content } = request.body;
-      const conv = ConversationService.get(request.params.id);
+      const { content, user_id } = request.body;
+      const convId = request.params.id;
+
+      // 确保会话存在于 D1
+      try {
+        await ConversationService.ensure(convId, user_id);
+      } catch {
+        // 非阻塞
+      }
+
+      const conv = ConversationService.get(convId);
 
       if (!conv) {
         return reply.status(404).send({
@@ -167,11 +176,11 @@ export async function registerV1Routes(app: FastifyInstance) {
         });
       }
 
-      ConversationService.appendUserMessage(request.params.id, content);
+      ConversationService.appendUserMessage(convId, content);
       const assistantMessage = await AgentService.chat(
-        request.params.id,
+        convId,
         content,
-        request.body.user_id,
+        user_id,
       );
 
       return reply.status(200).send(serializeMessage(assistantMessage));
@@ -193,7 +202,16 @@ export async function registerV1Routes(app: FastifyInstance) {
     Body: { content: string; user_id?: string };
   }>("/conversations/:id/messages/stream", async (request, reply) => {
     const { content, user_id } = request.body;
-    const conversation = ConversationService.get(request.params.id);
+    const convId = request.params.id;
+
+    // 确保会话记录存在于 D1（前端可能直接请求已有的 thread_id）
+    try {
+      await ConversationService.ensure(convId, user_id);
+    } catch {
+      // 会话创建失败不影响流式响应
+    }
+
+    const conversation = ConversationService.get(convId);
     if (!conversation) {
       return reply.status(404).send({
         error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
@@ -208,7 +226,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       });
     }
 
-    ConversationService.appendUserMessage(request.params.id, content);
+    ConversationService.appendUserMessage(convId, content);
     reply.hijack();
     reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
@@ -216,12 +234,12 @@ export async function registerV1Routes(app: FastifyInstance) {
     reply.raw.setHeader("X-Accel-Buffering", "no");
     reply.raw.flushHeaders();
     reply.raw.write(
-      `data: ${JSON.stringify({ conversation_id: request.params.id })}\n\n`,
+      `data: ${JSON.stringify({ conversation_id: convId })}\n\n`,
     );
 
     try {
       for await (const event of AgentService.chatStream(
-        request.params.id,
+        convId,
         content,
         user_id,
       )) {
