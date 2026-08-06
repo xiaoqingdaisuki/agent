@@ -70,6 +70,7 @@ export type AgentStreamEvent =
       type: "tool";
       toolName: string;
       status: "started" | "completed" | "failed";
+      callId: string;
       durationMs?: number;
     };
 
@@ -477,6 +478,7 @@ export class AgentService {
           progress.push({
             type: "tool",
             toolName: event.toolName,
+            callId: event.callId,
             status: event.type,
             durationMs: event.durationMs,
           });

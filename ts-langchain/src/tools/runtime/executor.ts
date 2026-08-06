@@ -187,6 +187,7 @@ interface ToolRuntimeContext {
   context: ToolCallContext;
   budget: BudgetState;
   onToolProgress?: (event: ToolProgressEvent) => void;
+  seenMemorySaves?: Set<string>;
 }
 
 const runtimeStorage = new AsyncLocalStorage<ToolRuntimeContext>();
@@ -405,7 +406,7 @@ export async function invokeTool<TInput, TOutput>(
 
   // 4. 执行（带超时）
   let rawOutput: TOutput;
-  reportToolProgress({ type: "started", toolName });
+  reportToolProgress({ type: "started", toolName, callId });
 
   try {
     const timeoutMs = executor.descriptor.timeout_ms ?? 10_000;
@@ -440,7 +441,7 @@ export async function invokeTool<TInput, TOutput>(
     });
 
     const durationMs = Date.now() - startTime;
-    reportToolProgress({ type: "failed", toolName, durationMs });
+    reportToolProgress({ type: "failed", toolName, callId, durationMs });
     return {
       ok: false,
       data: null,
@@ -479,7 +480,7 @@ export async function invokeTool<TInput, TOutput>(
     request_id: context.request_id,
     trace_id: context.trace_id,
   });
-  reportToolProgress({ type: "completed", toolName, durationMs });
+  reportToolProgress({ type: "completed", toolName, callId, durationMs });
 
   return {
     ok: true,
@@ -524,6 +525,7 @@ export function createToolCallScope(
     context,
     budget: createBudgetState(),
     onToolProgress: options.onToolProgress,
+    seenMemorySaves: new Set<string>(),
   };
   return {
     run<T>(callback: () => T): T {
@@ -569,6 +571,19 @@ export function wrapToolWithRuntime(
         input.conversation_id = context.conversation_id;
       }
       scopedInput = input;
+    }
+
+    // 去重：同一轮中 memory_user_save 相同内容只执行一次
+    if (descriptor.name === "memory_user_save") {
+      const store = runtimeStorage.getStore();
+      if (store) {
+        const contentKey = String((scopedInput as Record<string, unknown>).content ?? "");
+        if (!store.seenMemorySaves) store.seenMemorySaves = new Set<string>();
+        if (store.seenMemorySaves.has(contentKey)) {
+          return "🧠 记忆已存在（内容重复），未重复保存。";
+        }
+        store.seenMemorySaves.add(contentKey);
+      }
     }
 
     const executor: ToolExecutor<unknown, string> = {

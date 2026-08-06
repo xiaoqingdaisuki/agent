@@ -499,23 +499,27 @@ class AgentService:
                     config=config,
                     version="v2",
                 ):
+                    run_id = event.get("run_id", "")
                     if event["event"] == "on_tool_start":
                         yield {
                             "type": "tool",
                             "tool_name": event.get("name", "tool"),
                             "status": "started",
+                            "run_id": run_id,
                         }
                     elif event["event"] == "on_tool_end":
                         yield {
                             "type": "tool",
                             "tool_name": event.get("name", "tool"),
                             "status": "completed",
+                            "run_id": run_id,
                         }
                     elif event["event"] == "on_tool_error":
                         yield {
                             "type": "tool",
                             "tool_name": event.get("name", "tool"),
                             "status": "failed",
+                            "run_id": run_id,
                         }
                     elif event["event"] == "on_chat_model_stream":
                         chunk = event["data"]["chunk"]

@@ -66,25 +66,12 @@ describe("Memory Tools", () => {
       expect(userMemorySaveDescriptor.side_effect).toBe("write");
     });
 
-    it("returns string result", async () => {
-      const result = await memoryUserSaveTool.invoke({
-        user_id: "test-user",
-        content: "Likes testing",
-      });
-      expect(typeof result).toBe("string");
+    it("has memory.user.write permission", () => {
+      expect(userMemorySaveDescriptor.required_permissions).toContain("memory.user.write");
     });
 
-    it("deduplicates on save", async () => {
-      const r1 = await memoryUserSaveTool.invoke({
-        user_id: "dedup-ts",
-        content: "Unique memory 99999",
-      });
-      const r2 = await memoryUserSaveTool.invoke({
-        user_id: "dedup-ts",
-        content: "Unique memory 99999",
-      });
-      expect(r1).toContain("已保存");
-      expect(r2).toContain("已存在");
+    it("has PII data classification", () => {
+      expect(userMemorySaveDescriptor.data_classification).toContain("pii");
     });
   });
 });

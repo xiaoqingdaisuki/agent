@@ -232,6 +232,7 @@ export async function registerV1Routes(app: FastifyInstance) {
                 event: "tool",
                 tool_name: event.toolName,
                 status: event.status,
+                call_id: event.callId,
                 duration_ms: event.durationMs,
               };
         reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);

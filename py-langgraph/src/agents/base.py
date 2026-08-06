@@ -259,6 +259,29 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
         # Handle XML-format tool calls (e.g. StepFun step-3.7-flash)
         response = _convert_xml_tool_calls(response)
 
+        # 去重：同一轮中 memory_user_save 只保留第一次调用，防止 LLM 并行重复保存
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            seen_save_calls = set()
+            deduped_calls = []
+            had_duplicate_save = False
+            for tc in response.tool_calls:
+                tc_name = tc.get("function", {}).get("name", tc.get("name", ""))
+                if tc_name == "memory_user_save":
+                    tc_content = tc.get("function", {}).get("arguments", tc.get("args", ""))
+                    tc_key = (tc_name, tc_content)
+                    if tc_key in seen_save_calls:
+                        had_duplicate_save = True
+                        continue
+                    seen_save_calls.add(tc_key)
+                deduped_calls.append(tc)
+            if had_duplicate_save:
+                response = response.model_copy(
+                    update={"tool_calls": deduped_calls}
+                )
+                logging.getLogger("agent").warning(
+                    "Deduped duplicate memory_user_save calls in same turn"
+                )
+
         if hasattr(response, "tool_calls") and response.tool_calls:
             tool_names = [
                 tc.get("function", {}).get("name", tc.get("name", "?"))

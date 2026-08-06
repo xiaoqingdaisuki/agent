@@ -69,4 +69,54 @@ describe("per-request tool runtime", () => {
     );
     expect(executedUserId).toBe("owner");
   });
+
+  it("deduplicates memory.user.save with same content within a request", async () => {
+    const schema = z.object({ user_id: z.string(), content: z.string() });
+    const rawTool = new DynamicStructuredTool({
+      name: "memory_user_save",
+      description: "save memory",
+      schema,
+      func: async () => "saved",
+    });
+    const descriptor: ToolDescriptor = {
+      name: "memory_user_save", version: "1.0.0", title: "save", description: "save",
+      category: "MEMORY", risk_level: "R2", side_effect: "write", timeout_ms: 1000,
+      required_permissions: ["memory.user.write"], input_schema: {},
+    };
+    const wrapped = wrapToolWithRuntime(rawTool, descriptor, schema);
+    const results = await runWithToolCallContext(context("u1"), async () => [
+      await wrapped.invoke({ user_id: "u1", content: "same content" }),
+      await wrapped.invoke({ user_id: "u1", content: "same content" }),
+      await wrapped.invoke({ user_id: "u1", content: "different content" }),
+    ]);
+    expect(results[0]).toBe("saved");
+    expect(results[1]).toContain("已存在");
+    expect(results[2]).toBe("saved");
+  });
+
+  it("isolates memory dedup across different requests", async () => {
+    const schema = z.object({ user_id: z.string(), content: z.string() });
+    const rawTool = new DynamicStructuredTool({
+      name: "memory_user_save",
+      description: "save memory",
+      schema,
+      func: async () => "saved",
+    });
+    const descriptor: ToolDescriptor = {
+      name: "memory_user_save", version: "1.0.0", title: "save", description: "save",
+      category: "MEMORY", risk_level: "R2", side_effect: "write", timeout_ms: 1000,
+      required_permissions: ["memory.user.write"], input_schema: {},
+    };
+    const wrapped = wrapToolWithRuntime(rawTool, descriptor, schema);
+    const [r1, r2] = await Promise.all([
+      runWithToolCallContext(context("user-a"), () =>
+        wrapped.invoke({ user_id: "user-a", content: "shared content" }),
+      ),
+      runWithToolCallContext(context("user-b"), () =>
+        wrapped.invoke({ user_id: "user-b", content: "shared content" }),
+      ),
+    ]);
+    expect(r1).toBe("saved");
+    expect(r2).toBe("saved");
+  });
 });

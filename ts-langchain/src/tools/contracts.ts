@@ -91,6 +91,7 @@ export interface ToolCallContext {
 export interface ToolProgressEvent {
   type: "started" | "completed" | "failed";
   toolName: string;
+  callId: string;
   durationMs?: number;
 }
 

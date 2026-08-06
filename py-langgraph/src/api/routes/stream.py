@@ -71,12 +71,14 @@ async def stream(request: StreamRequest):
                     version="v2",
                 ):
                     kind = event.get("event")
+                    run_id = event.get("run_id", "")
                     if kind == "on_tool_start":
                         payload = json.dumps(
                             {
                                 "event": "tool",
                                 "tool_name": event.get("name", "tool"),
                                 "status": "started",
+                                "run_id": run_id,
                             },
                             ensure_ascii=False,
                         )
@@ -87,6 +89,7 @@ async def stream(request: StreamRequest):
                                 "event": "tool",
                                 "tool_name": event.get("name", "tool"),
                                 "status": "completed",
+                                "run_id": run_id,
                             },
                             ensure_ascii=False,
                         )
@@ -97,6 +100,7 @@ async def stream(request: StreamRequest):
                                 "event": "tool",
                                 "tool_name": event.get("name", "tool"),
                                 "status": "failed",
+                                "run_id": run_id,
                             },
                             ensure_ascii=False,
                         )
