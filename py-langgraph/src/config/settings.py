@@ -33,9 +33,6 @@ class Settings(BaseSettings):
     memory_max_active_per_user: int = 50
     memory_request_timeout_ms: int = 5000
 
-    # ============ 持久化开关 ============
-    persistence_enabled: bool = True
-
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

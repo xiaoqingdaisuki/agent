@@ -72,114 +72,15 @@ def _run_sync(coro) -> Any:
     return loop.run_until_complete(coro)
 
 
-# ============ 无持久化占位实现 ==========
-
-class NoopRepositories:
-    """持久化已禁用时的占位仓储，所有操作静默跳过或返回空值"""
-
-    # Profile
-    def get_or_create_profile(self, user_id: str, name: str = "") -> dict:
-        return {"user_id": user_id, "name": name, "preferences_json": "{}", "created_at": "", "updated_at": ""}
-
-    def get_profile(self, user_id: str) -> dict | None:
-        return None
-
-    def update_profile(self, user_id: str, name: str | None = None, preferences: dict | None = None) -> dict | None:
-        return None
-
-    # Conversation
-    def create_conversation(self, user_id: str, title: str, mode: str = "chat", conversation_id: str | None = None) -> dict:
-        return {
-            "id": conversation_id or "",
-            "user_id": user_id,
-            "title": title,
-            "mode": mode,
-            "created_at": "",
-            "updated_at": "",
-            "deleted_at": None,
-        }
-
-    def get_conversation(self, conversation_id: str) -> dict | None:
-        return None
-
-    def list_conversations(self, user_id: str, limit: int = 20, offset: int = 0) -> list[dict]:
-        return []
-
-    def delete_conversation(self, conversation_id: str) -> bool:
-        return False
-
-    # Message
-    def create_message_batch(self, conversation_id: str, user_id: str, messages: list[dict]) -> None:
-        pass
-
-    def get_messages(self, conversation_id: str, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
-        return [], 0
-
-    def clear_messages(self, conversation_id: str) -> None:
-        pass
-
-    # Memory
-    def save_memory(self, user_id: str, content: str, category: str = "fact", importance: int = 3, source: str = "user_explicit", source_conversation_id: str | None = None) -> dict:
-        import uuid
-        return {
-            "id": str(uuid.uuid4()),
-            "user_id": user_id,
-            "content": content,
-            "normalized_content": content,
-            "content_hash": "0" * 64,
-            "category": category,
-            "importance": importance,
-            "source": source,
-            "source_conversation_id": source_conversation_id,
-            "status": "active",
-            "index_status": "pending",
-            "embedding_model": "",
-            "embedding_version": 1,
-            "created_at": "",
-            "updated_at": "",
-            "last_accessed_at": None,
-            "expires_at": None,
-        }
-
-    def search_memories(self, user_id: str, query: str, category: str | None = None, limit: int = 10, min_score: float = 0.65) -> dict:
-        return {"items": [], "degraded": True}
-
-    def list_memories(self, user_id: str, category: str | None = None, limit: int = 50) -> list[dict]:
-        return []
-
-    def update_memory(self, user_id: str, memory_id: str, **changes) -> dict | None:
-        return None
-
-    def delete_memory(self, user_id: str, memory_id: str) -> bool:
-        return False
-
-    def clear_user_memories(self, user_id: str) -> int:
-        return 0
-
-
-# ============ 工厂函数 ============
-
-
 # 获取 get repositories 对应的数据
 def get_repositories():
-    """创建 Cloudflare 仓储实例（带模块级缓存）
-    PERSISTENCE_ENABLED=false 时返回无操作占位实例
-    """
+    """创建 Cloudflare 仓储实例（带模块级缓存）"""
     global _repositories
     if _repositories is None:
-        if not settings.persistence_enabled:
-            _repositories = NoopRepositories()
-        else:
-            from src.clients.memory_gateway import CloudflareMemoryClient
-            client = CloudflareMemoryClient()
-            _repositories = Repositories(client)
+        from src.clients.memory_gateway import CloudflareMemoryClient
+        client = CloudflareMemoryClient()
+        _repositories = Repositories(client)
     return _repositories
-
-
-def reset_repositories():
-    """重置仓储缓存（测试用）"""
-    global _repositories
-    _repositories = None
 
 
 # ============ Cloudflare 实现 ============

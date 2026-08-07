@@ -91,25 +91,13 @@ const envSchema = z.object({
   MEMORY_SEARCH_MODE: z
     .string()
     .default("hybrid")
-    .refine((v) => v === "hybrid" || v === "sql", {
-      message: "MEMORY_SEARCH_MODE must be 'hybrid' or 'sql'",
-    }),
+    .refine(
+      (v) => v === "hybrid" || v === "sql",
+      { message: "MEMORY_SEARCH_MODE must be 'hybrid' or 'sql'" },
+    ),
   MEMORY_AUTO_EXTRACT: z.coerce.boolean().default(true),
-  MEMORY_MAX_ACTIVE_PER_USER: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(200)
-    .default(50),
-  MEMORY_REQUEST_TIMEOUT_MS: z.coerce
-    .number()
-    .int()
-    .min(1_000)
-    .max(30_000)
-    .default(5_000),
-
-  // ============ 持久化开关 ============
-  PERSISTENCE_ENABLED: z.coerce.boolean().default(true),
+  MEMORY_MAX_ACTIVE_PER_USER: z.coerce.number().int().min(1).max(200).default(50),
+  MEMORY_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(5_000),
 });
 
 export const config = envSchema.parse(process.env);
