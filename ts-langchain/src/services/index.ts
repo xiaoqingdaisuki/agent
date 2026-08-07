@@ -223,13 +223,18 @@ export class ConversationService {
       const repos = getRepositories();
       await repos.conversation.create(userId, title, mode, id);
     } catch (err) {
-      conversations.delete(id);
-      conversationMessages.delete(id);
-      throw new BusinessError(
-        BusinessErrorCode.INTERNAL_ERROR,
-        `会话持久化失败: ${err}`,
-        503,
-      );
+      const code = (err as any)?.code;
+      if (code === "PERSISTENCE_DISABLED") {
+        console.warn("[service] Persistence disabled, skipping D1 write");
+      } else {
+        conversations.delete(id);
+        conversationMessages.delete(id);
+        throw new BusinessError(
+          BusinessErrorCode.INTERNAL_ERROR,
+          `会话持久化失败: ${err}`,
+          503,
+        );
+      }
     }
 
     return conversation;
@@ -252,11 +257,16 @@ export class ConversationService {
         await repos.conversation.create(userId, title, mode, conversationId);
       }
     } catch (err) {
-      throw new BusinessError(
-        BusinessErrorCode.INTERNAL_ERROR,
-        `会话持久化失败: ${err}`,
-        503,
-      );
+      const code = (err as any)?.code;
+      if (code === "PERSISTENCE_DISABLED") {
+        console.warn("[service] Persistence disabled, skipping D1 write in ensure");
+      } else {
+        throw new BusinessError(
+          BusinessErrorCode.INTERNAL_ERROR,
+          `会话持久化失败: ${err}`,
+          503,
+        );
+      }
     }
 
     // 注册到内存
@@ -386,6 +396,11 @@ export class ConversationService {
       const deletedFromD1 = await repos.conversation.delete(id);
       return deletedFromMemory || deletedFromD1;
     } catch (err) {
+      const code = (err as any)?.code;
+      if (code === "PERSISTENCE_DISABLED") {
+        console.warn("[service] Persistence disabled, skipping D1 delete");
+        return deletedFromMemory;
+      }
       throw new BusinessError(
         BusinessErrorCode.SERVICE_UNAVAILABLE,
         `会话删除持久化失败: ${err}`,
@@ -418,18 +433,25 @@ export class ConversationService {
     conversationMessages.set(conversationId, messages);
 
     if (conv.userId) {
-      const repos = getRepositories();
-      await repos.message.createBatch(conversationId, conv.userId, [
-        {
-          id: msg.id,
-          conversation_id: conversationId,
-          user_id: conv.userId,
-          sequence_no: sequenceNumber,
-          role: "user",
-          content_json: content,
-          created_at: msg.createdAt,
-        },
-      ]);
+      try {
+        const repos = getRepositories();
+        await repos.message.createBatch(conversationId, conv.userId, [
+          {
+            id: msg.id,
+            conversation_id: conversationId,
+            user_id: conv.userId,
+            sequence_no: sequenceNumber,
+            role: "user",
+            content_json: content,
+            created_at: msg.createdAt,
+          },
+        ]);
+      } catch (err) {
+        const code = (err as any)?.code;
+        if (code !== "PERSISTENCE_DISABLED") {
+          console.warn(`[service] Message batch write failed: ${err}`);
+        }
+      }
     }
 
     return msg;
@@ -447,18 +469,25 @@ export class ConversationService {
 
     const conversation = conversations.get(conversationId);
     if (conversation?.userId) {
-      const repos = getRepositories();
-      await repos.message.createBatch(conversationId, conversation.userId, [
-        {
-          id: message.id,
-          conversation_id: conversationId,
-          user_id: conversation.userId,
-          sequence_no: sequenceNumber,
-          role: "assistant",
-          content_json: message.content,
-          created_at: message.createdAt,
-        },
-      ]);
+      try {
+        const repos = getRepositories();
+        await repos.message.createBatch(conversationId, conversation.userId, [
+          {
+            id: message.id,
+            conversation_id: conversationId,
+            user_id: conversation.userId,
+            sequence_no: sequenceNumber,
+            role: "assistant",
+            content_json: message.content,
+            created_at: message.createdAt,
+          },
+        ]);
+      } catch (err) {
+        const code = (err as any)?.code;
+        if (code !== "PERSISTENCE_DISABLED") {
+          console.warn(`[service] Message batch write failed: ${err}`);
+        }
+      }
     }
   }
 
@@ -500,8 +529,15 @@ export class ConversationService {
     if (conversation) conversation.messageCount = 0;
     await clearHistory(conversationId);
     clearAgentCommandState(conversationId);
-    const repos = getRepositories();
-    await repos.message.clear(conversationId);
+    try {
+      const repos = getRepositories();
+      await repos.message.clear(conversationId);
+    } catch (err) {
+      const code = (err as any)?.code;
+      if (code !== "PERSISTENCE_DISABLED") {
+        console.warn(`[service] Message clear failed: ${err}`);
+      }
+    }
   }
 }
 

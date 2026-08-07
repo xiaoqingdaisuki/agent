@@ -21,13 +21,138 @@ import {
 import { CloudflareMemoryClient, MemoryGatewayError } from "../clients/memory_gateway.js";
 import { config } from "../config/index.js";
 
-// ============ 工厂函数 ============
+// ============ 无持久化占位实现 ==========
+
+/**
+ * 持久化已禁用时的占位仓储，所有操作静默跳过或返回空值
+ */
+class NoopRepositories implements Repositories {
+  readonly profile: ProfileRepository;
+  readonly conversation: ConversationRepository;
+  readonly message: MessageRepository;
+  readonly memory: MemoryRepository;
+
+  constructor() {
+    this.profile = new NoopProfileRepository();
+    this.conversation = new NoopConversationRepository();
+    this.message = new NoopMessageRepository();
+    this.memory = new NoopMemoryRepository();
+  }
+}
+
+// 无持久化用户画像仓储
+class NoopProfileRepository implements ProfileRepository {
+  async getOrCreate(): Promise<UserProfileData> {
+    return { user_id: "", name: "", preferences_json: "{}", created_at: "", updated_at: "" };
+  }
+  async get(): Promise<UserProfileData | null> {
+    return null;
+  }
+  async update(): Promise<UserProfileData | null> {
+    return null;
+  }
+}
+
+// 无持久化会话仓储
+class NoopConversationRepository implements ConversationRepository {
+  async create(
+    userId: string,
+    title: string,
+    mode: string = "chat",
+    conversationId?: string,
+  ): Promise<ConversationData> {
+    // 返回假数据，让调用方能继续用内存中的真实数据
+    return {
+      id: conversationId || crypto.randomUUID(),
+      user_id: userId,
+      title,
+      mode: mode as any,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      deleted_at: null,
+    };
+  }
+  async get(): Promise<ConversationData | null> {
+    return null;
+  }
+  async list(): Promise<ConversationData[]> {
+    return [];
+  }
+  async delete(): Promise<boolean> {
+    return false;
+  }
+}
+
+// 无持久化消息仓储
+class NoopMessageRepository implements MessageRepository {
+  async createBatch(): Promise<void> {}
+  async getMessages(): Promise<{ messages: MessageData[]; total: number }> {
+    return { messages: [], total: 0 };
+  }
+  async clear(): Promise<void> {}
+}
+
+// 无持久化记忆仓储
+class NoopMemoryRepository implements MemoryRepository {
+  async save(
+    userId: string,
+    memoryId: string,
+    content: string,
+    category: string = "fact",
+    importance: number = 3,
+    source: string = "user_explicit",
+    sourceConversationId?: string,
+    idempotencyKey?: string,
+  ): Promise<MemoryData> {
+    // 返回假数据，调用方不需要时忽略返回值即可
+    return {
+      id: memoryId,
+      user_id: userId,
+      content,
+      normalized_content: content,
+      content_hash: "0".repeat(64),
+      category: category as any,
+      importance,
+      source: source as any,
+      source_conversation_id: sourceConversationId ?? null,
+      status: "active",
+      index_status: "pending",
+      embedding_model: "",
+      embedding_version: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      last_accessed_at: null,
+      expires_at: null,
+    };
+  }
+  async search(): Promise<SearchResponse> {
+    return { items: [], degraded: true };
+  }
+  async list(): Promise<MemoryData[]> {
+    return [];
+  }
+  async update(): Promise<MemoryData | null> {
+    return null;
+  }
+  async delete(): Promise<boolean> {
+    return false;
+  }
+  async clearUser(): Promise<number> {
+    return 0;
+  }
+}
+
+// ============ 工厂函数 ==========
 
 /**
  * 创建 Cloudflare 仓储实例
+ * PERSISTENCE_ENABLED=false 时返回无操作占位实例，所有写操作静默跳过
  */
 // 获取 getRepositories 对应的数据
 export function getRepositories(): Repositories {
+  if (!config.PERSISTENCE_ENABLED) {
+    return new NoopRepositories();
+  }
   const client = new CloudflareMemoryClient({
     baseUrl: config.CLOUDFLARE_MEMORY_BASE_URL,
     secret: config.CLOUDFLARE_MEMORY_SECRET,
@@ -36,7 +161,7 @@ export function getRepositories(): Repositories {
   return new CloudflareRepositories(client);
 }
 
-// ============ Cloudflare 实现 ============
+// ============ Cloudflare 实现 ==========
 
 /**
  * Cloudflare Gateway 仓储实现
