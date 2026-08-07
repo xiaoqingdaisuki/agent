@@ -181,12 +181,16 @@ class ConversationService:
                 conv.id,
             )
         except Exception as exc:
-            _conversations.pop(conv.id, None)
-            raise BusinessError(
-                BusinessErrorCode.SERVICE_UNAVAILABLE,
-                f"会话持久化失败: {exc}",
-                503,
-            ) from exc
+            code = getattr(exc, 'code', None)
+            if code == "PERSISTENCE_DISABLED":
+                logger.warning("[service] Persistence disabled, skipping D1 write")
+            else:
+                _conversations.pop(conv.id, None)
+                raise BusinessError(
+                    BusinessErrorCode.SERVICE_UNAVAILABLE,
+                    f"会话持久化失败: {exc}",
+                    503,
+                ) from exc
 
         return conv
 
@@ -212,11 +216,15 @@ class ConversationService:
                     conv_id,
                 )
         except Exception as exc:
-            raise BusinessError(
-                BusinessErrorCode.SERVICE_UNAVAILABLE,
-                f"会话持久化失败: {exc}",
-                503,
-            ) from exc
+            code = getattr(exc, 'code', None)
+            if code == "PERSISTENCE_DISABLED":
+                logger.warning("[service] Persistence disabled, skipping D1 write in ensure")
+            else:
+                raise BusinessError(
+                    BusinessErrorCode.SERVICE_UNAVAILABLE,
+                    f"会话持久化失败: {exc}",
+                    503,
+                ) from exc
 
         # 注册到内存
         if conv_id not in _conversations:
@@ -309,7 +317,19 @@ class ConversationService:
         from src.commands import clear_agent_command_state
         from src.repositories import get_repositories
 
-        deleted = get_repositories().delete_conversation(conv_id)
+        try:
+            deleted = get_repositories().delete_conversation(conv_id)
+        except Exception as exc:
+            code = getattr(exc, 'code', None)
+            if code == "PERSISTENCE_DISABLED":
+                logger.warning("[service] Persistence disabled, skipping D1 delete")
+                deleted = False
+            else:
+                raise BusinessError(
+                    BusinessErrorCode.SERVICE_UNAVAILABLE,
+                    f"会话删除持久化失败: {exc}",
+                    503,
+                ) from exc
         if not deleted:
             return False
         clear_agent_command_state(conv_id)
@@ -330,17 +350,22 @@ class ConversationService:
 
         from src.repositories import get_repositories
 
-        get_repositories().create_message_batch(
-            conv_id,
-            user_id or conv.user_id,
-            [{
-                "id": message.id,
-                "sequence_no": sequence_number,
-                "role": "user",
-                "content": content,
-                "created_at": message.created_at,
-            }],
-        )
+        try:
+            get_repositories().create_message_batch(
+                conv_id,
+                user_id or conv.user_id,
+                [{
+                    "id": message.id,
+                    "sequence_no": sequence_number,
+                    "role": "user",
+                    "content": content,
+                    "created_at": message.created_at,
+                }],
+            )
+        except Exception as exc:
+            code = getattr(exc, 'code', None)
+            if code != "PERSISTENCE_DISABLED":
+                logger.warning("[service] Message batch write failed: %s", exc)
 
         return message
 
@@ -356,17 +381,22 @@ class ConversationService:
 
         from src.repositories import get_repositories
 
-        get_repositories().create_message_batch(
-            conv_id,
-            user_id or conv.user_id,
-            [{
-                "id": message.id,
-                "sequence_no": sequence_number,
-                "role": "assistant",
-                "content": message.content,
-                "created_at": message.created_at,
-            }],
-        )
+        try:
+            get_repositories().create_message_batch(
+                conv_id,
+                user_id or conv.user_id,
+                [{
+                    "id": message.id,
+                    "sequence_no": sequence_number,
+                    "role": "assistant",
+                    "content": message.content,
+                    "created_at": message.created_at,
+                }],
+            )
+        except Exception as exc:
+            code = getattr(exc, 'code', None)
+            if code != "PERSISTENCE_DISABLED":
+                logger.warning("[service] Message batch write failed: %s", exc)
 
     @staticmethod
     # 获取会话的全部消息列表，内存未命中时从 D1 加载
@@ -420,7 +450,12 @@ class ConversationService:
             conv.message_count = 0
         from src.repositories import get_repositories
 
-        get_repositories().clear_messages(conv_id)
+        try:
+            get_repositories().clear_messages(conv_id)
+        except Exception as exc:
+            code = getattr(exc, 'code', None)
+            if code != "PERSISTENCE_DISABLED":
+                logger.warning("[service] Message clear failed: %s", exc)
 
 
 # ============ Knowledge Service ============
