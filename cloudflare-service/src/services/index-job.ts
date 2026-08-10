@@ -163,6 +163,10 @@ async function processDocumentChunkJob(db: D1Database, index: VectorizeIndex, ai
     if (vectorizeIds.length > 0) {
       await index.deleteByIds(vectorizeIds);
     }
+    await db
+      .prepare("DELETE FROM chunks WHERE document_id = ?")
+      .bind(documentId)
+      .run();
   }
 }
 

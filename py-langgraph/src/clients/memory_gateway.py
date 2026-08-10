@@ -13,6 +13,7 @@ import hmac
 import json
 import time
 from typing import Any, Optional
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -42,6 +43,11 @@ class MemoryGatewayError(Exception):
         self.message = message
         self.status_code = status_code
         super().__init__(f"[{code}] {message}")
+
+
+# 将不可信标识符编码为单个 URL 路径段
+def _path_segment(value: str) -> str:
+    return quote(value, safe="")
 
 
 class CloudflareMemoryClient:
@@ -96,14 +102,24 @@ class CloudflareMemoryClient:
 
         response = await client.request(method, path, content=json.dumps(body, ensure_ascii=False) if body is not None else None, headers=headers)
 
-        if response.status_code == 401:
-            raise MemoryGatewayError("MEMORY_UNAUTHENTICATED", "缺少或无效的认证凭证", 401)
-        if response.status_code == 403:
-            raise MemoryGatewayError("MEMORY_FORBIDDEN", "无权访问该资源", 403)
-        if response.status_code == 404:
-            raise MemoryGatewayError("MEMORY_NOT_FOUND", "资源不存在", 404)
-        if response.status_code == 409:
-            raise MemoryGatewayError("MEMORY_CONFLICT", "数据冲突", 409)
+        if response.status_code in {401, 403, 404, 409}:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            error = payload.get("error") or {}
+            fallbacks = {
+                401: ("MEMORY_UNAUTHENTICATED", "缺少或无效的认证凭证"),
+                403: ("MEMORY_FORBIDDEN", "无权访问该资源"),
+                404: ("MEMORY_NOT_FOUND", "资源不存在"),
+                409: ("MEMORY_CONFLICT", "数据冲突"),
+            }
+            fallback_code, fallback_message = fallbacks[response.status_code]
+            raise MemoryGatewayError(
+                error.get("code", fallback_code),
+                error.get("message", fallback_message),
+                response.status_code,
+            )
 
         response.raise_for_status()
         data = response.json()
@@ -117,7 +133,7 @@ class CloudflareMemoryClient:
     async def get_profile(self, user_id: str) -> dict | None:
         """获取用户画像"""
         try:
-            result = await self._request("GET", f"/internal/v1/users/{user_id}/profile")
+            result = await self._request("GET", f"/internal/v1/users/{_path_segment(user_id)}/profile")
             data = result.get("data")
             return UserProfileData.model_validate(data).model_dump() if data else None
         except MemoryGatewayError as e:
@@ -133,7 +149,7 @@ class CloudflareMemoryClient:
             body["name"] = name
         if preferences is not None:
             body["preferences"] = preferences
-        result = await self._request("PUT", f"/internal/v1/users/{user_id}/profile", body)
+        result = await self._request("PUT", f"/internal/v1/users/{_path_segment(user_id)}/profile", body)
         return UserProfileData.model_validate(result["data"]).model_dump()
 
     # ============ Conversation ============
@@ -160,7 +176,7 @@ class CloudflareMemoryClient:
     # 获取 list conversations 对应的数据
     async def list_conversations(self, user_id: str, limit: int = 20, offset: int = 0) -> list[dict]:
         """列出用户的会话"""
-        result = await self._request("GET", f"/internal/v1/users/{user_id}/conversations?limit={limit}&offset={offset}")
+        result = await self._request("GET", f"/internal/v1/users/{_path_segment(user_id)}/conversations?limit={limit}&offset={offset}")
         data = result.get("data", [])
         return [ConversationData.model_validate(item).model_dump() for item in data]
 
@@ -168,7 +184,7 @@ class CloudflareMemoryClient:
     async def get_conversation(self, conversation_id: str) -> dict | None:
         """获取会话详情"""
         try:
-            result = await self._request("GET", f"/internal/v1/conversations/{conversation_id}")
+            result = await self._request("GET", f"/internal/v1/conversations/{_path_segment(conversation_id)}")
             data = result.get("data")
             return ConversationData.model_validate(data).model_dump() if data else None
         except MemoryGatewayError as e:
@@ -180,7 +196,7 @@ class CloudflareMemoryClient:
     async def delete_conversation(self, conversation_id: str) -> bool:
         """删除会话"""
         try:
-            await self._request("DELETE", f"/internal/v1/conversations/{conversation_id}")
+            await self._request("DELETE", f"/internal/v1/conversations/{_path_segment(conversation_id)}")
             return True
         except MemoryGatewayError as e:
             if e.code == "MEMORY_CONVERSATION_NOT_FOUND":
@@ -192,7 +208,7 @@ class CloudflareMemoryClient:
     # 创建或注册 create messages batch 所需的数据
     async def create_messages_batch(self, conversation_id: str, user_id: str, messages: list[dict]) -> None:
         """批量写入消息"""
-        await self._request("POST", f"/internal/v1/conversations/{conversation_id}/messages:batch", {
+        await self._request("POST", f"/internal/v1/conversations/{_path_segment(conversation_id)}/messages:batch", {
             "user_id": user_id,
             "messages": messages,
         })
@@ -200,14 +216,14 @@ class CloudflareMemoryClient:
     # 获取 get messages 对应的数据
     async def get_messages(self, conversation_id: str, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
         """获取会话消息"""
-        result = await self._request("GET", f"/internal/v1/conversations/{conversation_id}/messages?limit={limit}&offset={offset}")
+        result = await self._request("GET", f"/internal/v1/conversations/{_path_segment(conversation_id)}/messages?limit={limit}&offset={offset}")
         page = MessagesPageData.model_validate(result.get("data", {}))
         return [msg.model_dump() for msg in page.messages], page.total
 
     # 删除或清理 clear messages 对应的数据
     async def clear_messages(self, conversation_id: str) -> None:
         """清空会话消息"""
-        await self._request("DELETE", f"/internal/v1/conversations/{conversation_id}/messages")
+        await self._request("DELETE", f"/internal/v1/conversations/{_path_segment(conversation_id)}/messages")
 
     # ============ Memory ============
 
@@ -217,7 +233,7 @@ class CloudflareMemoryClient:
         idempotency_key = hashlib.sha256(f"{user_id}:{content}".encode()).hexdigest()[:32]
         result = await self._request(
             "PUT",
-            f"/internal/v1/users/{user_id}/memories/{memory_id}",
+            f"/internal/v1/users/{_path_segment(user_id)}/memories/{_path_segment(memory_id)}",
             {
                 "content": content,
                 "category": category,
@@ -235,7 +251,7 @@ class CloudflareMemoryClient:
         params = f"?limit={limit}"
         if category:
             params += f"&category={category}"
-        result = await self._request("GET", f"/internal/v1/users/{user_id}/memories{params}")
+        result = await self._request("GET", f"/internal/v1/users/{_path_segment(user_id)}/memories{params}")
         data = result.get("data", [])
         return [MemoryData.model_validate(item).model_dump() for item in data]
 
@@ -251,7 +267,7 @@ class CloudflareMemoryClient:
             body["importance"] = importance
 
         try:
-            result = await self._request("PATCH", f"/internal/v1/users/{user_id}/memories/{memory_id}", body)
+            result = await self._request("PATCH", f"/internal/v1/users/{_path_segment(user_id)}/memories/{_path_segment(memory_id)}", body)
             data = result.get("data")
             return MemoryData.model_validate(data).model_dump() if data else None
         except MemoryGatewayError as e:
@@ -265,7 +281,7 @@ class CloudflareMemoryClient:
         body: dict[str, Any] = {"query": query, "limit": limit, "min_score": min_score}
         if category:
             body["category"] = category
-        result = await self._request("POST", f"/internal/v1/users/{user_id}/memories:search", body)
+        result = await self._request("POST", f"/internal/v1/users/{_path_segment(user_id)}/memories:search", body)
         return SearchResponseData.model_validate(result.get("data", {})).model_dump()
 
     # ============ Document ============
@@ -287,10 +303,16 @@ class CloudflareMemoryClient:
     # 获取 list documents 对应的数据
     async def list_documents(self, user_id: str, limit: int = 20, offset: int = 0, category: str | None = None) -> dict:
         """列出用户文档"""
-        params = f"?user_id={user_id}&limit={limit}&offset={offset}"
+        params: dict[str, str | int] = {
+            "user_id": user_id,
+            "limit": limit,
+            "offset": offset,
+        }
         if category:
-            params += f"&category={category}"
-        result = await self._request("GET", f"/internal/v1/documents{params}")
+            params["category"] = category
+        result = await self._request(
+            "GET", f"/internal/v1/documents?{urlencode(params)}"
+        )
         data = result.get("data", {})
         return {
             "documents": [DocumentData.model_validate(d).model_dump() for d in data.get("documents", [])],
@@ -301,7 +323,7 @@ class CloudflareMemoryClient:
     async def get_document(self, document_id: str) -> dict | None:
         """获取文档详情"""
         try:
-            result = await self._request("GET", f"/internal/v1/documents/{document_id}")
+            result = await self._request("GET", f"/internal/v1/documents/{_path_segment(document_id)}")
             data = result.get("data", {})
             return {
                 "document": DocumentData.model_validate(data.get("document")).model_dump(),
@@ -316,7 +338,7 @@ class CloudflareMemoryClient:
     async def delete_document(self, document_id: str) -> bool:
         """删除文档"""
         try:
-            await self._request("DELETE", f"/internal/v1/documents/{document_id}")
+            await self._request("DELETE", f"/internal/v1/documents/{_path_segment(document_id)}")
             return True
         except MemoryGatewayError as e:
             if e.code == "DOCUMENT_NOT_FOUND":
@@ -328,7 +350,7 @@ class CloudflareMemoryClient:
         """原地重建文档索引"""
         result = await self._request(
             "POST",
-            f"/internal/v1/documents/{document_id}/reindex",
+            f"/internal/v1/documents/{_path_segment(document_id)}/reindex",
         )
         return result.get("data", {})
 
@@ -348,7 +370,7 @@ class CloudflareMemoryClient:
     async def delete_memory(self, user_id: str, memory_id: str) -> bool:
         """删除记忆（软删除）"""
         try:
-            await self._request("DELETE", f"/internal/v1/users/{user_id}/memories/{memory_id}")
+            await self._request("DELETE", f"/internal/v1/users/{_path_segment(user_id)}/memories/{_path_segment(memory_id)}")
             return True
         except MemoryGatewayError as e:
             if e.code == "MEMORY_NOT_FOUND":
@@ -374,6 +396,6 @@ class CloudflareMemoryClient:
     # 获取 list user memories 对应的数据
     async def list_user_memories(self, user_id: str, limit: int = 100) -> list[dict]:
         """列出用户所有记忆（用于清空）"""
-        result = await self._request("GET", f"/internal/v1/users/{user_id}/memories?limit={limit}")
+        result = await self._request("GET", f"/internal/v1/users/{_path_segment(user_id)}/memories?limit={limit}")
         data = result.get("data", [])
         return [MemoryData.model_validate(item).model_dump() for item in data]

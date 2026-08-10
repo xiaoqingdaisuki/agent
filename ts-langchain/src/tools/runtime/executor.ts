@@ -631,7 +631,10 @@ export function wrapToolWithRuntime(
     }
 
     // 去重：同一轮中 memory_user_save 相同内容只执行一次
-    if (descriptor.name === "memory_user_save") {
+    if (
+      descriptor.name === "memory.user.save" ||
+      descriptor.name === "memory_user_save"
+    ) {
       const store = runtimeStorage.getStore();
       if (store) {
         const contentKey = String((scopedInput as Record<string, unknown>).content ?? "");

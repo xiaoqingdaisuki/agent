@@ -34,6 +34,15 @@ describe("agent commands", () => {
 
   it("handles the command through the chat API without calling the model", async () => {
     const app = await buildApp();
+    const originalInject = app.inject.bind(app);
+    app.inject = ((options: any) => originalInject({
+      ...options,
+      headers: {
+        authorization: "Bearer test-agent-secret",
+        "x-agent-user-id": "command-user",
+        ...options.headers,
+      },
+    })) as typeof app.inject;
 
     try {
       const enabled = await app.inject({
@@ -51,6 +60,15 @@ describe("agent commands", () => {
 
   it("streams the command through the v1 conversation API", async () => {
     const app = await buildApp();
+    const originalInject = app.inject.bind(app);
+    app.inject = ((options: any) => originalInject({
+      ...options,
+      headers: {
+        authorization: "Bearer test-agent-secret",
+        "x-agent-user-id": "command-user",
+        ...options.headers,
+      },
+    })) as typeof app.inject;
 
     try {
       const created = await app.inject({

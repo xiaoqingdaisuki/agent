@@ -21,6 +21,15 @@ describe("knowledge upload API", () => {
       `Content-Type: text/plain\r\n\r\nhello\r\n--${boundary}--\r\n`,
     );
     const app = await buildApp();
+    const originalInject = app.inject.bind(app);
+    app.inject = ((options: any) => originalInject({
+      ...options,
+      headers: {
+        authorization: "Bearer test-agent-secret",
+        "x-agent-user-id": "upload-user",
+        ...options.headers,
+      },
+    })) as typeof app.inject;
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/knowledge/documents",

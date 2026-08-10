@@ -247,11 +247,11 @@ describe("Repository Contract — CloudflareRepositories", () => {
       expect(profile.updated_at).toBeTruthy();
     });
 
-    it("getOrCreate updates name on second call (upsert behavior)", async () => {
+    it("getOrCreate preserves an existing profile", async () => {
       await repos.profile.getOrCreate("user-002", "First");
       const profile = await repos.profile.getOrCreate("user-002", "Second");
       expect(profile.user_id).toBe("user-002");
-      expect(profile.name).toBe("Second");
+      expect(profile.name).toBe("First");
     });
 
     it("get returns null for nonexistent user", async () => {

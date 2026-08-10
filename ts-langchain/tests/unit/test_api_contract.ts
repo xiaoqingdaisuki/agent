@@ -25,6 +25,15 @@ describe("完整 API 契约", () => {
 
     const app = await buildApp();
     const userId = "contract_user";
+    const originalInject = app.inject.bind(app);
+    app.inject = ((options: any) => originalInject({
+      ...options,
+      headers: {
+        authorization: "Bearer test-agent-secret",
+        "x-agent-user-id": userId,
+        ...options.headers,
+      },
+    })) as typeof app.inject;
 
     try {
       expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
@@ -171,6 +180,99 @@ describe("完整 API 契约", () => {
       expect(
         (await app.inject({ method: "DELETE", url: `/api/v1/conversations/${conversationId}` })).json(),
       ).toEqual({ success: true });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("拒绝未认证、缺少身份和冒充其他用户的请求", async () => {
+    const app = await buildApp();
+    try {
+      expect((await app.inject({
+        method: "GET",
+        url: "/api/v1/conversations",
+      })).statusCode).toBe(401);
+      expect((await app.inject({
+        method: "POST",
+        url: "/api/v1/conversations",
+        headers: { authorization: "Bearer test-agent-secret" },
+        payload: { title: "missing identity" },
+      })).statusCode).toBe(401);
+      expect((await app.inject({
+        method: "POST",
+        url: "/api/v1/conversations",
+        headers: {
+          authorization: "Bearer test-agent-secret",
+          "x-agent-user-id": "owner-a",
+        },
+        payload: { title: "spoof", user_id: "owner-b" },
+      })).statusCode).toBe(403);
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/v1/conversations",
+        headers: {
+          authorization: "Bearer test-agent-secret",
+          "x-agent-user-id": "owner-a",
+        },
+        payload: { title: "private", user_id: "owner-a" },
+      });
+      const conversationId = created.json().id as string;
+      const otherUserHeaders = {
+        authorization: "Bearer test-agent-secret",
+        "x-agent-user-id": "owner-b",
+      };
+      expect((await app.inject({
+        method: "GET",
+        url: `/api/v1/conversations/${conversationId}`,
+        headers: otherUserHeaders,
+      })).statusCode).toBe(403);
+      expect((await app.inject({
+        method: "POST",
+        url: "/chat",
+        headers: otherUserHeaders,
+        payload: {
+          message: DARK_MODE_COMMAND,
+          thread_id: conversationId,
+          user_id: "owner-b",
+        },
+      })).statusCode).toBe(403);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("按 Python 契约拒绝越界的会话、检索和记忆参数", async () => {
+    const app = await buildApp();
+    const headers = {
+      authorization: "Bearer test-agent-secret",
+      "x-agent-user-id": "validation-user",
+    };
+    try {
+      expect((await app.inject({
+        method: "POST",
+        url: "/api/v1/conversations",
+        headers,
+        payload: { title: "x".repeat(101), mode: "chat" },
+      })).statusCode).toBe(400);
+      expect((await app.inject({
+        method: "POST",
+        url: "/api/v1/conversations",
+        headers,
+        payload: { title: "invalid mode", mode: "unsupported" },
+      })).statusCode).toBe(400);
+      expect((await app.inject({
+        method: "POST",
+        url: "/api/v1/knowledge/search",
+        headers,
+        payload: { query: "test", top_k: 21 },
+      })).statusCode).toBe(400);
+      expect((await app.inject({
+        method: "POST",
+        url: "/api/v1/memory",
+        headers,
+        payload: { content: "test", category: "unknown", importance: 6 },
+      })).statusCode).toBe(400);
     } finally {
       await app.close();
     }

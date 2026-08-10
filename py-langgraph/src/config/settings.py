@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,17 +24,30 @@ class Settings(BaseSettings):
     search_stale_ttl_seconds: int = 600
     host: str = "0.0.0.0"
     port: int = 6002
+    agent_api_secret: str = ""
     cors_origin: str = ""
 
     # ============ Cloudflare Service 配置 ============
-    memory_gateway_base_url: str = ""
-    memory_gateway_secret: str = ""
+    memory_gateway_base_url: str = Field(
+        default="http://localhost:8787",
+        validation_alias=AliasChoices(
+            "CLOUDFLARE_MEMORY_BASE_URL",
+            "MEMORY_GATEWAY_BASE_URL",
+        ),
+    )
+    memory_gateway_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "CLOUDFLARE_MEMORY_SECRET",
+            "MEMORY_GATEWAY_SECRET",
+        ),
+    )
     memory_search_mode: str = "hybrid"
     memory_auto_extract: bool = True
     memory_max_active_per_user: int = 50
     memory_request_timeout_ms: int = 5000
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 
 
 settings = Settings()

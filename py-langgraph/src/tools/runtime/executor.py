@@ -16,8 +16,15 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from collections.abc import Callable, Coroutine
 from typing import Any, Generic, TypeVar
+from uuid import uuid4
+
+from langchain_core.tools import BaseTool, StructuredTool
+from pydantic import BaseModel
 
 from src.tools.contracts import (
     ToolCallContext,
@@ -163,6 +170,7 @@ def sanitize_result(data: Any) -> Any:
 # ============ 预算守卫 ============
 
 
+@dataclass
 class _BudgetState:
     tool_calls_this_round: int = 0
     total_tool_calls: int = 0
@@ -170,35 +178,82 @@ class _BudgetState:
     max_total: int = 20
 
 
-_budget = _BudgetState()
+@dataclass
+class _RuntimeScope:
+    context: ToolCallContext
+    budget: _BudgetState = field(default_factory=_BudgetState)
+    seen_memory_saves: set[str] = field(default_factory=set)
+
+
+_runtime_scope: ContextVar[_RuntimeScope | None] = ContextVar(
+    "tool_runtime_scope", default=None
+)
+_fallback_budget = _BudgetState()
+
+
+# 获取当前请求隔离的工具预算，直接调用时回退到测试预算
+def _get_budget() -> _BudgetState:
+    scope = _runtime_scope.get()
+    return scope.budget if scope else _fallback_budget
+
+
+# 创建一次 Agent 请求使用的可信工具调用上下文
+def create_tool_call_context(user_id: str, conversation_id: str) -> ToolCallContext:
+    request_id = f"req_{uuid4().hex}"
+    return ToolCallContext(
+        request_id=request_id,
+        trace_id=f"trace_{uuid4().hex}",
+        conversation_id=conversation_id,
+        tenant_id="",
+        user_id=user_id,
+        actor_type="user",
+    )
+
+
+# 获取当前请求的工具调用上下文，未进入运行时作用域时返回空
+def get_tool_call_context() -> ToolCallContext | None:
+    scope = _runtime_scope.get()
+    return scope.context if scope else None
+
+
+# 在当前异步请求内隔离工具身份、预算与记忆去重状态
+@contextmanager
+def tool_call_scope(context: ToolCallContext):
+    token = _runtime_scope.set(_RuntimeScope(context=context))
+    try:
+        yield
+    finally:
+        _runtime_scope.reset(token)
 
 
 # 重置当前轮次的工具调用预算计数器
 def reset_round_budget() -> None:
-    _budget.tool_calls_this_round = 0
+    budget = _get_budget()
+    budget.tool_calls_this_round = 0
 
 
 # 检查工具调用预算，返回 None 表示通过，否则返回错误结果
 def budget_guard() -> ToolRuntimeResult[None] | None:
     """检查预算限制，返回 None 表示通过，否则返回错误结果。"""
-    if _budget.tool_calls_this_round >= _budget.max_per_round:
+    budget = _get_budget()
+    if budget.tool_calls_this_round >= budget.max_per_round:
         return ToolRuntimeResult(
             success=False,
             error=ToolError(
                 code="RATE_LIMITED",
-                message=f"单轮工具调用已达上限 ({_budget.max_per_round})",
+                message=f"单轮工具调用已达上限 ({budget.max_per_round})",
             ),
         )
-    if _budget.total_tool_calls >= _budget.max_total:
+    if budget.total_tool_calls >= budget.max_total:
         return ToolRuntimeResult(
             success=False,
             error=ToolError(
                 code="RATE_LIMITED",
-                message=f"累计工具调用已达上限 ({_budget.max_total})",
+                message=f"累计工具调用已达上限 ({budget.max_total})",
             ),
         )
-    _budget.tool_calls_this_round += 1
-    _budget.total_tool_calls += 1
+    budget.tool_calls_this_round += 1
+    budget.total_tool_calls += 1
     return None
 
 
@@ -497,4 +552,49 @@ def _record_audit(
         risk_level=risk_level,
         user_id=context.user_id,
         tenant_id=context.tenant_id,
+    )
+
+
+# 将 LangChain 工具包装为统一权限、预算、超时、脱敏和审计管线
+def wrap_tool_with_runtime(tool: BaseTool, descriptor: ToolDescriptor) -> StructuredTool:
+    async def wrapped_tool(**raw_input: Any) -> str:
+        scope = _runtime_scope.get()
+        if scope is None:
+            raise RuntimeError("Tool runtime context is required")
+
+        scoped_input = dict(raw_input)
+        if descriptor.name.startswith("memory.user."):
+            scoped_input["user_id"] = scope.context.user_id
+        if descriptor.name == "memory.session.search":
+            scoped_input["conversation_id"] = scope.context.conversation_id
+
+        if descriptor.name == "memory.user.save":
+            content_key = str(scoped_input.get("content", ""))
+            if content_key in scope.seen_memory_saves:
+                return "🧠 记忆已存在（内容重复），未重复保存。"
+            scope.seen_memory_saves.add(content_key)
+
+        # 执行原始工具并保持其 Pydantic 参数模型约束
+        async def execute_tool(input_data: Any, _context: ToolCallContext) -> Any:
+            payload = input_data.model_dump() if isinstance(input_data, BaseModel) else input_data
+            return await tool.ainvoke(payload)
+
+        executor = ToolExecutor(
+            descriptor=descriptor,
+            execute_fn=execute_tool,
+            schema=tool.args_schema,
+        )
+        result = await invoke_tool(executor, scoped_input, scope.context)
+        if not result.ok:
+            raise RuntimeError(result.error.message if result.error else "Tool execution failed")
+        return str(result.data or "")
+
+    return StructuredTool(
+        name=tool.name,
+        description=tool.description,
+        args_schema=tool.args_schema,
+        return_direct=tool.return_direct,
+        tags=tool.tags,
+        metadata=tool.metadata,
+        coroutine=wrapped_tool,
     )

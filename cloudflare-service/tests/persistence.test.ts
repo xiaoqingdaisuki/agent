@@ -6,7 +6,11 @@ import {
   createMessageBatch,
   getNextSequenceNumber,
 } from "../src/repositories/message.js";
-import { searchDocuments } from "../src/repositories/document.js";
+import {
+  createDocument,
+  deleteDocument,
+  searchDocuments,
+} from "../src/repositories/document.js";
 import { ConversationCreateSchema, ProfileSaveSchema } from "../src/schemas/memory-models.js";
 
 class MemoryStatement {
@@ -100,6 +104,32 @@ describe("Gateway authentication", () => {
     );
 
     expect(response.status).toBe(200);
+  });
+
+  it("returns the memory search shape consumed by both Agent clients", async () => {
+    const response = await app.request(
+      "http://gateway/internal/v1/users/user-1/memories:search",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query: "question" }),
+      },
+      {
+        SERVICE_SECRET: "secret",
+        DB: { prepare: vi.fn() },
+        MEMORY_INDEX: { query: vi.fn().mockResolvedValue({ matches: [] }) },
+        AI: { run: vi.fn().mockResolvedValue({ data: [[0.1, 0.2]] }) },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      data: { items: [], degraded: false },
+    });
   });
 });
 
@@ -228,6 +258,72 @@ describe("Persistent identifiers and ordering", () => {
 });
 
 describe("Vector persistence", () => {
+  it("schedules document compensation when embedding generation fails", async () => {
+    const statements: string[] = [];
+    const database = {
+      prepare: (sql: string) => {
+        statements.push(sql);
+        return {
+          bind: () => ({ run: async () => ({ meta: { rows_written: 1 } }) }),
+        };
+      },
+    };
+    const ai = { run: vi.fn().mockRejectedValue(new Error("AI unavailable")) };
+
+    const result = await createDocument(
+      database as unknown as D1Database,
+      { upsert: vi.fn() } as unknown as VectorizeIndex,
+      ai as unknown as Ai,
+      {
+        id: "doc-failed",
+        user_id: "user-1",
+        name: "doc.txt",
+        filename: "doc.txt",
+        file_type: "text/plain",
+        size: 7,
+        category: "general",
+        content: "content",
+      },
+    );
+
+    expect(result.degraded).toBe(true);
+    expect(statements.some((sql) => sql.includes("INSERT INTO memory_index_jobs"))).toBe(true);
+  });
+
+  it("retains chunk vector ids until a failed document delete is compensated", async () => {
+    const statements: string[] = [];
+    const database = {
+      prepare: (sql: string) => {
+        statements.push(sql);
+        return {
+          bind: () => ({
+            first: async () => sql.includes("SELECT * FROM documents")
+              ? { id: "doc-delete", deleted_at: null }
+              : null,
+            all: async () => ({
+              results: sql.includes("SELECT id, vectorize_id FROM chunks")
+                ? [{ id: "chunk-1", vectorize_id: "vector-1" }]
+                : [],
+            }),
+            run: async () => ({ meta: { rows_written: 1 } }),
+          }),
+        };
+      },
+    };
+    const index = {
+      deleteByIds: vi.fn().mockRejectedValue(new Error("Vectorize unavailable")),
+    };
+
+    await expect(deleteDocument(
+      database as unknown as D1Database,
+      index as unknown as VectorizeIndex,
+      "doc-delete",
+    )).resolves.toBe(true);
+
+    expect(statements.some((sql) => sql.includes("INSERT INTO memory_index_jobs"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("DELETE FROM chunks"))).toBe(false);
+  });
+
   it("rejects a cross-user memory update before touching Vectorize", async () => {
     const database = new MemoryDatabase();
     const index = { upsert: vi.fn() };
@@ -269,29 +365,35 @@ describe("Vector persistence", () => {
   });
 
   it("maps prefixed Vectorize ids back to D1 chunk ids", async () => {
+    const statements: string[] = [];
     const database = {
-      prepare: (sql: string) => ({
-        bind: (...args: unknown[]) => ({
-          all: async () => ({
-            results: sql.includes("FROM chunks WHERE id IN") && args[0] === "doc-1:chunk_0"
-              ? [{
-                  id: "doc-1:chunk_0",
-                  document_id: "doc-1",
-                  user_id: "user-1",
-                  chunk_index: 0,
-                  content: "answer",
-                  content_hash: "hash",
-                  token_count: 2,
-                  embedding_model: "model",
-                  embedding_version: 1,
-                  vectorize_id: "doc_doc-1:chunk_0",
-                  created_at: "2026-01-01T00:00:00.000Z",
-                }]
-              : [],
+      prepare: (sql: string) => {
+        statements.push(sql);
+        return {
+          bind: (...args: unknown[]) => ({
+            all: async () => ({
+              results: sql.includes("FROM chunks WHERE id IN") && args[0] === "doc-1:chunk_0"
+                ? [{
+                    id: "doc-1:chunk_0",
+                    document_id: "doc-1",
+                    user_id: "user-1",
+                    chunk_index: 0,
+                    content: "answer",
+                    content_hash: "hash",
+                    token_count: 2,
+                    embedding_model: "model",
+                    embedding_version: 1,
+                    vectorize_id: "doc_doc-1:chunk_0",
+                    created_at: "2026-01-01T00:00:00.000Z",
+                  }]
+                : sql.includes("FROM documents WHERE id IN")
+                  ? [{ id: "doc-1", name: "Doc", filename: "doc.txt" }]
+                  : [],
+            }),
+            first: async () => ({ name: "Doc", filename: "doc.txt" }),
           }),
-          first: async () => ({ name: "Doc", filename: "doc.txt" }),
-        }),
-      }),
+        };
+      },
     };
     const index = {
       query: vi.fn().mockResolvedValue({
@@ -310,5 +412,9 @@ describe("Vector persistence", () => {
 
     expect(result.results).toHaveLength(1);
     expect(result.results[0].id).toBe("doc-1:chunk_0");
+    expect(statements.find((sql) => sql.includes("FROM chunks WHERE id IN")))
+      .toContain("AND user_id = ?");
+    expect(statements.find((sql) => sql.includes("FROM documents WHERE id IN")))
+      .toContain("deleted_at IS NULL");
   });
 });

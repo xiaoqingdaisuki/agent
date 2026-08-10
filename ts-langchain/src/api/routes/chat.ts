@@ -21,7 +21,8 @@ import {
   isLikelyTruncated,
   maybeAppendContinuationHint,
 } from "../../agents/response-handler.js";
-import { ConversationService } from "../../services/index.js";
+import { BusinessError, ConversationService } from "../../services/index.js";
+import { requireAgentUserId } from "../middleware/auth.js";
 
 // 创建或注册 registerChatRoutes 所需的数据
 export async function registerChatRoutes(app: FastifyInstance) {
@@ -30,12 +31,13 @@ export async function registerChatRoutes(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const { message, thread_id, user_id } = request.body;
+        const trustedUserId = requireAgentUserId(request, user_id);
         if (!message) {
           return reply.status(400).send({ error: "message is required" });
         }
 
         const threadId = thread_id || crypto.randomUUID();
-        await ConversationService.ensure(threadId, user_id);
+        await ConversationService.ensure(threadId, trustedUserId);
         await ConversationService.appendUserMessage(threadId, message);
 
         const command = executeAgentCommand(message, threadId);
@@ -51,10 +53,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
 
         // 注入用户记忆（与 v1 API 保持一致）
         const memoryContext: SystemMessage[] = [];
-        if (user_id) {
+        if (trustedUserId) {
           try {
-            await ProfileService.getOrCreate(user_id);
-            const context = await MemoryService.buildMemoryContext(user_id);
+            await ProfileService.getOrCreate(trustedUserId);
+            const context = await MemoryService.buildMemoryContext(trustedUserId);
             if (context) {
               memoryContext.push(new SystemMessage(context));
             }
@@ -74,7 +76,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
           trace_id: `trace_${Date.now()}`,
           conversation_id: threadId,
           tenant_id: "",
-          user_id: user_id || "anonymous",
+          user_id: trustedUserId,
           actor_type: "user",
         } as const;
 
@@ -121,6 +123,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
         return { reply: replyText, thread_id: threadId };
       } catch (error: any) {
         console.error("Chat error:", error);
+        if (error instanceof BusinessError) {
+          return reply.status(error.statusCode).send(error.toJSON());
+        }
         if (isAgentDeadlineError(error)) {
           return reply.status(504).send({
             error: {

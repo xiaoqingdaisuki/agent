@@ -214,7 +214,7 @@ npx wrangler deploy                                  # 部署到线上
 cd ts-langchain
 npm install
 cp .env.example .env
-# 编辑 .env 填入 OPENAI_API_KEY + CLOUDFLARE_MEMORY_SECRET
+# 编辑 .env，填入 OPENAI_API_KEY、CLOUDFLARE_MEMORY_SECRET 和 AGENT_API_SECRET
 npm run dev
 ```
 
@@ -226,7 +226,7 @@ npm run dev
 cd py-langgraph
 pip install -r requirements.txt
 cp .env.example .env
-# 编辑 .env 填入 OPENAI_API_KEY
+# 编辑 .env，填入 OPENAI_API_KEY、CLOUDFLARE_MEMORY_SECRET 和 AGENT_API_SECRET
 uvicorn src.api.main:app --reload
 ```
 
@@ -235,6 +235,8 @@ uvicorn src.api.main:app --reload
 ## API 接口
 
 两个版本提供一致的接口：
+
+除健康检查外，所有接口都要求 `Authorization: Bearer <AGENT_API_SECRET>`。涉及用户数据的接口还必须由可信服务端代理传入 `X-Agent-User-Id`；请求体或查询参数中的 `user_id` 只能与该身份一致，不能用于切换用户。
 
 ```
 GET  /api/v1/health                    健康检查

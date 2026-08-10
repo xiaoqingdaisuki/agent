@@ -22,6 +22,7 @@ import {
   createChunksBatch,
 } from "../repositories/document.js";
 import { getEmbeddingBatch } from "../services/embedding.js";
+import { createIndexJob } from "../services/index-job.js";
 import {
   DocumentUploadRequestSchema,
   DocumentSearchRequestSchema,
@@ -261,8 +262,17 @@ export function registerDocumentRoutes(app: any) {
           }
         } catch (err) {
           console.error("Reindex Vectorize upsert failed:", err);
+          await createIndexJob(c.env.DB, documentId, "upsert", "document_chunk", err);
           degraded = true;
         }
+      } else {
+        await createIndexJob(
+          c.env.DB,
+          documentId,
+          "upsert",
+          "document_chunk",
+          new Error("Embedding generation failed during reindex"),
+        );
       }
 
       // 更新文档状态

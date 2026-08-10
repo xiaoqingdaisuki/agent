@@ -15,6 +15,7 @@ from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
+from src.config.settings import settings
 from src.rag.retriever import Retriever
 
 
@@ -40,7 +41,13 @@ def build_rag_agent(
                 ├── true  → retrieve → grade → generate → END
                 └── false → generate → END
     """
-    llm = ChatOpenAI(model="gpt-4o-mini")
+    llm = ChatOpenAI(
+        model=settings.openai_model,
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+        timeout=settings.llm_timeout_ms / 1000,
+        max_retries=settings.llm_max_retries,
+    )
     retriever = Retriever(
         qdrant_url=qdrant_url,
         collection_name=collection_name,

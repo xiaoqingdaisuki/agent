@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 
 import {
@@ -7,7 +7,12 @@ import {
   clearHistory,
   getHistory,
 } from "../../src/memory/conversation.js";
-import { ConversationService } from "../../src/services/index.js";
+import {
+  AgentService,
+  BusinessErrorCode,
+  ConversationService,
+  KnowledgeService,
+} from "../../src/services/index.js";
 
 describe("conversation history", () => {
   const threadId = "bounded-history";
@@ -43,5 +48,41 @@ describe("ConversationService message history", () => {
     await ConversationService.clearMessages(conversation.id);
     expect(await ConversationService.getMessages(conversation.id)).toEqual([]);
     expect((await ConversationService.get(conversation.id))?.messageCount).toBe(0);
+  });
+
+  it("isolates lists and rejects reusing another user's conversation id", async () => {
+    const owned = await ConversationService.create("private", "chat", "owner-a");
+    await ConversationService.create("other", "chat", "owner-b");
+
+    const visible = await ConversationService.list("owner-a");
+    expect(visible.map((conversation) => conversation.id)).toContain(owned.id);
+    expect(visible.every((conversation) => conversation.userId === "owner-a")).toBe(true);
+    await expect(ConversationService.ensure(owned.id, "owner-b")).rejects.toMatchObject({
+      code: BusinessErrorCode.FORBIDDEN,
+      statusCode: 403,
+    });
+  });
+
+  it("uses the RAG path for a streamed knowledge conversation", async () => {
+    const conversation = await ConversationService.create(
+      "knowledge",
+      "knowledge",
+      "knowledge-user",
+    );
+    const chat = vi.spyOn(KnowledgeService, "chat").mockResolvedValue({
+      output: "knowledge answer",
+      sourceDocuments: [],
+    });
+
+    const events = [];
+    for await (const event of AgentService.chatStream(
+      conversation.id,
+      "question",
+    )) {
+      events.push(event);
+    }
+
+    expect(chat).toHaveBeenCalledOnce();
+    expect(events).toEqual([{ type: "text", text: "knowledge answer" }]);
   });
 });

@@ -16,6 +16,11 @@ from src.config.settings import settings
 from src.agents.deadline import enable_tool_budget
 from src.agents.response_handler import maybe_append_continuation_hint
 from src.tools.runtime.data_redaction import redact_text_content
+from src.tools.runtime.executor import (
+    create_tool_call_context,
+    get_tool_call_context,
+    tool_call_scope,
+)
 
 MAX_TOOL_CALLS = settings.max_agent_iterations
 AGENT_RECURSION_LIMIT = MAX_TOOL_CALLS * 2 + 4
@@ -191,7 +196,7 @@ def _current_turn_tool_call_count(messages: list[BaseMessage]) -> int:
 
 
 # 将模型提供的参数替换为服务端注入的 ownership ID（user_id, conversation_id）
-def _scope_memory_tool_call(request: ToolCallRequest, execute):
+async def _scope_memory_tool_call(request: ToolCallRequest, execute):
     """Replace model-supplied ownership IDs with server-side graph context."""
     name = request.tool_call["name"]
     args = dict(request.tool_call.get("args", {}))
@@ -204,7 +209,18 @@ def _scope_memory_tool_call(request: ToolCallRequest, execute):
         )
 
     scoped_call = {**request.tool_call, "args": args}
-    return execute(request.override(tool_call=scoped_call))
+    scoped_request = request.override(tool_call=scoped_call)
+    if get_tool_call_context() is not None:
+        return await execute(scoped_request)
+
+    state = request.state if isinstance(request.state, dict) else {}
+    user_id = state.get("user_id") or ""
+    conversation_id = request.runtime.config.get("configurable", {}).get(
+        "thread_id", ""
+    )
+    runtime_context = create_tool_call_context(user_id, conversation_id)
+    with tool_call_scope(runtime_context):
+        return await execute(scoped_request)
 
 
 # 判断 Agent 是否需要调用工具，或已达到调用上限
@@ -335,7 +351,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
     builder = StateGraph(AgentState)
     builder.add_node("trim_history", trim_history)
     builder.add_node("agent", agent_node)
-    builder.add_node("tools", ToolNode(tools, wrap_tool_call=_scope_memory_tool_call))
+    builder.add_node("tools", ToolNode(tools, awrap_tool_call=_scope_memory_tool_call))
     builder.add_node("limit", limit_node)
 
     # 显式定义图的边

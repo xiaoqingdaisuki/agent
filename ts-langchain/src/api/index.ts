@@ -6,6 +6,7 @@ import { registerStreamRoutes } from "./routes/stream.js";
 import { registerToolRoutes } from "./routes/tools.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerErrorMiddleware } from "./middleware/error.js";
+import { registerAgentAuthMiddleware } from "./middleware/auth.js";
 import { config } from "../config/index.js";
 
 // 构建并配置 Fastify 应用实例，注册所有路由和中间件
@@ -26,6 +27,7 @@ export async function buildApp() {
   await app.register(multipart, {
     limits: { files: 1, fileSize: 10 * 1024 * 1024 },
   });
+  registerAgentAuthMiddleware(app);
 
   // External API v1（前端 UI 使用）— 带 /api/v1 前缀
   await app.register(

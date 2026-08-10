@@ -6,6 +6,8 @@
 
 import { beforeEach, vi } from "vitest";
 
+process.env.AGENT_API_SECRET = "test-agent-secret";
+
 // ============ Fake 数据存储 ============
 
 const mockProfiles = new Map<string, any>();

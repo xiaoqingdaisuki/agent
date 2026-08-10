@@ -68,6 +68,19 @@ class TestConversationService:
         convs = ConversationService.list()
         assert len(convs) >= 2
 
+    def test_list_isolation_and_ensure_ownership(self):
+        """Only expose the requested user's conversations and reject ID takeover."""
+        owned = ConversationService.create("Private", user_id="owner-a")
+        other = ConversationService.create("Other", user_id="owner-b")
+
+        visible = ConversationService.list("owner-a")
+        assert owned.id in {item["id"] for item in visible}
+        assert other.id not in {item["id"] for item in visible}
+        with pytest.raises(BusinessError) as error:
+            ConversationService.ensure(owned.id, user_id="owner-b")
+        assert error.value.code == BusinessErrorCode.FORBIDDEN
+        assert error.value.status_code == 403
+
     def test_delete_conversation(self):
         """Should delete a conversation"""
         conv = ConversationService.create("To Delete")
@@ -129,6 +142,66 @@ class TestAgentService:
 
         assert error.value.code == BusinessErrorCode.AGENT_TIMEOUT
         assert error.value.status_code == 504
+
+    @pytest.mark.asyncio
+    async def test_streamed_knowledge_conversation_uses_rag(self, monkeypatch):
+        """Knowledge streaming must use the same RAG path as non-streaming chat."""
+        from langchain_core.messages import AIMessage
+        from src.agents import base
+        from src.rag import rag_agent
+
+        class FakeRagAgent:
+            async def ainvoke(self, _state):
+                return {"messages": [AIMessage(content="knowledge answer")]}
+
+        conversation = ConversationService.create(
+            "Knowledge", mode="knowledge", user_id="knowledge-user"
+        )
+        monkeypatch.setattr(rag_agent, "build_rag_agent", lambda: FakeRagAgent())
+        monkeypatch.setattr(
+            base,
+            "build_tool_agent",
+            lambda **_kwargs: pytest.fail("knowledge stream used the tool agent"),
+        )
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(
+                conversation.id, "question"
+            )
+        ]
+
+        assert events == [{"type": "text", "text": "knowledge answer"}]
+
+    @pytest.mark.asyncio
+    async def test_streamed_tool_event_uses_shared_call_id_field(self, monkeypatch):
+        """Tool progress events must use the same call_id field as the TS API."""
+        from src.agents import base
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {
+                    "event": "on_tool_start",
+                    "name": "calculator",
+                    "run_id": "call-contract",
+                }
+
+        conversation = ConversationService.create("tool stream")
+        monkeypatch.setattr(base, "build_tool_agent", lambda **_kwargs: FakeAgent())
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(
+                conversation.id, "calculate"
+            )
+        ]
+
+        assert events == [{
+            "type": "tool",
+            "tool_name": "calculator",
+            "status": "started",
+            "call_id": "call-contract",
+        }]
 
 
 class TestKnowledgeService:

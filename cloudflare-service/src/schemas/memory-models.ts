@@ -93,7 +93,7 @@ export const MemorySaveRequestSchema = z.object({
 export const MemorySearchRequestSchema = z.object({
   query: z.string().min(1).max(500),
   category: MemoryCategorySchema.nullable().optional(),
-  limit: z.coerce.number().int().min(1).max(50),
+  limit: z.coerce.number().int().min(1).max(50).default(10),
   min_score: z.coerce.number().min(0).max(1).optional(),
 });
 

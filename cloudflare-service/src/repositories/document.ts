@@ -241,12 +241,7 @@ export async function createDocument(
       }
     } catch (err) {
       console.error("Vectorize upsert failed, creating compensation job:", err);
-      // 补偿任务可能因 FK 约束失败（document_id 不是 memory_id），静默降级
-      try {
-        await createIndexJob(db, doc.id, "upsert", "document_chunk", err);
-      } catch {
-        // 忽略补偿任务创建失败，文档和块已持久化
-      }
+      await createIndexJob(db, doc.id, "upsert", "document_chunk", err);
       document.status = "failed";
       await db
         .prepare("UPDATE documents SET status = ? WHERE id = ?")
@@ -254,6 +249,14 @@ export async function createDocument(
         .run();
       degraded = true;
     }
+  } else {
+    await createIndexJob(
+      db,
+      doc.id,
+      "upsert",
+      "document_chunk",
+      new Error("Embedding generation failed"),
+    );
   }
 
   return { document, degraded };
@@ -343,20 +346,24 @@ export async function deleteDocument(
     .map((c) => c.vectorize_id!);
 
   // 删除 Vectorize 中的向量
+  let vectorDeleteCompleted = true;
   if (idsToDelete.length > 0) {
     try {
       await index.deleteByIds(idsToDelete);
     } catch (err) {
       console.error("Vectorize delete failed, creating compensation job:", err);
       await createIndexJob(db, documentId, "delete", "document_chunk", err);
+      vectorDeleteCompleted = false;
     }
   }
 
-  // 软删除 chunks
-  await db
-    .prepare("DELETE FROM chunks WHERE document_id = ?")
-    .bind(documentId)
-    .run();
+  // Vectorize 删除失败时保留块中的向量 ID，供补偿任务重试
+  if (vectorDeleteCompleted) {
+    await db
+      .prepare("DELETE FROM chunks WHERE document_id = ?")
+      .bind(documentId)
+      .run();
+  }
 
   return true;
 }
@@ -481,25 +488,30 @@ export async function searchDocuments(
     const placeholders = matchIds.map(() => "?").join(",");
     const { results } = await db
       .prepare(
-        `SELECT id, document_id, user_id, chunk_index, content, content_hash, token_count, embedding_model, embedding_version, vectorize_id, created_at FROM chunks WHERE id IN (${placeholders})`,
+        `SELECT id, document_id, user_id, chunk_index, content, content_hash, token_count, embedding_model, embedding_version, vectorize_id, created_at FROM chunks WHERE id IN (${placeholders}) AND user_id = ?`,
       )
-      .bind(...matchIds)
+      .bind(...matchIds, userId)
       .all<Chunk>();
 
     const chunks = (results as Chunk[]) ?? [];
+    if (chunks.length === 0) {
+      return { results: [], degraded: false };
+    }
 
     // 获取关联的文档名称
     const docIds = [...new Set(chunks.map((c) => c.document_id))];
     const docPlaceholders = docIds.map(() => "?").join(",");
     const { results: docs } = await db
-      .prepare(`SELECT id, name, filename FROM documents WHERE id IN (${docPlaceholders})`)
-      .bind(...docIds)
+      .prepare(`SELECT id, name, filename FROM documents WHERE id IN (${docPlaceholders}) AND user_id = ? AND deleted_at IS NULL`)
+      .bind(...docIds, userId)
       .all<Document>();
     const docMap = new Map((docs as Document[] ?? []).map((d) => [d.id, d]));
 
     // 过滤低分 + 构建结果
     const scored = chunks
-      .filter((c) => (scoreMap[c.id] ?? 0) >= minScore)
+      .filter(
+        (c) => docMap.has(c.document_id) && (scoreMap[c.id] ?? 0) >= minScore,
+      )
       .map((c) => {
         const doc = docMap.get(c.document_id);
         return {

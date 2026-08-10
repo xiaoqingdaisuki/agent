@@ -9,8 +9,16 @@ from src.config.settings import settings
 @pytest.fixture
 async def client():
     """Create test client"""
+    settings.agent_api_secret = "test-agent-secret"
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={
+            "Authorization": "Bearer test-agent-secret",
+            "X-Agent-User-Id": "test-user",
+        },
+    ) as ac:
         yield ac
 
 
@@ -111,6 +119,62 @@ class TestCapabilitiesEndpoint:
 
 
 class TestConversationEndpoints:
+    @pytest.mark.asyncio
+    async def test_rejects_missing_auth_and_user_spoofing(self):
+        """Protected routes require service auth and bind inputs to trusted identity."""
+        settings.agent_api_secret = "test-agent-secret"
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as raw_client:
+            unauthenticated = await raw_client.get("/api/v1/conversations")
+            missing_identity = await raw_client.post(
+                "/api/v1/conversations",
+                headers={"Authorization": "Bearer test-agent-secret"},
+                json={"title": "missing identity"},
+            )
+            spoofed = await raw_client.post(
+                "/api/v1/conversations",
+                headers={
+                    "Authorization": "Bearer test-agent-secret",
+                    "X-Agent-User-Id": "owner-a",
+                },
+                json={"title": "spoof", "user_id": "owner-b"},
+            )
+            owner_headers = {
+                "Authorization": "Bearer test-agent-secret",
+                "X-Agent-User-Id": "owner-a",
+            }
+            created = await raw_client.post(
+                "/api/v1/conversations",
+                headers=owner_headers,
+                json={"title": "private", "user_id": "owner-a"},
+            )
+            conversation_id = created.json()["id"]
+            other_user_headers = {
+                "Authorization": "Bearer test-agent-secret",
+                "X-Agent-User-Id": "owner-b",
+            }
+            cross_user_read = await raw_client.get(
+                f"/api/v1/conversations/{conversation_id}",
+                headers=other_user_headers,
+            )
+            from src.commands import DARK_MODE_COMMAND
+
+            cross_user_chat = await raw_client.post(
+                "/chat",
+                headers=other_user_headers,
+                json={
+                    "message": DARK_MODE_COMMAND,
+                    "thread_id": conversation_id,
+                    "user_id": "owner-b",
+                },
+            )
+
+        assert unauthenticated.status_code == 401
+        assert missing_identity.status_code == 401
+        assert spoofed.status_code == 403
+        assert cross_user_read.status_code == 403
+        assert cross_user_chat.status_code == 403
+
     @pytest.mark.asyncio
     async def test_create_conversation(self, client: AsyncClient):
         """Should create a new conversation"""
@@ -217,6 +281,7 @@ class TestCompleteApiContract:
         monkeypatch.setattr(KnowledgeService, "search", fake_search)
 
         user_id = "contract_user"
+        client.headers["X-Agent-User-Id"] = user_id
         legacy_chat = await client.post(
             "/chat",
             json={"message": DARK_MODE_COMMAND, "user_id": user_id},

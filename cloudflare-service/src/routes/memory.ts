@@ -232,7 +232,7 @@ export function registerMemoryRoutes(app: any) {
 
       return c.json({
         ok: true,
-        data: result,
+        data: { items: result.results, degraded: result.degraded },
         error: null,
         meta,
       });
@@ -240,7 +240,7 @@ export function registerMemoryRoutes(app: any) {
       const fallback = await searchMemories(c.env.DB, c.env.MEMORY_INDEX, c.env.AI, userId, query, { limit: 10 }, true);
       return c.json({
         ok: true,
-        data: fallback,
+        data: { items: fallback.results, degraded: fallback.degraded },
         error: null,
         meta: { request_id: c.get("requestId"), degraded: true, warnings: ["Search degraded to SQL fallback"] },
       });

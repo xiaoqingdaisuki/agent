@@ -11,8 +11,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.tools import BaseTool
+
 from src.tools.contracts import ToolDescriptor, ToolCategory
-from src.tools.runtime.executor import ToolExecutor, invoke_tool, get_audit_log, clear_audit_log
+from src.tools.runtime.executor import (
+    ToolExecutor,
+    clear_audit_log,
+    get_audit_log,
+    invoke_tool,
+    wrap_tool_with_runtime,
+)
 from src.tools.weather import get_weather, _DESCRIPTOR as WEATHER_DESCRIPTOR
 from src.tools.search import web_search, _DESCRIPTOR as SEARCH_DESCRIPTOR
 from src.tools.web_read import web_read, _DESCRIPTOR as READ_DESCRIPTOR
@@ -50,9 +58,9 @@ class ToolRegistry:
             (get_weather, WEATHER_DESCRIPTOR),
             (web_search, SEARCH_DESCRIPTOR),
             (web_read, READ_DESCRIPTOR),
-            (file_read, FILE_READ_DESCRIPTOR),
             (calculator, CALC_DESCRIPTOR),
             (knowledge_search, KNOWLEDGE_DESCRIPTOR),
+            (file_read, FILE_READ_DESCRIPTOR),
             (memory_session_search, SESSION_DESCRIPTOR),
             (memory_user_search, _USER_SEARCH_DESCRIPTOR),
             (memory_user_save, _USER_SAVE_DESCRIPTOR),
@@ -64,7 +72,11 @@ class ToolRegistry:
     # 注册单个工具及其描述符
     def register(self, tool_fn: Any, descriptor: ToolDescriptor) -> None:
         """注册一个工具"""
-        self._tools[descriptor.name] = tool_fn
+        self._tools[descriptor.name] = (
+            wrap_tool_with_runtime(tool_fn, descriptor)
+            if isinstance(tool_fn, BaseTool)
+            else tool_fn
+        )
         self._descriptors[descriptor.name] = descriptor
 
     # 获取指定工具的描述符

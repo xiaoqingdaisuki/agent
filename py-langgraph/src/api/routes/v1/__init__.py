@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from src.api.auth import require_agent_user_id
 from src.services import (
     AgentService,
     BusinessError,
@@ -85,9 +86,10 @@ async def health():
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
 # 创建新会话
-async def create_conversation(req: CreateConversationRequest):
+async def create_conversation(req: CreateConversationRequest, request: Request):
+    trusted_user_id = require_agent_user_id(request, req.user_id)
     try:
-        conv = ConversationService.create(req.title, req.mode, req.user_id)
+        conv = ConversationService.create(req.title, req.mode, trusted_user_id)
         return conv.to_dict()
     except Exception:
         raise HTTPException(
@@ -98,25 +100,34 @@ async def create_conversation(req: CreateConversationRequest):
 
 @router.get("/conversations")
 # 列出所有会话
-async def list_conversations(user_id: str = None):
-    return ConversationService.list(user_id)
+async def list_conversations(request: Request, user_id: str = None):
+    trusted_user_id = require_agent_user_id(request, user_id)
+    return ConversationService.list(trusted_user_id)
 
 
 @router.get("/conversations/{conv_id}")
 # 获取指定会话详情
-async def get_conversation(conv_id: str):
+async def get_conversation(conv_id: str, request: Request):
     conv = ConversationService.get(conv_id)
     if not conv:
         raise HTTPException(
             status_code=404,
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
+    require_agent_user_id(request, conv.user_id)
     return conv.to_dict()
 
 
 @router.delete("/conversations/{conv_id}")
 # 删除指定会话及其消息
-async def delete_conversation(conv_id: str):
+async def delete_conversation(conv_id: str, request: Request):
+    conversation = ConversationService.get(conv_id)
+    if not conversation:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
+        )
+    require_agent_user_id(request, conversation.user_id)
     deleted = ConversationService.delete(conv_id)
     if not deleted:
         raise HTTPException(
@@ -131,22 +142,24 @@ async def delete_conversation(conv_id: str):
 
 @router.get("/conversations/{conv_id}/messages")
 # 获取指定会话的消息列表
-async def get_messages(conv_id: str):
+async def get_messages(conv_id: str, request: Request):
     conv = ConversationService.get(conv_id)
     if not conv:
         raise HTTPException(
             status_code=404,
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
+    require_agent_user_id(request, conv.user_id)
     return ConversationService.get_messages(conv_id)
 
 
 @router.post("/conversations/{conv_id}/messages", response_model=MessageResponse)
 # 向会话发送用户消息并获取 AI 回复
-async def send_message(conv_id: str, req: SendMessageRequest):
+async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
+    trusted_user_id = require_agent_user_id(request, req.user_id)
     try:
         # 确保会话存在于 D1
-        ConversationService.ensure(conv_id, req.user_id)
+        ConversationService.ensure(conv_id, trusted_user_id)
 
         conv = ConversationService.get(conv_id)
         if not conv:
@@ -162,8 +175,8 @@ async def send_message(conv_id: str, req: SendMessageRequest):
         except Exception:
             pass  # 恢复失败不影响主流程
 
-        ConversationService.append_user_message(conv_id, req.content, req.user_id or "")
-        reply = await AgentService.chat(conv_id, req.content, user_id=req.user_id)
+        ConversationService.append_user_message(conv_id, req.content, trusted_user_id)
+        reply = await AgentService.chat(conv_id, req.content, user_id=trusted_user_id)
 
         return reply.to_dict()
     except BusinessError as e:
@@ -179,9 +192,10 @@ async def send_message(conv_id: str, req: SendMessageRequest):
 
 @router.post("/conversations/{conv_id}/messages/stream")
 # 向会话发送消息并流式返回 AI 回复
-async def stream_message(conv_id: str, req: SendMessageRequest):
+async def stream_message(conv_id: str, req: SendMessageRequest, request: Request):
+    trusted_user_id = require_agent_user_id(request, req.user_id)
     # 确保会话记录存在于 D1（前端可能直接请求已有的 thread_id）
-    ConversationService.ensure(conv_id, req.user_id)
+    ConversationService.ensure(conv_id, trusted_user_id)
 
     conversation = ConversationService.get(conv_id)
     if not conversation:
@@ -197,14 +211,16 @@ async def stream_message(conv_id: str, req: SendMessageRequest):
     except Exception:
         pass  # 恢复失败不影响主流程
 
-    ConversationService.append_user_message(conv_id, req.content, req.user_id or "")
+    ConversationService.append_user_message(conv_id, req.content, trusted_user_id)
 
     # 执行 event generator 对应的业务逻辑
     async def event_generator():
         metadata = json.dumps({"conversation_id": conv_id}, ensure_ascii=False)
         yield f"data: {metadata}\n\n"
         try:
-            async for event in AgentService.chat_stream(conv_id, req.content, user_id=req.user_id):
+            async for event in AgentService.chat_stream(
+                conv_id, req.content, user_id=trusted_user_id
+            ):
                 payload = json.dumps(
                     {"delta": event["text"]}
                     if event["type"] == "text"
@@ -212,6 +228,7 @@ async def stream_message(conv_id: str, req: SendMessageRequest):
                         "event": "tool",
                         "tool_name": event["tool_name"],
                         "status": event["status"],
+                        "call_id": event["call_id"],
                     },
                     ensure_ascii=False,
                 )
@@ -230,13 +247,14 @@ async def stream_message(conv_id: str, req: SendMessageRequest):
 
 @router.delete("/conversations/{conv_id}/messages")
 # 清空指定会话的全部消息
-async def clear_messages(conv_id: str):
+async def clear_messages(conv_id: str, request: Request):
     conv = ConversationService.get(conv_id)
     if not conv:
         raise HTTPException(
             status_code=404,
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
+    require_agent_user_id(request, conv.user_id)
     ConversationService.clear_messages(conv_id)
     from src.memory import get_default_checkpointer
 
@@ -376,11 +394,12 @@ class ProfileQuery(BaseModel):
 
 @router.get("/profile")
 # 获取指定用户的画像信息
-async def get_profile(user_id: str, name: str = ""):
+async def get_profile(request: Request, user_id: str = None, name: str = ""):
+    trusted_user_id = require_agent_user_id(request, user_id)
     try:
         from src.profile.service import ProfileService
 
-        profile = ProfileService.get_or_create(user_id, name)
+        profile = ProfileService.get_or_create(trusted_user_id, name)
         return profile.to_dict()
     except Exception as e:
         raise HTTPException(
@@ -399,7 +418,8 @@ class ProfileUpdate(BaseModel):
 
 @router.patch("/profile")
 # 更新指定用户的画像信息
-async def update_profile(user_id: str, update: ProfileUpdate):
+async def update_profile(request: Request, update: ProfileUpdate, user_id: str = None):
+    trusted_user_id = require_agent_user_id(request, user_id)
     try:
         from src.profile.service import ProfileService
 
@@ -408,7 +428,7 @@ async def update_profile(user_id: str, update: ProfileUpdate):
             updates["name"] = update.name
         if update.preferences is not None:
             updates["preferences"] = update.preferences
-        profile = ProfileService.update(user_id, **updates)
+        profile = ProfileService.update(trusted_user_id, **updates)
         if not profile:
             raise HTTPException(
                 status_code=404,
@@ -429,11 +449,12 @@ async def update_profile(user_id: str, update: ProfileUpdate):
 
 @router.get("/memory")
 # 获取指定用户的记忆列表
-async def get_memories(user_id: str, category: str = None):
+async def get_memories(request: Request, user_id: str = None, category: str = None):
+    trusted_user_id = require_agent_user_id(request, user_id)
     try:
         from src.profile.service import MemoryService
 
-        memories = MemoryService.list_all(user_id)
+        memories = MemoryService.list_all(trusted_user_id)
         if category:
             memories = [m for m in memories if m["category"] == category]
         return {"memories": memories}
@@ -455,11 +476,14 @@ class MemoryCreate(BaseModel):
 
 @router.post("/memory", status_code=201)
 # 为指定用户添加一条新记忆
-async def create_memory(user_id: str, memory: MemoryCreate):
+async def create_memory(request: Request, memory: MemoryCreate, user_id: str = None):
+    trusted_user_id = require_agent_user_id(request, user_id)
     try:
         from src.profile.service import MemoryService
 
-        mem = MemoryService.add(user_id, memory.content, memory.category, memory.importance)
+        mem = MemoryService.add(
+            trusted_user_id, memory.content, memory.category, memory.importance
+        )
         return mem.to_dict()
     except Exception as e:
         raise HTTPException(
@@ -473,11 +497,12 @@ async def create_memory(user_id: str, memory: MemoryCreate):
 
 @router.delete("/memory")
 # 删除指定用户的记忆
-async def delete_memory(user_id: str, memory_id: str):
+async def delete_memory(request: Request, memory_id: str, user_id: str = None):
+    trusted_user_id = require_agent_user_id(request, user_id)
     try:
         from src.profile.service import MemoryService
 
-        deleted = MemoryService.delete(user_id, memory_id)
+        deleted = MemoryService.delete(trusted_user_id, memory_id)
         if not deleted:
             raise HTTPException(
                 status_code=404,
@@ -498,11 +523,17 @@ async def delete_memory(user_id: str, memory_id: str):
 
 @router.get("/history")
 # 获取指定用户的问答历史记录
-async def get_history(user_id: str, conversation_id: str = None, limit: int = 50):
+async def get_history(
+    request: Request,
+    user_id: str = None,
+    conversation_id: str = None,
+    limit: int = 50,
+):
+    trusted_user_id = require_agent_user_id(request, user_id)
     try:
         from src.profile.service import HistoryService
 
-        records = HistoryService.get_history(user_id, conversation_id, limit)
+        records = HistoryService.get_history(trusted_user_id, conversation_id, limit)
         return {"history": records}
     except Exception as e:
         raise HTTPException(

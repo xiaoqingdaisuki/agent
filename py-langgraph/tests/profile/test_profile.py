@@ -14,10 +14,10 @@ class TestUserProfile:
         assert profile.preferences == {}
 
     def test_get_existing_profile(self):
-        """Should return existing profile and update name"""
+        """Should return an existing profile without erasing or renaming it"""
         ProfileService.get_or_create("user_2", "Bob")
         profile = ProfileService.get_or_create("user_2", "Charlie")
-        assert profile.name == "Charlie"  # name updated via put
+        assert profile.name == "Bob"
 
     def test_update_profile(self):
         """Should update profile fields"""

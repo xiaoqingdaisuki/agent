@@ -15,61 +15,50 @@ from src.config.settings import settings
 
 # 模块级缓存（供测试 fixture 重置）
 _repositories = None
+_sync_loop: asyncio.AbstractEventLoop | None = None
+_sync_loop_thread: threading.Thread | None = None
+_sync_loop_ready = threading.Event()
+_sync_loop_lock = threading.Lock()
 
 
-# 执行 get or create event loop 对应的业务逻辑
-def _get_or_create_event_loop() -> asyncio.AbstractEventLoop:
-    """获取或创建事件循环（线程安全）"""
-    try:
-        loop = asyncio.get_running_loop()
-        # 如果已经在事件循环中（如 pytest-asyncio），返回 None 表示需要特殊处理
-        if loop.is_running():
-            return None  # type: ignore
-        return loop
-    except RuntimeError:
-        pass
-
-    try:
-        loop = asyncio.get_event_loop()
-        if not loop.is_closed():
-            return loop
-    except RuntimeError:
-        pass
-
+# 在专用线程中启动仓储异步客户端的持久事件循环
+def _run_repository_loop() -> None:
+    global _sync_loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    return loop
+    _sync_loop = loop
+    _sync_loop_ready.set()
+    loop.run_forever()
+
+
+# 获取或创建仓储专用事件循环，避免跨事件循环复用 AsyncClient
+def _get_or_create_event_loop() -> asyncio.AbstractEventLoop:
+    global _sync_loop_thread
+    if _sync_loop and _sync_loop.is_running():
+        return _sync_loop
+
+    with _sync_loop_lock:
+        if not _sync_loop or not _sync_loop.is_running():
+            _sync_loop_ready.clear()
+            _sync_loop_thread = threading.Thread(
+                target=_run_repository_loop,
+                name="memory-gateway-loop",
+                daemon=True,
+            )
+            _sync_loop_thread.start()
+            _sync_loop_ready.wait()
+
+    if not _sync_loop:
+        raise RuntimeError("仓储事件循环启动失败")
+    return _sync_loop
 
 
 # 执行 run sync 对应的业务逻辑
 def _run_sync(coro) -> Any:
     """在同步上下文中运行异步协程"""
     loop = _get_or_create_event_loop()
-    if loop is None:
-        # 在 pytest-asyncio 等框架中，需要在新的线程中运行
-        # 使用 nest_asyncio 的思路：如果 loop 正在运行，创建一个线程
-        result: dict[str, Any] = {}
-        failure: dict[str, BaseException] = {}
-
-        # 在独立线程事件循环中执行协程并保留异常
-        def run_in_new_loop():
-            new_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(new_loop)
-            try:
-                result["value"] = new_loop.run_until_complete(coro)
-            except BaseException as exc:
-                failure["error"] = exc
-            finally:
-                new_loop.close()
-
-        thread = threading.Thread(target=run_in_new_loop)
-        thread.start()
-        thread.join()
-        if "error" in failure:
-            raise failure["error"]
-        return result["value"]
-
-    return loop.run_until_complete(coro)
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
 
 
 # 获取 get repositories 对应的数据
@@ -96,6 +85,9 @@ class Repositories:
     # Profile
     # 获取 get or create profile 对应的数据
     def get_or_create_profile(self, user_id: str, name: str = "") -> dict:
+        existing = _run_sync(self._client.get_profile(user_id))
+        if existing:
+            return existing
         return _run_sync(self._client.put_profile(user_id, name))
 
     # 获取 get profile 对应的数据

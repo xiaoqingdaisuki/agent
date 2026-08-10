@@ -16,6 +16,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from src.tools.runtime.executor import create_tool_call_context, tool_call_scope
+
 logger = logging.getLogger(__name__)
 
 # ============ 错误码 ============
@@ -199,18 +201,43 @@ class ConversationService:
         mode: str = "chat",
     ) -> Conversation:
         normalized_user_id = user_id or DEFAULT_CONVERSATION_USER_ID
+        cached = _conversations.get(conv_id)
+        if cached and cached.user_id != normalized_user_id:
+            raise BusinessError(
+                BusinessErrorCode.FORBIDDEN,
+                "无权访问该会话",
+                403,
+            )
+
         # 先检查 D1
+        existing = None
         try:
             from src.repositories import get_repositories
 
             existing = get_repositories().get_conversation(conv_id)
-            if not existing:
+            if existing and existing.get("user_id") != normalized_user_id:
+                raise BusinessError(
+                    BusinessErrorCode.FORBIDDEN,
+                    "无权访问该会话",
+                    403,
+                )
+            if existing:
+                _conversations[conv_id] = Conversation(
+                    title=existing.get("title", ""),
+                    mode=existing.get("mode", "chat"),
+                    conversation_id=existing["id"],
+                    user_id=existing.get("user_id", DEFAULT_CONVERSATION_USER_ID),
+                    created_at=existing.get("created_at"),
+                )
+            else:
                 get_repositories().create_conversation(
                     normalized_user_id,
                     title,
                     mode,
                     conv_id,
                 )
+        except BusinessError:
+            raise
         except Exception as exc:
             raise BusinessError(
                 BusinessErrorCode.SERVICE_UNAVAILABLE,
@@ -219,7 +246,7 @@ class ConversationService:
             ) from exc
 
         # 注册到内存
-        if conv_id not in _conversations:
+        if not existing and conv_id not in _conversations:
             conv = Conversation(title, mode, conv_id, normalized_user_id)
             _conversations[conv_id] = conv
         return _conversations[conv_id]
@@ -253,39 +280,26 @@ class ConversationService:
     @staticmethod
     # 列出所有会话，D1 为权威数据源
     def list(user_id: str | None = None) -> list[dict]:
+        normalized_user_id = user_id or DEFAULT_CONVERSATION_USER_ID
         try:
             from src.repositories import get_repositories
             repos = get_repositories()
 
-            # 从已知内存会话中收集 userId
-            known_user_ids = (
-                {user_id}
-                if user_id
-                else {c.user_id for c in _conversations.values()}
-            )
-
             all_convs: dict[str, dict] = {}
 
-            # 按 userId 从 D1 拉取
-            for uid in known_user_ids:
-                if not uid:
-                    continue
-                try:
-                    items = repos.list_conversations(uid, 100, 0)
-                    for item in items:
-                        all_convs[item["id"]] = {
-                            "id": item["id"],
-                            "title": item.get("title", ""),
-                            "mode": item.get("mode", "chat"),
-                            "created_at": item.get("created_at", ""),
-                            "message_count": 0,
-                        }
-                except Exception as exc:
-                    logger.warning("[service] D1 list conversations for user %s failed: %s", uid, exc)
+            items = repos.list_conversations(normalized_user_id, 100, 0)
+            for item in items:
+                all_convs[item["id"]] = {
+                    "id": item["id"],
+                    "title": item.get("title", ""),
+                    "mode": item.get("mode", "chat"),
+                    "created_at": item.get("created_at", ""),
+                    "message_count": 0,
+                }
 
-            # 合并内存中的无 userId 会话
+            # 只合并当前用户的内存会话
             for c in _conversations.values():
-                if c.id not in all_convs:
+                if c.user_id == normalized_user_id and c.id not in all_convs:
                     all_convs[c.id] = c.to_dict()
 
             # 按创建时间倒序
@@ -298,7 +312,11 @@ class ConversationService:
             logger.warning("[service] D1 list conversations failed: %s", exc)
             # D1 失败时返回内存数据
             return sorted(
-                [c.to_dict() for c in _conversations.values()],
+                [
+                    c.to_dict()
+                    for c in _conversations.values()
+                    if c.user_id == normalized_user_id
+                ],
                 key=lambda c: c["created_at"],
                 reverse=True,
             )
@@ -690,26 +708,28 @@ class AgentService:
             if user_id:
                 config["configurable"]["user_id"] = user_id
 
-            async with AgentDeadline():
-                if conversation and conversation.mode == "knowledge":
-                    from langchain_core.messages import HumanMessage
-                    from src.rag.rag_agent import build_rag_agent
+            runtime_context = create_tool_call_context(user_id or "", conversation_id)
+            with tool_call_scope(runtime_context):
+                async with AgentDeadline():
+                    if conversation and conversation.mode == "knowledge":
+                        from langchain_core.messages import HumanMessage
+                        from src.rag.rag_agent import build_rag_agent
 
-                    result = await build_rag_agent().ainvoke(
-                        {
-                            "messages": [HumanMessage(content=content)],
-                            "context": [],
-                            "should_retrieve": True,
-                        }
-                    )
-                else:
-                    result = await agent.ainvoke(
-                        {
-                            "messages": [{"role": "user", "content": content}],
-                            "user_id": user_id,
-                        },
-                        config=config,
-                    )
+                        result = await build_rag_agent().ainvoke(
+                            {
+                                "messages": [HumanMessage(content=content)],
+                                "context": [],
+                                "should_retrieve": True,
+                            }
+                        )
+                    else:
+                        result = await agent.ainvoke(
+                            {
+                                "messages": [{"role": "user", "content": content}],
+                                "user_id": user_id,
+                            },
+                            config=config,
+                        )
 
             reply_content = result["messages"][-1].content or "抱歉，我没有理解您的问题。"
 
@@ -767,6 +787,7 @@ class AgentService:
     @staticmethod
     # 执行 chat stream 对应的业务逻辑
     async def chat_stream(conversation_id: str, content: str, user_id: str = None):
+        full_answer = ""
         try:
             from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
             from src.agents.deadline import AgentDeadline
@@ -790,6 +811,44 @@ class AgentService:
                 except Exception:
                     pass
 
+            conversation = ConversationService.get(conversation_id)
+            runtime_context = create_tool_call_context(user_id or "", conversation_id)
+            if conversation and conversation.mode == "knowledge":
+                from langchain_core.messages import HumanMessage
+                from src.rag.rag_agent import build_rag_agent
+
+                with tool_call_scope(runtime_context):
+                    async with AgentDeadline():
+                        result = await build_rag_agent().ainvoke(
+                            {
+                                "messages": [HumanMessage(content=content)],
+                                "context": [],
+                                "should_retrieve": True,
+                            }
+                        )
+                full_answer = maybe_append_continuation_hint(
+                    result["messages"][-1].content
+                    or "抱歉，我没有理解您的问题。"
+                )
+                ConversationService.append_assistant_message(
+                    conversation_id,
+                    Message("assistant", full_answer),
+                    user_id or "",
+                )
+                yield {"type": "text", "text": full_answer}
+                if user_id:
+                    try:
+                        HistoryService.record(
+                            user_id, conversation_id, content, full_answer
+                        )
+                        MemoryService.extract_memories_from_conversation(
+                            user_id, content, full_answer
+                        )
+                        ProfileService.update(user_id)
+                    except Exception:
+                        pass
+                return
+
             agent = build_tool_agent(
                 system_prompt_override=get_agent_prompt_override(conversation_id, content)
             )
@@ -800,43 +859,43 @@ class AgentService:
             if user_id:
                 config["configurable"]["user_id"] = user_id
 
-            full_answer = ""
-            async with AgentDeadline():
-                async for event in agent.astream_events(
-                    {
-                        "messages": [{"role": "user", "content": content}],
-                        "user_id": user_id,
-                    },
-                    config=config,
-                    version="v2",
-                ):
-                    run_id = event.get("run_id", "")
-                    if event["event"] == "on_tool_start":
-                        yield {
-                            "type": "tool",
-                            "tool_name": event.get("name", "tool"),
-                            "status": "started",
-                            "run_id": run_id,
-                        }
-                    elif event["event"] == "on_tool_end":
-                        yield {
-                            "type": "tool",
-                            "tool_name": event.get("name", "tool"),
-                            "status": "completed",
-                            "run_id": run_id,
-                        }
-                    elif event["event"] == "on_tool_error":
-                        yield {
-                            "type": "tool",
-                            "tool_name": event.get("name", "tool"),
-                            "status": "failed",
-                            "run_id": run_id,
-                        }
-                    elif event["event"] == "on_chat_model_stream":
-                        chunk = event["data"]["chunk"]
-                        if isinstance(chunk.content, str) and chunk.content:
-                            full_answer += chunk.content
-                            yield {"type": "text", "text": chunk.content}
+            with tool_call_scope(runtime_context):
+                async with AgentDeadline():
+                    async for event in agent.astream_events(
+                        {
+                            "messages": [{"role": "user", "content": content}],
+                            "user_id": user_id,
+                        },
+                        config=config,
+                        version="v2",
+                    ):
+                        run_id = event.get("run_id", "")
+                        if event["event"] == "on_tool_start":
+                            yield {
+                                "type": "tool",
+                                "tool_name": event.get("name", "tool"),
+                                "status": "started",
+                                "call_id": run_id,
+                            }
+                        elif event["event"] == "on_tool_end":
+                            yield {
+                                "type": "tool",
+                                "tool_name": event.get("name", "tool"),
+                                "status": "completed",
+                                "call_id": run_id,
+                            }
+                        elif event["event"] == "on_tool_error":
+                            yield {
+                                "type": "tool",
+                                "tool_name": event.get("name", "tool"),
+                                "status": "failed",
+                                "call_id": run_id,
+                            }
+                        elif event["event"] == "on_chat_model_stream":
+                            chunk = event["data"]["chunk"]
+                            if isinstance(chunk.content, str) and chunk.content:
+                                full_answer += chunk.content
+                                yield {"type": "text", "text": chunk.content}
 
             if full_answer:
                 final_answer = maybe_append_continuation_hint(full_answer)

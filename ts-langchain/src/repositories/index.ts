@@ -64,6 +64,8 @@ class CloudflareProfileRepository implements ProfileRepository {
 
   // 获取 getOrCreate 对应的数据
   async getOrCreate(userId: string, name: string = ""): Promise<UserProfileData> {
+    const existing = await this._client.getProfile(userId);
+    if (existing) return existing as unknown as UserProfileData;
     const data = await this._client.putProfile(userId, name);
     return data as unknown as UserProfileData;
   }

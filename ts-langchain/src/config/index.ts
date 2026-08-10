@@ -10,6 +10,14 @@ import { z } from "zod";
 
 dotenv.config();
 
+// 将常见布尔环境变量文本转换为真正的布尔值
+function parseBooleanEnv(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  if (value.toLowerCase() === "true") return true;
+  if (value.toLowerCase() === "false") return false;
+  return value;
+}
+
 const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
@@ -73,6 +81,7 @@ const envSchema = z.object({
     .default(600),
 
   PORT: z.coerce.number().default(6001),
+  AGENT_API_SECRET: z.string().default(""),
   CORS_ORIGIN: z
     .string()
     .default("")
@@ -95,7 +104,7 @@ const envSchema = z.object({
       (v) => v === "hybrid" || v === "sql",
       { message: "MEMORY_SEARCH_MODE must be 'hybrid' or 'sql'" },
     ),
-  MEMORY_AUTO_EXTRACT: z.coerce.boolean().default(true),
+  MEMORY_AUTO_EXTRACT: z.preprocess(parseBooleanEnv, z.boolean()).default(true),
   MEMORY_MAX_ACTIVE_PER_USER: z.coerce.number().int().min(1).max(200).default(50),
   MEMORY_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(5_000),
 });

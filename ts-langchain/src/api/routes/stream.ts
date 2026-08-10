@@ -15,6 +15,7 @@ import {
 } from "../../commands/index.js";
 import { AgentDeadline, isAgentDeadlineError } from "../../agents/deadline.js";
 import { maybeAppendContinuationHint } from "../../agents/response-handler.js";
+import { requireAgentUserId } from "../middleware/auth.js";
 
 // 创建或注册 registerStreamRoutes 所需的数据
 export async function registerStreamRoutes(app: FastifyInstance) {
@@ -22,6 +23,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
     "/stream",
     async (request, reply) => {
       const { message, thread_id, user_id } = request.body;
+      const trustedUserId = requireAgentUserId(request, user_id);
       if (!message) {
         return reply.status(400).send({ error: "message is required" });
       }
@@ -29,7 +31,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       const threadId = thread_id || crypto.randomUUID();
 
       // 确保会话记录存在于 D1（前端传入的 thread_id 需关联 conversations 表）
-      await ConversationService.ensure(threadId, user_id);
+      await ConversationService.ensure(threadId, trustedUserId);
 
       const command = executeAgentCommand(message, threadId);
       if (command) {
@@ -49,10 +51,10 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         return;
       }
       const memoryContext: SystemMessage[] = [];
-      if (user_id) {
+      if (trustedUserId) {
         try {
-          await ProfileService.getOrCreate(user_id);
-          const context = await MemoryService.buildMemoryContext(user_id);
+          await ProfileService.getOrCreate(trustedUserId);
+          const context = await MemoryService.buildMemoryContext(trustedUserId);
           if (context) memoryContext.push(new SystemMessage(context));
         } catch {
           // Memory is optional; continue with the default prompt.
@@ -70,7 +72,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         trace_id: `trace_${Date.now()}`,
         conversation_id: threadId,
         tenant_id: "",
-        user_id: user_id || "anonymous",
+        user_id: trustedUserId,
         actor_type: "user",
       } as const;
 

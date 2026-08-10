@@ -5,6 +5,7 @@ TARGET="${1:-}"
 ENV_FILE="${AGENT_ENV_FILE:-.env.ecs}"
 COMPOSE_FILE="docker-compose.ecs.yml"
 
+# 输出部署脚本的用法说明
 usage() {
   echo "Usage: bash deploy-ecs.sh <typescript|python|all>"
 }
@@ -29,10 +30,11 @@ fi
 
 if [ ! -f "$ENV_FILE" ]; then
   cp .env.ecs.example "$ENV_FILE"
-  echo "Created $ENV_FILE. Fill in OPENAI_API_KEY and CORS_ORIGIN, then run this command again."
+  echo "Created $ENV_FILE. Fill in OPENAI_API_KEY, memory gateway settings, AGENT_API_SECRET and CORS_ORIGIN, then run this command again."
   exit 1
 fi
 
+# 从部署环境文件读取指定配置
 read_env() {
   sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1
 }
@@ -40,6 +42,22 @@ read_env() {
 OPENAI_KEY="$(read_env OPENAI_API_KEY)"
 if [ -z "$OPENAI_KEY" ] || [ "$OPENAI_KEY" = "change-me" ]; then
   echo "OPENAI_API_KEY is not configured in $ENV_FILE."
+  exit 1
+fi
+
+MEMORY_BASE_URL="$(read_env CLOUDFLARE_MEMORY_BASE_URL)"
+MEMORY_SECRET="$(read_env CLOUDFLARE_MEMORY_SECRET)"
+AGENT_API_SECRET="$(read_env AGENT_API_SECRET)"
+if [ -z "$MEMORY_BASE_URL" ] || [ "$MEMORY_BASE_URL" = "https://change-me.workers.dev" ]; then
+  echo "CLOUDFLARE_MEMORY_BASE_URL is not configured in $ENV_FILE."
+  exit 1
+fi
+if [ -z "$MEMORY_SECRET" ] || [ "$MEMORY_SECRET" = "change-me" ]; then
+  echo "CLOUDFLARE_MEMORY_SECRET is not configured in $ENV_FILE."
+  exit 1
+fi
+if [ -z "$AGENT_API_SECRET" ] || [ "$AGENT_API_SECRET" = "change-me" ]; then
+  echo "AGENT_API_SECRET is not configured in $ENV_FILE."
   exit 1
 fi
 

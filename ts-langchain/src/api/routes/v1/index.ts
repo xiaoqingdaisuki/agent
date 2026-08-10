@@ -26,6 +26,7 @@ import type {
   Document,
   Message,
 } from "../../../services/index.js";
+import { requireAgentUserId } from "../../middleware/auth.js";
 
 // 将 Conversation 对象序列化为前端 API 响应格式
 function serializeConversation(conversation: Conversation) {
@@ -77,16 +78,25 @@ export async function registerV1Routes(app: FastifyInstance) {
   }>("/conversations", async (request, reply) => {
     try {
       const { title, mode = "chat", user_id } = request.body;
-      if (!title) {
+      const trustedUserId = requireAgentUserId(request, user_id);
+      if (typeof title !== "string" || title.length < 1 || title.length > 100) {
         return reply.status(400).send({
           error: {
             code: BusinessErrorCode.INVALID_REQUEST,
-            message: "title is required",
+            message: "title length must be between 1 and 100",
+          },
+        });
+      }
+      if (!["chat", "knowledge", "mixed"].includes(mode)) {
+        return reply.status(400).send({
+          error: {
+            code: BusinessErrorCode.INVALID_REQUEST,
+            message: "mode must be chat, knowledge or mixed",
           },
         });
       }
 
-      const conv = await ConversationService.create(title, mode, user_id);
+      const conv = await ConversationService.create(title, mode, trustedUserId);
       return reply.status(201).send(serializeConversation(conv));
     } catch (error: any) {
       if (error instanceof BusinessError) {
@@ -102,7 +112,8 @@ export async function registerV1Routes(app: FastifyInstance) {
   });
 
   app.get<{ Querystring: { user_id?: string } }>("/conversations", async (request) => {
-    const convs = await ConversationService.list(request.query.user_id);
+    const trustedUserId = requireAgentUserId(request, request.query.user_id);
+    const convs = await ConversationService.list(trustedUserId);
     return convs.map(serializeConversation);
   });
 
@@ -115,6 +126,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
         });
       }
+      requireAgentUserId(request, conv.userId);
       return serializeConversation(conv);
     },
   );
@@ -122,6 +134,13 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>(
     "/conversations/:id",
     async (request, reply) => {
+      const conversation = await ConversationService.get(request.params.id);
+      if (!conversation) {
+        return reply.status(404).send({
+          error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
+        });
+      }
+      requireAgentUserId(request, conversation.userId);
       const deleted = await ConversationService.delete(request.params.id);
       if (!deleted) {
         return reply.status(404).send({
@@ -141,6 +160,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
         });
       }
+      requireAgentUserId(request, conv.userId);
       const messages = await ConversationService.getMessages(request.params.id);
       return messages.map(serializeMessage);
     },
@@ -153,9 +173,10 @@ export async function registerV1Routes(app: FastifyInstance) {
     try {
       const { content, user_id } = request.body;
       const convId = request.params.id;
+      const trustedUserId = requireAgentUserId(request, user_id);
 
       // 确保会话存在于 D1
-      await ConversationService.ensure(convId, user_id);
+      await ConversationService.ensure(convId, trustedUserId);
 
       const conv = await ConversationService.get(convId);
 
@@ -164,7 +185,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
         });
       }
-      if (!content) {
+      if (typeof content !== "string" || content.length < 1) {
         return reply.status(400).send({
           error: {
             code: BusinessErrorCode.INVALID_REQUEST,
@@ -177,7 +198,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       const assistantMessage = await AgentService.chat(
         convId,
         content,
-        user_id,
+        trustedUserId,
       );
 
       return reply.status(200).send(serializeMessage(assistantMessage));
@@ -200,9 +221,10 @@ export async function registerV1Routes(app: FastifyInstance) {
   }>("/conversations/:id/messages/stream", async (request, reply) => {
     const { content, user_id } = request.body;
     const convId = request.params.id;
+    const trustedUserId = requireAgentUserId(request, user_id);
 
     // 确保会话记录存在于 D1（前端可能直接请求已有的 thread_id）
-    await ConversationService.ensure(convId, user_id);
+    await ConversationService.ensure(convId, trustedUserId);
 
     const conversation = await ConversationService.get(convId);
     if (!conversation) {
@@ -210,7 +232,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
       });
     }
-    if (!content) {
+    if (typeof content !== "string" || content.length < 1) {
       return reply.status(400).send({
         error: {
           code: BusinessErrorCode.INVALID_REQUEST,
@@ -234,7 +256,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       for await (const event of AgentService.chatStream(
         convId,
         content,
-        user_id,
+        trustedUserId,
       )) {
         const payload =
           event.type === "text"
@@ -283,6 +305,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
         });
       }
+      requireAgentUserId(request, conv.userId);
       await ConversationService.clearMessages(request.params.id);
       return { success: true };
     },
@@ -386,11 +409,19 @@ export async function registerV1Routes(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const { query, top_k = 5 } = request.body;
-        if (!query) {
+        if (typeof query !== "string" || query.length < 1) {
           return reply.status(400).send({
             error: {
               code: BusinessErrorCode.INVALID_REQUEST,
               message: "query is required",
+            },
+          });
+        }
+        if (!Number.isInteger(top_k) || top_k < 1 || top_k > 20) {
+          return reply.status(400).send({
+            error: {
+              code: BusinessErrorCode.INVALID_REQUEST,
+              message: "top_k must be an integer between 1 and 20",
             },
           });
         }
@@ -420,21 +451,17 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.get("/profile", async (request, reply) => {
     try {
-      const userId = (request.query as any).user_id;
-      if (!userId) {
-        return reply.status(400).send({
-          error: {
-            code: BusinessErrorCode.INVALID_REQUEST,
-            message: "user_id is required",
-          },
-        });
-      }
+      const submittedUserId = (request.query as any).user_id;
+      const userId = requireAgentUserId(request, submittedUserId);
       const profile = await ProfileService.getOrCreate(
         userId,
         (request.query as any).name,
       );
       return profile;
     } catch (error: any) {
+      if (error instanceof BusinessError) {
+        return reply.status(error.statusCode).send(error.toJSON());
+      }
       return reply.status(500).send({
         error: {
           code: BusinessErrorCode.INTERNAL_ERROR,
@@ -447,16 +474,9 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.patch("/profile", async (request, reply) => {
     try {
       const { user_id } = request.query as any;
+      const trustedUserId = requireAgentUserId(request, user_id);
       const body = request.body as any;
-      if (!user_id) {
-        return reply.status(400).send({
-          error: {
-            code: BusinessErrorCode.INVALID_REQUEST,
-            message: "user_id is required",
-          },
-        });
-      }
-      const profile = await ProfileService.update(user_id,
+      const profile = await ProfileService.update(trustedUserId,
         body.name,
         body.preferences,
       );
@@ -470,6 +490,9 @@ export async function registerV1Routes(app: FastifyInstance) {
       }
       return profile;
     } catch (error: any) {
+      if (error instanceof BusinessError) {
+        return reply.status(error.statusCode).send(error.toJSON());
+      }
       return reply.status(500).send({
         error: {
           code: BusinessErrorCode.INTERNAL_ERROR,
@@ -482,20 +505,16 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.get("/memory", async (request, reply) => {
     try {
       const { user_id, category } = request.query as any;
-      if (!user_id) {
-        return reply.status(400).send({
-          error: {
-            code: BusinessErrorCode.INVALID_REQUEST,
-            message: "user_id is required",
-          },
-        });
-      }
-      const memories = await MemoryService.listAll(user_id);
+      const trustedUserId = requireAgentUserId(request, user_id);
+      const memories = await MemoryService.listAll(trustedUserId);
       const filtered = category
         ? memories.filter((m: any) => m.category === category)
         : memories;
       return { memories: filtered };
     } catch (error: any) {
+      if (error instanceof BusinessError) {
+        return reply.status(error.statusCode).send(error.toJSON());
+      }
       return reply.status(500).send({
         error: {
           code: BusinessErrorCode.INTERNAL_ERROR,
@@ -508,16 +527,9 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.post("/memory", async (request, reply) => {
     try {
       const { user_id } = request.query as any;
+      const trustedUserId = requireAgentUserId(request, user_id);
       const body = request.body as any;
-      if (!user_id) {
-        return reply.status(400).send({
-          error: {
-            code: BusinessErrorCode.INVALID_REQUEST,
-            message: "user_id is required",
-          },
-        });
-      }
-      if (!body.content) {
+      if (typeof body.content !== "string" || body.content.length < 1) {
         return reply.status(400).send({
           error: {
             code: BusinessErrorCode.INVALID_REQUEST,
@@ -525,14 +537,35 @@ export async function registerV1Routes(app: FastifyInstance) {
           },
         });
       }
+      const category = body.category ?? "fact";
+      const importance = body.importance ?? 3;
+      if (!["preference", "fact", "decision", "context"].includes(category)) {
+        return reply.status(400).send({
+          error: {
+            code: BusinessErrorCode.INVALID_REQUEST,
+            message: "category is invalid",
+          },
+        });
+      }
+      if (!Number.isInteger(importance) || importance < 1 || importance > 5) {
+        return reply.status(400).send({
+          error: {
+            code: BusinessErrorCode.INVALID_REQUEST,
+            message: "importance must be an integer between 1 and 5",
+          },
+        });
+      }
       const memory = await MemoryService.add(
-        user_id,
+        trustedUserId,
         body.content,
-        body.category || "fact",
-        body.importance || 3,
+        category,
+        importance,
       );
       return reply.status(201).send(memory);
     } catch (error: any) {
+      if (error instanceof BusinessError) {
+        return reply.status(error.statusCode).send(error.toJSON());
+      }
       return reply.status(500).send({
         error: {
           code: BusinessErrorCode.INTERNAL_ERROR,
@@ -545,15 +578,16 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.delete("/memory", async (request, reply) => {
     try {
       const { user_id, memory_id } = request.query as any;
-      if (!user_id || !memory_id) {
+      const trustedUserId = requireAgentUserId(request, user_id);
+      if (!memory_id) {
         return reply.status(400).send({
           error: {
             code: BusinessErrorCode.INVALID_REQUEST,
-            message: "user_id and memory_id are required",
+            message: "memory_id is required",
           },
         });
       }
-      const deleted = await MemoryService.delete(user_id, memory_id);
+      const deleted = await MemoryService.delete(trustedUserId, memory_id);
       if (!deleted) {
         return reply.status(404).send({
           error: { code: BusinessErrorCode.NOT_FOUND, message: "记忆不存在" },
@@ -561,6 +595,9 @@ export async function registerV1Routes(app: FastifyInstance) {
       }
       return { success: true };
     } catch (error: any) {
+      if (error instanceof BusinessError) {
+        return reply.status(error.statusCode).send(error.toJSON());
+      }
       return reply.status(500).send({
         error: {
           code: BusinessErrorCode.INTERNAL_ERROR,
@@ -573,21 +610,17 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.get("/history", async (request, reply) => {
     try {
       const { user_id, conversation_id, limit } = request.query as any;
-      if (!user_id) {
-        return reply.status(400).send({
-          error: {
-            code: BusinessErrorCode.INVALID_REQUEST,
-            message: "user_id is required",
-          },
-        });
-      }
+      const trustedUserId = requireAgentUserId(request, user_id);
       const records = await HistoryService.getHistory(
-        user_id,
+        trustedUserId,
         conversation_id,
         limit ? Number(limit) : 50,
       );
       return { history: records };
     } catch (error: any) {
+      if (error instanceof BusinessError) {
+        return reply.status(error.statusCode).send(error.toJSON());
+      }
       return reply.status(500).send({
         error: {
           code: BusinessErrorCode.INTERNAL_ERROR,

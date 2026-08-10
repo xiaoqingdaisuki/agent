@@ -4,6 +4,7 @@ Tests for Tool Runtime — 验证统一执行管线
 
 import asyncio
 import pytest
+from langchain_core.tools import tool
 from src.tools.contracts import (
     ToolCallContext,
     ToolDescriptor,
@@ -22,6 +23,9 @@ from src.tools.runtime.executor import (
     record_audit,
     get_audit_log,
     clear_audit_log,
+    create_tool_call_context,
+    tool_call_scope,
+    wrap_tool_with_runtime,
 )
 from src.tools.calculator import DESCRIPTOR as CALC_DESCRIPTOR, safe_calculate
 
@@ -249,3 +253,67 @@ class TestInvokeTool:
         assert len(log) == 1
         assert log[0]["tool_name"] == "audit.tool"
         assert log[0]["ok"] is True
+
+
+class TestRuntimeToolWrapper:
+    @pytest.mark.asyncio
+    async def test_global_registry_tools_use_runtime_pipeline(self):
+        from src.tools.registry import get_registry
+
+        wrapped = get_registry().get_tool("math.calculate")
+        context = create_tool_call_context("trusted-user", "trusted-conversation")
+
+        with tool_call_scope(context):
+            result = await wrapped.ainvoke({"expression": "2 + 2"})
+
+        assert "4" in result
+        assert get_audit_log()[-1]["tool_name"] == "math.calculate"
+
+    @pytest.mark.asyncio
+    async def test_scopes_model_supplied_user_id_to_trusted_context(self):
+        @tool
+        async def echo_user(user_id: str) -> str:
+            """Return the effective user id."""
+            return user_id
+
+        descriptor = ToolDescriptor(
+            name="memory.user.search",
+            version="1.0.0",
+            title="Echo user",
+            description="test",
+            category="MEMORY",
+            risk_level="R1",
+            side_effect="read",
+            timeout_ms=5000,
+            required_permissions=["memory.user.read"],
+        )
+        wrapped = wrap_tool_with_runtime(echo_user, descriptor)
+        context = create_tool_call_context("trusted-user", "trusted-conversation")
+
+        with tool_call_scope(context):
+            result = await wrapped.ainvoke({"user_id": "spoofed-user"})
+
+        assert result == "trusted-user"
+        assert get_audit_log()[-1]["user_id"] == "trusted-user"
+
+    @pytest.mark.asyncio
+    async def test_requires_a_request_scope(self):
+        @tool
+        async def echo(value: str) -> str:
+            """Return the supplied value."""
+            return value
+
+        descriptor = ToolDescriptor(
+            name="test.echo",
+            version="1.0.0",
+            title="Echo",
+            description="test",
+            category="COMPUTE",
+            risk_level="R0",
+            side_effect="none",
+            timeout_ms=5000,
+        )
+        wrapped = wrap_tool_with_runtime(echo, descriptor)
+
+        with pytest.raises(RuntimeError, match="runtime context"):
+            await wrapped.ainvoke({"value": "test"})

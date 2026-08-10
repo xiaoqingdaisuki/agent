@@ -103,7 +103,7 @@ class TestMemoryTools:
         builder = StateGraph(AgentState)
         builder.add_node(
             "tools",
-            ToolNode([memory_user_save], wrap_tool_call=_scope_memory_tool_call),
+            ToolNode([memory_user_save], awrap_tool_call=_scope_memory_tool_call),
         )
         builder.add_edge(START, "tools")
         builder.add_edge("tools", END)

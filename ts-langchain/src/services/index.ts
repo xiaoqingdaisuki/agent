@@ -242,16 +242,51 @@ export class ConversationService {
     title: string = "New Chat",
     mode: "chat" | "knowledge" | "mixed" = "chat",
   ): Promise<Conversation> {
+    const normalizedUserId = userId || DEFAULT_CONVERSATION_USER_ID;
+    const cached = conversations.get(conversationId);
+    if (cached?.userId && cached.userId !== normalizedUserId) {
+      throw new BusinessError(
+        BusinessErrorCode.FORBIDDEN,
+        "无权访问该会话",
+        403,
+      );
+    }
+
     // 检查 D1 是否已有记录
-    let persistedConversationExists = false;
+    let persistedConversation: Awaited<
+      ReturnType<ReturnType<typeof getRepositories>["conversation"]["get"]>
+    > = null;
     try {
       const repos = getRepositories();
       const existing = await repos.conversation.get(conversationId);
-      persistedConversationExists = existing !== null;
-      if (!existing) {
-        await repos.conversation.create(userId, title, mode, conversationId);
+      if (existing && existing.user_id !== normalizedUserId) {
+        throw new BusinessError(
+          BusinessErrorCode.FORBIDDEN,
+          "无权访问该会话",
+          403,
+        );
+      }
+      persistedConversation = existing;
+      if (existing) {
+        const conversation: Conversation = {
+          id: existing.id,
+          title: existing.title,
+          mode: existing.mode,
+          createdAt: existing.created_at,
+          messageCount: cached?.messageCount ?? 0,
+          userId: existing.user_id,
+        };
+        conversations.set(conversationId, conversation);
+      } else {
+        await repos.conversation.create(
+          normalizedUserId,
+          title,
+          mode,
+          conversationId,
+        );
       }
     } catch (err) {
+      if (err instanceof BusinessError) throw err;
       throw new BusinessError(
         BusinessErrorCode.INTERNAL_ERROR,
         `会话持久化失败: ${err}`,
@@ -260,23 +295,17 @@ export class ConversationService {
     }
 
     // 注册到内存
-    if (!conversations.has(conversationId)) {
+    if (!persistedConversation && !conversations.has(conversationId)) {
       const conversation: Conversation = {
         id: conversationId,
         title,
         mode,
         createdAt: new Date().toISOString(),
         messageCount: 0,
-        userId,
+        userId: normalizedUserId,
       };
       conversations.set(conversationId, conversation);
-      if (!persistedConversationExists) conversationMessages.set(conversationId, []);
-    } else {
-      // 更新 userId（ensure 可能先于 create 被调用）
-      const existing = conversations.get(conversationId);
-      if (existing && userId && !existing.userId) {
-        existing.userId = userId;
-      }
+      conversationMessages.set(conversationId, []);
     }
 
     return conversations.get(conversationId)!;
@@ -311,47 +340,30 @@ export class ConversationService {
 
   // 列出所有会话，内存未命中时从 D1 加载
   static async list(userId?: string): Promise<Conversation[]> {
+    const normalizedUserId = userId || DEFAULT_CONVERSATION_USER_ID;
     // 优先从 D1 加载（D1 为权威数据源）
     try {
       const repos = getRepositories();
-      // 遍历已知 userId 从 D1 拉取，或尝试不带 userId 的 list
-      const knownUserIds = new Set(
-        userId
-          ? [userId]
-          : Array.from(conversations.values())
-              .map((c) => c.userId)
-              .filter((id): id is string => !!id),
-      );
-
       const allConversations: Conversation[] = [];
-
-      // 从已知 userId 拉取
-      for (const uid of knownUserIds) {
-        const dataList = await repos.conversation.list(uid, 100, 0);
-        for (const d of dataList) {
-          allConversations.push({
-            id: d.id,
-            title: d.title,
-            mode: d.mode,
-            createdAt: d.created_at,
-            messageCount: 0,
-            userId: d.user_id,
-          });
-        }
-      }
-
-      // 如果内存中有无 userId 的会话，也包含进来
-      for (const c of conversations.values()) {
-        if (!c.userId && !allConversations.find((ac) => ac.id === c.id)) {
-          allConversations.push(c);
-        }
+      const dataList = await repos.conversation.list(normalizedUserId, 100, 0);
+      for (const d of dataList) {
+        allConversations.push({
+          id: d.id,
+          title: d.title,
+          mode: d.mode,
+          createdAt: d.created_at,
+          messageCount: 0,
+          userId: d.user_id,
+        });
       }
 
       // 合并去重：D1 数据优先
       const merged = new Map<string, Conversation>();
       for (const c of allConversations) merged.set(c.id, c);
       for (const c of conversations.values()) {
-        if (!merged.has(c.id)) merged.set(c.id, c);
+        if (c.userId === normalizedUserId && !merged.has(c.id)) {
+          merged.set(c.id, c);
+        }
       }
 
       // 写回内存
@@ -366,7 +378,9 @@ export class ConversationService {
     } catch (err) {
       console.warn(`[service] D1 list conversations failed: ${err}`);
       // D1 失败时返回内存数据
-      return Array.from(conversations.values()).sort(
+      return Array.from(conversations.values()).filter(
+        (conversation) => conversation.userId === normalizedUserId,
+      ).sort(
         (a, b) =>
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
       );
@@ -679,6 +693,39 @@ export class AgentService {
         } catch {
           // memory module unavailable
         }
+      }
+
+      const conversation = await ConversationService.get(conversationId);
+      if (conversation?.mode === "knowledge") {
+        const result = await runWithAgentDeadline(() =>
+          KnowledgeService.chat(content, history),
+        );
+        fullAnswer = maybeAppendContinuationHint(
+          String(result.output || "抱歉，我没有理解您的问题。"),
+        );
+        await appendMessage(conversationId, new HumanMessage(content));
+        await appendMessage(conversationId, new AIMessage(fullAnswer));
+        await ConversationService.appendAssistantMessage(conversationId, {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: fullAnswer,
+          createdAt: new Date().toISOString(),
+        });
+        yield { type: "text", text: fullAnswer };
+        if (userId) {
+          try {
+            await HistoryService.record(userId, conversationId, content, fullAnswer);
+            await MemoryService.extractMemoriesFromConversation(
+              userId,
+              content,
+              fullAnswer,
+            );
+            await ProfileService.update(userId);
+          } catch {
+            // 记忆记录失败不影响知识库回答
+          }
+        }
+        return;
       }
 
       const agent = await createToolAgent(

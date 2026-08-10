@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from src.config.settings import settings
 from src.services import BusinessError, BusinessErrorCode
 
+from .auth import agent_auth_middleware
 from .routes import chat, images, stream, tools
 from .routes.v1 import router as v1_router
 
@@ -20,7 +21,7 @@ DEFAULT_REQUEST_TIMEOUT = settings.server_request_timeout_ms / 1000
 
 # 请求级超时中间件：非流式路由默认超时返回 504
 async def _timeout_middleware(request: Request, call_next):
-    """请求级超时中间件：非流式路由默认 60s 超时。"""
+    """请求级超时中间件：非流式路由使用服务端配置的外层超时。"""
     path = request.url.path
     is_stream = path == "/stream" or path.endswith("/messages/stream")
 
@@ -62,6 +63,7 @@ def create_app() -> FastAPI:
 
     # 请求级超时中间件
     app.middleware("http")(_timeout_middleware)
+    app.middleware("http")(agent_auth_middleware)
 
     @app.exception_handler(BusinessError)
     # 执行 business error handler 对应的业务逻辑

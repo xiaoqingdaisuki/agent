@@ -16,7 +16,7 @@ class TestKnowledgeSearchDescriptor:
         assert "knowledge.search" in _DESCRIPTOR.required_permissions
 
     def test_descriptor_timeout(self):
-        assert _DESCRIPTOR.timeout_ms == 12000
+        assert _DESCRIPTOR.timeout_ms == 15000
 
     def test_descriptor_tags(self):
         assert "rag" in _DESCRIPTOR.tags
