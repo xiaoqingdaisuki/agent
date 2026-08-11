@@ -1,18 +1,32 @@
 import type { FastifyInstance } from "fastify";
 
-interface StepFunImageResponse {
-  data?: Array<{ b64_json?: string }>;
+import { config } from "../../config/index.js";
+
+interface CloudflareImageResponse {
+  result?: { image?: string };
+  errors?: Array<{ message?: string }>;
   error?: { message?: string };
 }
 
 const MAX_IMAGE_REQUEST_ATTEMPTS = 3;
 
-// 异步延迟辅助函数
+// 异步等待指定时长，用于请求重试的退避。
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-// 带重试的图片生成请求，最多尝试 MAX_IMAGE_REQUEST_ATTEMPTS 次
+// 验证并拼接 Cloudflare Workers AI 模型运行接口地址。
+function getImageApiUrl(): string | null {
+  try {
+    const url = new URL(config.IMAGE_BASE_URL);
+    if (url.protocol !== "https:") return null;
+    return `${url.toString().replace(/\/$/, "")}/${config.IMAGE_MODEL}`;
+  } catch {
+    return null;
+  }
+}
+
+// 调用需要 multipart 表单的 FLUX.2 模型接口，并在网络异常时重试。
 async function requestImageGeneration(
   url: string,
   apiKey: string,
@@ -22,20 +36,17 @@ async function requestImageGeneration(
 
   for (let attempt = 1; attempt <= MAX_IMAGE_REQUEST_ATTEMPTS; attempt++) {
     try {
+      const form = new FormData();
+      form.append("prompt", prompt);
+      form.append("width", "1024");
+      form.append("height", "768");
+
       return await fetch(url, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          model: process.env.IMAGE_MODEL || "step-image-edit-2",
-          prompt,
-          response_format: "b64_json",
-          cfg_scale: 1,
-          steps: 8,
-          text_mode: true,
-        }),
+        body: form,
       });
     } catch (error) {
       lastError = error;
@@ -46,21 +57,16 @@ async function requestImageGeneration(
   throw lastError;
 }
 
-// 从环境变量拼接图片生成 API 的完整 URL
-function getImageApiUrl(): string | null {
-  const baseUrl = process.env.OPENAI_BASE_URL;
-  if (!baseUrl) return null;
-
-  try {
-    const url = new URL(baseUrl);
-    if (url.protocol !== "https:") return null;
-    return `${url.toString().replace(/\/$/, "")}/images/generations`;
-  } catch {
-    return null;
-  }
+// 从 Cloudflare 响应中提取可安全返回给调用方的错误信息。
+function getErrorMessage(payload: CloudflareImageResponse | null): string {
+  return (
+    payload?.errors?.[0]?.message ||
+    payload?.error?.message ||
+    "Image generation failed"
+  );
 }
 
-// 创建或注册 registerImageRoutes 所需的数据
+// 注册文本生图接口，并将 Cloudflare 的 Base64 图片转为 data URL。
 export async function registerImageRoutes(app: FastifyInstance) {
   app.post<{ Body: { prompt?: string } }>(
     "/images/generations",
@@ -73,8 +79,7 @@ export async function registerImageRoutes(app: FastifyInstance) {
       }
 
       const imageApiUrl = getImageApiUrl();
-      const apiKey = process.env.OPENAI_API_KEY;
-      if (!imageApiUrl || !apiKey) {
+      if (!imageApiUrl || !config.IMAGE_API_KEY) {
         return reply
           .status(503)
           .send({ error: "Image model is not configured" });
@@ -83,29 +88,23 @@ export async function registerImageRoutes(app: FastifyInstance) {
       try {
         const response = await requestImageGeneration(
           imageApiUrl,
-          apiKey,
+          config.IMAGE_API_KEY,
           prompt,
         );
         const payload = (await response
           .json()
-          .catch(() => null)) as StepFunImageResponse | null;
+          .catch(() => null)) as CloudflareImageResponse | null;
 
         if (!response.ok) {
-          return reply
-            .status(response.status)
-            .send({
-              error: payload?.error?.message || "Image generation failed",
-            });
+          return reply.status(response.status).send({ error: getErrorMessage(payload) });
         }
 
-        const imageBase64 = payload?.data?.[0]?.b64_json;
+        const imageBase64 = payload?.result?.image;
         if (!imageBase64) {
-          return reply
-            .status(502)
-            .send({ error: "Image service returned no image" });
+          return reply.status(502).send({ error: getErrorMessage(payload) });
         }
 
-        return { image_data_url: `data:image/png;base64,${imageBase64}` };
+        return { image_data_url: `data:image/jpeg;base64,${imageBase64}` };
       } catch (error) {
         request.log.error(error, "Image generation request failed");
         return reply

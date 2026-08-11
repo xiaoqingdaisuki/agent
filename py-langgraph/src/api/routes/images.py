@@ -21,59 +21,65 @@ class ImageGenerationResponse(BaseModel):
 MAX_IMAGE_REQUEST_ATTEMPTS = 3
 
 
-# 带重试的图片生成请求，退避时间带随机抖动避免惊群
+# 调用需要 multipart 表单的 FLUX.2 模型接口，并在网络异常时重试。
 async def _request_with_retry(url: str, api_key: str, prompt: str) -> httpx.Response:
-    """带重试的图片生成请求，退避时间带随机抖动避免惊群。"""
-    last_error: Exception | None = None
+    last_error: httpx.HTTPError | None = None
     for attempt in range(1, MAX_IMAGE_REQUEST_ATTEMPTS + 1):
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 return await client.post(
                     url,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": settings.image_model,
-                        "prompt": prompt,
-                        "response_format": "b64_json",
-                        "cfg_scale": 1.0,
-                        "steps": 8,
-                        "text_mode": True,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    files={
+                        "prompt": (None, prompt),
+                        "width": (None, "1024"),
+                        "height": (None, "768"),
                     },
                 )
         except httpx.HTTPError as exc:
             last_error = exc
             if attempt < MAX_IMAGE_REQUEST_ATTEMPTS:
-                # 退避 1s, 2s + 随机抖动
                 await asyncio.sleep(attempt + random.uniform(0, 1))
 
     raise last_error or RuntimeError("Image generation failed after retries")
 
 
-# 生成图片并返回 base64 编码的 data URL
+# 从 Cloudflare 响应中提取可安全返回给调用方的错误信息。
+def _get_error_message(payload: dict) -> str:
+    errors = payload.get("errors") or []
+    if errors and isinstance(errors[0], dict) and errors[0].get("message"):
+        return str(errors[0]["message"])
+    error = payload.get("error") or {}
+    if isinstance(error, dict) and error.get("message"):
+        return str(error["message"])
+    return "Image generation failed"
+
+
 @router.post("/generations", response_model=ImageGenerationResponse)
-# 执行 generate image 对应的业务逻辑
+# 生成图片并将 Cloudflare 的 Base64 图片转为 data URL。
 async def generate_image(request: ImageGenerationRequest):
-    if not settings.openai_api_key or not settings.openai_base_url:
+    if not settings.image_api_key or not settings.image_base_url:
         raise HTTPException(status_code=503, detail="Image model is not configured")
 
-    image_url = f"{settings.openai_base_url.rstrip('/')}/images/generations"
-
     try:
-        response = await _request_with_retry(image_url, settings.openai_api_key, request.prompt)
+        response = await _request_with_retry(
+            f"{settings.image_base_url.rstrip('/')}/{settings.image_model}",
+            settings.image_api_key,
+            request.prompt,
+        )
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="Unable to reach the image service")
 
-    payload = response.json() if response.content else {}
+    try:
+        payload = response.json() if response.content else {}
+    except ValueError:
+        payload = {}
+
     if response.is_error:
-        message = payload.get("error", {}).get("message", "Image generation failed")
-        raise HTTPException(status_code=response.status_code, detail=message)
+        raise HTTPException(status_code=response.status_code, detail=_get_error_message(payload))
 
-    image_data = payload.get("data", [])
-    image_base64 = image_data[0].get("b64_json") if image_data else None
+    image_base64 = payload.get("result", {}).get("image")
     if not image_base64:
-        raise HTTPException(status_code=502, detail="Image service returned no image")
+        raise HTTPException(status_code=502, detail=_get_error_message(payload))
 
-    return ImageGenerationResponse(image_data_url=f"data:image/png;base64,{image_base64}")
+    return ImageGenerationResponse(image_data_url=f"data:image/jpeg;base64,{image_base64}")

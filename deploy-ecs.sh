@@ -30,7 +30,7 @@ fi
 
 if [ ! -f "$ENV_FILE" ]; then
   cp .env.ecs.example "$ENV_FILE"
-  echo "Created $ENV_FILE. Fill in OPENAI_API_KEY, memory gateway settings, AGENT_API_SECRET and CORS_ORIGIN, then run this command again."
+  echo "Created $ENV_FILE. Fill in OPENAI_API_KEY, IMAGE_API_KEY, memory gateway settings, AGENT_API_SECRET and CORS_ORIGIN, then run this command again."
   exit 1
 fi
 
@@ -42,6 +42,12 @@ read_env() {
 OPENAI_KEY="$(read_env OPENAI_API_KEY)"
 if [ -z "$OPENAI_KEY" ] || [ "$OPENAI_KEY" = "change-me" ]; then
   echo "OPENAI_API_KEY is not configured in $ENV_FILE."
+  exit 1
+fi
+
+IMAGE_KEY="$(read_env IMAGE_API_KEY)"
+if [ -z "$IMAGE_KEY" ] || [ "$IMAGE_KEY" = "change-me" ]; then
+  echo "IMAGE_API_KEY is not configured in $ENV_FILE."
   exit 1
 fi
 

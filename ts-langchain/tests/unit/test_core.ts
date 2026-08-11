@@ -8,7 +8,9 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   OPENAI_BASE_URL: z.string().optional(),
-  IMAGE_MODEL: z.string().default("step-image-edit-2"),
+  IMAGE_API_KEY: z.string().optional(),
+  IMAGE_BASE_URL: z.string().url().default("https://example.com/ai/run"),
+  IMAGE_MODEL: z.string().default("@cf/black-forest-labs/flux-2-klein-9b"),
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default("claude-3-5-haiku-20241022"),
   PORT: z.coerce.number().default(6001),
@@ -22,7 +24,7 @@ describe("Config validation", () => {
     });
     expect(result.OPENAI_MODEL).toBe("gpt-4o-mini");
     expect(result.PORT).toBe(6001);
-    expect(result.IMAGE_MODEL).toBe("step-image-edit-2");
+    expect(result.IMAGE_MODEL).toBe("@cf/black-forest-labs/flux-2-klein-9b");
   });
 
   it("should parse provided env vars", () => {

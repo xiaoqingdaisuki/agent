@@ -6,7 +6,11 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str | None = None
-    image_model: str = "step-image-edit-2"
+    image_api_key: str = ""
+    image_base_url: str = (
+        "https://api.cloudflare.com/client/v4/accounts/572890169551ba29ece8e74c7b27c215/ai/run"
+    )
+    image_model: str = "@cf/black-forest-labs/flux-2-klein-9b"
     agent_deadline_ms: int = 120000
     agent_deadline_with_tools_ms: int = 300000
     server_request_timeout_ms: int = 310000

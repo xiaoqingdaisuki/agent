@@ -214,7 +214,7 @@ npx wrangler deploy                                  # 部署到线上
 cd ts-langchain
 npm install
 cp .env.example .env
-# 编辑 .env，填入 OPENAI_API_KEY、CLOUDFLARE_MEMORY_SECRET 和 AGENT_API_SECRET
+# 编辑 .env，填入 OPENAI_API_KEY、IMAGE_API_KEY、CLOUDFLARE_MEMORY_SECRET 和 AGENT_API_SECRET
 npm run dev
 ```
 
@@ -226,7 +226,7 @@ npm run dev
 cd py-langgraph
 pip install -r requirements.txt
 cp .env.example .env
-# 编辑 .env，填入 OPENAI_API_KEY、CLOUDFLARE_MEMORY_SECRET 和 AGENT_API_SECRET
+# 编辑 .env，填入 OPENAI_API_KEY、IMAGE_API_KEY、CLOUDFLARE_MEMORY_SECRET 和 AGENT_API_SECRET
 uvicorn src.api.main:app --reload
 ```
 
@@ -276,6 +276,11 @@ POST /stream                            流式对话
 GET  /tools                             可用工具列表
 POST /images/generations                图片生成
 ```
+
+图片生成独立使用 Cloudflare Workers AI 配置：`IMAGE_API_KEY`、`IMAGE_BASE_URL` 和
+`IMAGE_MODEL=@cf/black-forest-labs/flux-2-klein-9b`。该模型使用 Workers AI 的免费每日配额，
+成功时返回 `result.image` Base64 字符串；接口将其转换为 `image_data_url`，前端可直接作为图片
+`src` 使用。
 
 ## Cloudflare Service 内部 API
 

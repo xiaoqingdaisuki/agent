@@ -22,7 +22,12 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   OPENAI_BASE_URL: z.string().optional(),
-  IMAGE_MODEL: z.string().default("step-image-edit-2"),
+  IMAGE_API_KEY: z.string().optional(),
+  IMAGE_BASE_URL: z
+    .string()
+    .url()
+    .default("https://api.cloudflare.com/client/v4/accounts/572890169551ba29ece8e74c7b27c215/ai/run"),
+  IMAGE_MODEL: z.string().default("@cf/black-forest-labs/flux-2-klein-9b"),
   AGENT_DEADLINE_MS: z.coerce
     .number()
     .int()
