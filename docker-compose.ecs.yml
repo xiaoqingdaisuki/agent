@@ -33,8 +33,8 @@ x-agent-environment: &agent-environment
   SEARCH_STALE_TTL_SECONDS: ${SEARCH_STALE_TTL_SECONDS:-600}
   CLOUDFLARE_MEMORY_BASE_URL: ${CLOUDFLARE_MEMORY_BASE_URL}
   CLOUDFLARE_MEMORY_SECRET: ${CLOUDFLARE_MEMORY_SECRET}
-  NO_PROXY: ${NO_PROXY:-cloudflare-service.597178640.workers_dev,.workers.dev,localhost,127.0.0.1}
-  no_proxy: ${no_proxy:-cloudflare-service.597178640.workers_dev,.workers.dev,localhost,127.0.0.1}
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+  no_proxy: ${no_proxy:-localhost,127.0.0.1}
 
 services:
   ts-agent:
