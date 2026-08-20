@@ -51,10 +51,10 @@ class ToolRegistry {
     this.register(fileReadTool, fileReadDescriptor);
     if (config.MEMORY_ENABLED) {
       this.register(knowledgeSearchTool, knowledgeSearchDescriptor);
-      this.register(memorySessionSearchTool, sessionMemoryDescriptor);
-      this.register(memoryUserSearchTool, userMemorySearchDescriptor);
-      this.register(memoryUserSaveTool, userMemorySaveDescriptor);
     }
+    this.register(memorySessionSearchTool, sessionMemoryDescriptor);
+    this.register(memoryUserSearchTool, userMemorySearchDescriptor);
+    this.register(memoryUserSaveTool, userMemorySaveDescriptor);
   }
 
   // 创建或注册 register 所需的数据

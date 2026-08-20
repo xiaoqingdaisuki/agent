@@ -16,7 +16,6 @@ import {
 import { AgentDeadline, isAgentDeadlineError } from "../../agents/deadline.js";
 import { maybeAppendContinuationHint } from "../../agents/response-handler.js";
 import { requireAgentUserId } from "../middleware/auth.js";
-import { config } from "../../config/index.js";
 
 // 创建或注册 registerStreamRoutes 所需的数据
 export async function registerStreamRoutes(app: FastifyInstance) {
@@ -32,21 +31,17 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       const threadId = thread_id || crypto.randomUUID();
 
       // 确保会话记录存在于 D1（前端传入的 thread_id 需关联 conversations 表）
-      if (config.MEMORY_ENABLED) {
-        await ConversationService.ensure(threadId, trustedUserId);
-      }
+      await ConversationService.ensure(threadId, trustedUserId);
 
       const command = executeAgentCommand(message, threadId);
       if (command) {
-        if (config.MEMORY_ENABLED) {
-          await ConversationService.appendUserMessage(threadId, message);
-          await ConversationService.appendAssistantMessage(threadId, {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: command.reply,
-            createdAt: new Date().toISOString(),
-          });
-        }
+        await ConversationService.appendUserMessage(threadId, message);
+        await ConversationService.appendAssistantMessage(threadId, {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: command.reply,
+          createdAt: new Date().toISOString(),
+        });
         reply.raw.setHeader("Content-Type", "text/event-stream");
         reply.raw.setHeader("Cache-Control", "no-cache");
         reply.raw.setHeader("Connection", "keep-alive");
@@ -56,7 +51,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         return;
       }
       const memoryContext: SystemMessage[] = [];
-      if (config.MEMORY_ENABLED && trustedUserId) {
+      if (trustedUserId) {
         try {
           await ProfileService.getOrCreate(trustedUserId);
           const context = await MemoryService.buildMemoryContext(trustedUserId);
@@ -69,12 +64,8 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       const toolAgent = await createToolAgent(
         getAgentPromptOverride(threadId, message),
       );
-      const history = config.MEMORY_ENABLED
-        ? await getHistoryBeforeInput(threadId, message)
-        : [];
-      if (config.MEMORY_ENABLED) {
-        await ConversationService.appendUserMessage(threadId, message);
-      }
+      const history = await getHistoryBeforeInput(threadId, message);
+      await ConversationService.appendUserMessage(threadId, message);
 
       const toolContext = {
         request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -123,7 +114,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
           }
         }
 
-        if (config.MEMORY_ENABLED && fullAnswer) {
+        if (fullAnswer) {
           const finalAnswer = maybeAppendContinuationHint(fullAnswer);
           await appendMessage(threadId, new HumanMessage(message));
           await appendMessage(threadId, new AIMessage(finalAnswer));
@@ -145,16 +136,14 @@ export async function registerStreamRoutes(app: FastifyInstance) {
           reply.raw.write(
             `data: ${JSON.stringify({ text: partialHint, partial: true })}\n\n`,
           );
-          if (config.MEMORY_ENABLED) {
-            await appendMessage(threadId, new HumanMessage(message));
-            await appendMessage(threadId, new AIMessage(partialHint));
-            await ConversationService.appendAssistantMessage(threadId, {
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: partialHint,
-              createdAt: new Date().toISOString(),
-            });
-          }
+          await appendMessage(threadId, new HumanMessage(message));
+          await appendMessage(threadId, new AIMessage(partialHint));
+          await ConversationService.appendAssistantMessage(threadId, {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: partialHint,
+            createdAt: new Date().toISOString(),
+          });
         } else {
           // 无任何输出 → 返回错误
           const errMessage = isAgentDeadlineError(error)

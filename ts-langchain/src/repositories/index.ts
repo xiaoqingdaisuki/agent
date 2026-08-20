@@ -28,6 +28,7 @@ import { config } from "../config/index.js";
  */
 // 获取 getRepositories 对应的数据
 export function getRepositories(): Repositories {
+  if (!config.MEMORY_ENABLED) return inMemoryRepositories;
   const client = new CloudflareMemoryClient({
     baseUrl: config.CLOUDFLARE_MEMORY_BASE_URL,
     secret: config.CLOUDFLARE_MEMORY_SECRET,
@@ -35,6 +36,175 @@ export function getRepositories(): Repositories {
   });
   return new CloudflareRepositories(client);
 }
+
+const inMemoryProfiles = new Map<string, UserProfileData>();
+const inMemoryConversations = new Map<string, ConversationData>();
+const inMemoryMessages = new Map<string, MessageData[]>();
+const inMemoryMemories = new Map<string, MemoryData[]>();
+
+// 构建进程内仓储，供关闭 Cloudflare 记忆模式时使用。
+const inMemoryRepositories: Repositories = {
+  profile: {
+    async getOrCreate(userId, name = "") {
+      const existing = inMemoryProfiles.get(userId);
+      if (existing) return existing;
+      const now = new Date().toISOString();
+      const profile = { user_id: userId, name, preferences_json: "{}", created_at: now, updated_at: now };
+      inMemoryProfiles.set(userId, profile);
+      return profile;
+    },
+    async get(userId) {
+      return inMemoryProfiles.get(userId) ?? null;
+    },
+    async update(userId, name, preferences) {
+      const profile = await this.getOrCreate(userId, name ?? "");
+      const updated = {
+        ...profile,
+        name: name ?? profile.name,
+        preferences_json: preferences ? JSON.stringify(preferences) : profile.preferences_json,
+        updated_at: new Date().toISOString(),
+      };
+      inMemoryProfiles.set(userId, updated);
+      return updated;
+    },
+  },
+  conversation: {
+    async create(userId, title, mode = "chat", conversationId = crypto.randomUUID()) {
+      const now = new Date().toISOString();
+      const conversation: ConversationData = {
+        id: conversationId,
+        user_id: userId,
+        title,
+        mode: mode as ConversationData["mode"],
+        created_at: now,
+        updated_at: now,
+        deleted_at: null,
+      };
+      inMemoryConversations.set(conversationId, conversation);
+      inMemoryMessages.set(conversationId, inMemoryMessages.get(conversationId) ?? []);
+      return conversation;
+    },
+    async get(conversationId) {
+      const conversation = inMemoryConversations.get(conversationId);
+      return conversation?.deleted_at ? null : conversation ?? null;
+    },
+    async list(userId, limit = 20, offset = 0) {
+      return Array.from(inMemoryConversations.values())
+        .filter((conversation) => conversation.user_id === userId && !conversation.deleted_at)
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        .slice(offset, offset + limit);
+    },
+    async delete(conversationId) {
+      const conversation = inMemoryConversations.get(conversationId);
+      if (!conversation || conversation.deleted_at) return false;
+      inMemoryConversations.set(conversationId, { ...conversation, deleted_at: new Date().toISOString() });
+      inMemoryMessages.delete(conversationId);
+      return true;
+    },
+  },
+  message: {
+    async createBatch(conversationId, _userId, messages) {
+      const existing = inMemoryMessages.get(conversationId) ?? [];
+      const byId = new Map(existing.map((message) => [message.id, message]));
+      for (const message of messages) byId.set(message.id, message);
+      inMemoryMessages.set(conversationId, Array.from(byId.values()).sort((a, b) => a.sequence_no - b.sequence_no));
+    },
+    async getMessages(conversationId, limit = 50, offset = 0) {
+      const all = inMemoryMessages.get(conversationId) ?? [];
+      return { messages: all.slice(offset, offset + limit), total: all.length };
+    },
+    async clear(conversationId) {
+      inMemoryMessages.set(conversationId, []);
+    },
+  },
+  memory: {
+    async save(userId, memoryId, content, category = "fact", importance = 3, source = "user_explicit", sourceConversationId) {
+      const memories = inMemoryMemories.get(userId) ?? [];
+      const normalized = content.trim().toLowerCase();
+      const existing = memories.find((memory) => memory.normalized_content === normalized && memory.status === "active");
+      if (existing) return existing;
+      const now = new Date().toISOString();
+      const memory: MemoryData = {
+        id: memoryId,
+        user_id: userId,
+        content: content.trim(),
+        normalized_content: normalized,
+        content_hash: `local_${memoryId}`,
+        category: category as MemoryData["category"],
+        importance,
+        source: source as MemoryData["source"],
+        source_conversation_id: sourceConversationId ?? null,
+        status: "active",
+        index_status: "ready",
+        embedding_model: "local",
+        embedding_version: 1,
+        created_at: now,
+        updated_at: now,
+        last_accessed_at: null,
+        expires_at: null,
+      };
+      memories.push(memory);
+      inMemoryMemories.set(userId, memories);
+      return memory;
+    },
+    async search(userId, query, options = {}) {
+      const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+      const items = (inMemoryMemories.get(userId) ?? [])
+        .filter((memory) => memory.status === "active" && (!options.category || memory.category === options.category))
+        .map((memory) => {
+          const matches = words.filter((word) => memory.normalized_content.includes(word)).length;
+          const score = words.length ? matches / words.length : 0;
+          return { memory, score };
+        })
+        .filter(({ score }) => score >= (options.minScore ?? 0))
+        .sort((a, b) => b.score - a.score || b.memory.importance - a.memory.importance)
+        .slice(0, options.limit ?? 10)
+        .map(({ memory, score }): MemorySearchResultData => ({
+          id: memory.id, content: memory.content, category: memory.category, importance: memory.importance,
+          semantic_score: score, final_score: score, created_at: memory.created_at, updated_at: memory.updated_at,
+          source_conversation_id: memory.source_conversation_id,
+        }));
+      return { items, degraded: false };
+    },
+    async list(userId, options = {}) {
+      return (inMemoryMemories.get(userId) ?? [])
+        .filter((memory) => memory.status === "active" && (!options.category || memory.category === options.category))
+        .sort((a, b) => b.importance - a.importance || b.created_at.localeCompare(a.created_at))
+        .slice(0, options.limit ?? 50);
+    },
+    async update(userId, memoryId, changes) {
+      const memories = inMemoryMemories.get(userId) ?? [];
+      const index = memories.findIndex((memory) => memory.id === memoryId && memory.status === "active");
+      if (index < 0) return null;
+      const current = memories[index];
+      const content = changes.content?.trim() ?? current.content;
+      const updated: MemoryData = {
+        ...current,
+        content,
+        normalized_content: content.toLowerCase(),
+        category: (changes.category ?? current.category) as MemoryData["category"],
+        importance: changes.importance ?? current.importance,
+        updated_at: new Date().toISOString(),
+      };
+      memories[index] = updated;
+      return updated;
+    },
+    async delete(userId, memoryId) {
+      const memories = inMemoryMemories.get(userId) ?? [];
+      const memory = memories.find((item) => item.id === memoryId && item.status === "active");
+      if (!memory) return false;
+      memory.status = "deleted";
+      memory.updated_at = new Date().toISOString();
+      return true;
+    },
+    async clearUser(userId) {
+      const memories = inMemoryMemories.get(userId) ?? [];
+      const active = memories.filter((memory) => memory.status === "active");
+      inMemoryMemories.set(userId, []);
+      return active.length;
+    },
+  },
+};
 
 // ============ Cloudflare 实现 ============
 

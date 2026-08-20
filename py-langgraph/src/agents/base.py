@@ -84,7 +84,7 @@ def build_chat_agent(checkpointer=None):
     async def agent_node(state: AgentState):
         system_prompt = SYSTEM_PROMPT
         user_id = state.get("user_id")
-        if settings.memory_enabled and user_id:
+        if user_id:
             try:
                 from src.profile.service import MemoryService
 
@@ -264,7 +264,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
     async def agent_node(state: AgentState):
         system_prompt = base_prompt
         user_id = state.get("user_id")
-        if settings.memory_enabled and user_id:
+        if user_id:
             try:
                 from src.profile.service import MemoryService
 
@@ -406,8 +406,6 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
 
     base_prompt = system_prompt_override or TOOL_CALLING_PROMPT
     if checkpointer is None:
-        if not settings.memory_enabled:
-            return _build_cached_tool_agent(base_prompt, None)
         checkpointer = _get_default_checkpointer()
         return _build_cached_tool_agent(base_prompt, id(checkpointer))
     return _compile_tool_agent(checkpointer, base_prompt)

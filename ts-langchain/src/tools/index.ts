@@ -62,14 +62,19 @@ const directTools = [
   calculatorTool,
 ];
 
-// 关闭记忆模式时排除所有依赖 Cloudflare Gateway 的工具。
+// 关闭记忆模式时仅排除依赖 Cloudflare 向量库的知识库工具。
 export const tools = config.MEMORY_ENABLED ? [
   ...directTools,
   knowledgeSearchTool,
   memorySessionSearchTool,
   memoryUserSearchTool,
   memoryUserSaveTool,
-] : directTools;
+] : [
+  ...directTools,
+  memorySessionSearchTool,
+  memoryUserSearchTool,
+  memoryUserSaveTool,
+];
 
 /**
  * 工具名称 → ToolDescriptor 映射，用于 invokeTool 管线的权限/审计检查。

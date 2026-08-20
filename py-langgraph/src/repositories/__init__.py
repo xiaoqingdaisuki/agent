@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import uuid
+from datetime import datetime
 from typing import Any
 
 from src.config.settings import settings
@@ -63,13 +65,220 @@ def _run_sync(coro) -> Any:
 
 # 获取 get repositories 对应的数据
 def get_repositories():
-    """创建 Cloudflare 仓储实例（带模块级缓存）"""
+    """按配置创建 Cloudflare 或进程内仓储实例。"""
     global _repositories
     if _repositories is None:
-        from src.clients.memory_gateway import CloudflareMemoryClient
-        client = CloudflareMemoryClient()
-        _repositories = Repositories(client)
+        if settings.memory_enabled:
+            from src.clients.memory_gateway import CloudflareMemoryClient
+
+            _repositories = Repositories(CloudflareMemoryClient())
+        else:
+            _repositories = InMemoryRepositories()
     return _repositories
+
+
+class InMemoryRepositories:
+    """关闭 Cloudflare 记忆模式时使用的进程内仓储。"""
+
+    # 初始化进程内 profile、会话、消息和长期记忆存储
+    def __init__(self):
+        self._profiles: dict[str, dict] = {}
+        self._conversations: dict[str, dict] = {}
+        self._messages: dict[str, list[dict]] = {}
+        self._memories: dict[str, list[dict]] = {}
+
+    # 获取或创建用户画像
+    def get_or_create_profile(self, user_id: str, name: str = "") -> dict:
+        profile = self._profiles.get(user_id)
+        if profile:
+            return dict(profile)
+        now = datetime.now().isoformat()
+        profile = {
+            "user_id": user_id,
+            "name": name,
+            "preferences_json": "{}",
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._profiles[user_id] = profile
+        return dict(profile)
+
+    # 获取用户画像
+    def get_profile(self, user_id: str) -> dict | None:
+        profile = self._profiles.get(user_id)
+        return dict(profile) if profile else None
+
+    # 更新用户画像
+    def update_profile(self, user_id: str, name: str | None = None, preferences: dict | None = None) -> dict:
+        profile = self.get_or_create_profile(user_id, name or "")
+        profile["name"] = name if name is not None else profile["name"]
+        if preferences is not None:
+            import json
+
+            profile["preferences_json"] = json.dumps(preferences, ensure_ascii=False)
+        profile["updated_at"] = datetime.now().isoformat()
+        self._profiles[user_id] = profile
+        return dict(profile)
+
+    # 创建会话
+    def create_conversation(self, user_id: str, title: str, mode: str = "chat", conversation_id: str | None = None) -> dict:
+        conversation_id = conversation_id or str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        conversation = {
+            "id": conversation_id,
+            "user_id": user_id,
+            "title": title,
+            "mode": mode,
+            "created_at": now,
+            "updated_at": now,
+            "deleted_at": None,
+        }
+        self._conversations[conversation_id] = conversation
+        self._messages.setdefault(conversation_id, [])
+        return dict(conversation)
+
+    # 获取会话
+    def get_conversation(self, conversation_id: str) -> dict | None:
+        conversation = self._conversations.get(conversation_id)
+        if not conversation or conversation.get("deleted_at"):
+            return None
+        return dict(conversation)
+
+    # 列出用户会话
+    def list_conversations(self, user_id: str, limit: int = 20, offset: int = 0) -> list[dict]:
+        conversations = [
+            dict(conversation)
+            for conversation in self._conversations.values()
+            if conversation["user_id"] == user_id and not conversation.get("deleted_at")
+        ]
+        conversations.sort(key=lambda item: item["created_at"], reverse=True)
+        return conversations[offset : offset + limit]
+
+    # 删除会话和消息
+    def delete_conversation(self, conversation_id: str) -> bool:
+        conversation = self._conversations.get(conversation_id)
+        if not conversation or conversation.get("deleted_at"):
+            return False
+        conversation["deleted_at"] = datetime.now().isoformat()
+        self._messages.pop(conversation_id, None)
+        return True
+
+    # 批量保存会话消息
+    def create_message_batch(self, conversation_id: str, user_id: str, messages: list[dict]) -> None:
+        stored = self._messages.setdefault(conversation_id, [])
+        by_id = {message["id"]: message for message in stored}
+        for message in messages:
+            by_id[message["id"]] = {
+                "id": message["id"],
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "sequence_no": message["sequence_no"],
+                "role": message["role"],
+                "content_json": message.get("content_json", message.get("content", "")),
+                "created_at": message["created_at"],
+            }
+        self._messages[conversation_id] = sorted(
+            by_id.values(), key=lambda item: item["sequence_no"]
+        )
+
+    # 获取会话消息
+    def get_messages(self, conversation_id: str, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+        messages = self._messages.get(conversation_id, [])
+        return [dict(message) for message in messages[offset : offset + limit]], len(messages)
+
+    # 清空会话消息
+    def clear_messages(self, conversation_id: str) -> None:
+        self._messages[conversation_id] = []
+
+    # 保存用户长期记忆
+    def save_memory(self, user_id: str, content: str, category: str = "fact", importance: int = 3, source: str = "user_explicit", source_conversation_id: str | None = None) -> dict:
+        memories = self._memories.setdefault(user_id, [])
+        normalized = content.strip().lower()
+        for memory in memories:
+            if memory["normalized_content"] == normalized and memory["status"] == "active":
+                return dict(memory)
+        now = datetime.now().isoformat()
+        memory = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "content": content.strip(),
+            "normalized_content": normalized,
+            "content_hash": f"local_{uuid.uuid4().hex}",
+            "category": category,
+            "importance": importance,
+            "source": source,
+            "source_conversation_id": source_conversation_id,
+            "status": "active",
+            "index_status": "ready",
+            "embedding_model": "local",
+            "embedding_version": 1,
+            "created_at": now,
+            "updated_at": now,
+            "last_accessed_at": None,
+            "expires_at": None,
+        }
+        memories.append(memory)
+        return dict(memory)
+
+    # 搜索用户长期记忆
+    def search_memories(self, user_id: str, query: str, category: str | None = None, limit: int = 10, min_score: float = 0.65) -> dict:
+        words = [word for word in query.lower().split() if word]
+        results = []
+        for memory in self._memories.get(user_id, []):
+            if memory["status"] != "active" or (category and memory["category"] != category):
+                continue
+            score = sum(word in memory["normalized_content"] for word in words) / len(words) if words else 1.0
+            if score >= min_score:
+                results.append({
+                    "id": memory["id"], "content": memory["content"], "category": memory["category"],
+                    "importance": memory["importance"], "semantic_score": score, "final_score": score,
+                    "created_at": memory["created_at"], "updated_at": memory["updated_at"],
+                    "source_conversation_id": memory["source_conversation_id"],
+                })
+        results.sort(key=lambda item: (item["final_score"], item["importance"]), reverse=True)
+        return {"items": results[:limit], "degraded": False}
+
+    # 列出用户长期记忆
+    def list_memories(self, user_id: str, category: str | None = None, limit: int = 50) -> list[dict]:
+        memories = [
+            dict(memory)
+            for memory in self._memories.get(user_id, [])
+            if memory["status"] == "active" and (not category or memory["category"] == category)
+        ]
+        memories.sort(key=lambda item: (item["importance"], item["created_at"]), reverse=True)
+        return memories[:limit]
+
+    # 更新用户长期记忆
+    def update_memory(self, user_id: str, memory_id: str, **changes) -> dict | None:
+        for memory in self._memories.get(user_id, []):
+            if memory["id"] != memory_id or memory["status"] != "active":
+                continue
+            if changes.get("content") is not None:
+                memory["content"] = changes["content"].strip()
+                memory["normalized_content"] = memory["content"].lower()
+            for field in ("category", "importance"):
+                if changes.get(field) is not None:
+                    memory[field] = changes[field]
+            memory["updated_at"] = datetime.now().isoformat()
+            return dict(memory)
+        return None
+
+    # 删除用户长期记忆
+    def delete_memory(self, user_id: str, memory_id: str) -> bool:
+        memory = self.update_memory(user_id, memory_id)
+        if not memory:
+            return False
+        for item in self._memories[user_id]:
+            if item["id"] == memory_id:
+                item["status"] = "deleted"
+                item["updated_at"] = datetime.now().isoformat()
+        return True
+
+    # 清空用户长期记忆
+    def clear_user_memories(self, user_id: str) -> int:
+        count = len([memory for memory in self._memories.get(user_id, []) if memory["status"] == "active"])
+        self._memories[user_id] = []
+        return count
 
 
 # ============ Cloudflare 实现 ============
