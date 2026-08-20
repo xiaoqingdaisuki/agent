@@ -27,6 +27,7 @@ import type {
   Message,
 } from "../../../services/index.js";
 import { requireAgentUserId } from "../../middleware/auth.js";
+import { logRequestError } from "../../middleware/error.js";
 
 // 将 Conversation 对象序列化为前端 API 响应格式
 function serializeConversation(conversation: Conversation) {
@@ -271,6 +272,11 @@ export async function registerV1Routes(app: FastifyInstance) {
         reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
       }
     } catch (error: unknown) {
+      logRequestError(request, error, {
+        conversation_id: convId,
+        user_id: trustedUserId,
+        stream: true,
+      });
       const businessError =
         error instanceof BusinessError
           ? error

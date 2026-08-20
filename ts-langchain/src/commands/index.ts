@@ -3,6 +3,7 @@ import { DARK_MODE_PROMPT } from "../prompts/system.js";
 export const DARK_MODE_COMMAND = "切换大公鸡模式";
 export const DARK_MODE_ENABLED_REPLY = "已切换至大公鸡模式。";
 export const DARK_MODE_DISABLED_REPLY = "已关闭大公鸡模式。";
+const DARK_MODE_HISTORY_SUFFIX = "__dark_mode";
 
 export interface AgentCommandResult {
   name: "toggle_dark_mode";
@@ -27,6 +28,34 @@ function getTranscriptUserMessages(content: string): string[] {
 function setDarkMode(threadId: string, enabled: boolean): void {
   if (enabled) darkModeThreads.add(threadId);
   else darkModeThreads.delete(threadId);
+}
+
+// 根据已持久化的用户消息恢复指定线程的大公鸡模式状态
+export function restoreAgentCommandState(
+  threadId: string,
+  userMessages: readonly string[],
+): void {
+  const darkModeCommandCount = userMessages.filter(
+    (message) => message.trim() === DARK_MODE_COMMAND,
+  ).length;
+  setDarkMode(threadId, darkModeCommandCount % 2 === 1);
+}
+
+// 获取指定线程对应的大公鸡独立 Agent 历史标识
+export function getDarkModeHistoryThreadId(threadId: string): string {
+  return `${threadId}${DARK_MODE_HISTORY_SUFFIX}`;
+}
+
+// 判断历史标识是否对应大公鸡独立 Agent 会话
+export function isDarkModeHistoryThreadId(threadId: string): boolean {
+  return threadId.endsWith(DARK_MODE_HISTORY_SUFFIX);
+}
+
+// 从独立 Agent 历史标识还原 UI 会话标识
+export function getConversationThreadIdFromHistoryThreadId(threadId: string): string {
+  return isDarkModeHistoryThreadId(threadId)
+    ? threadId.slice(0, -DARK_MODE_HISTORY_SUFFIX.length)
+    : threadId;
 }
 
 // 切换指定线程的大公鸡模式，返回切换后的状态结果

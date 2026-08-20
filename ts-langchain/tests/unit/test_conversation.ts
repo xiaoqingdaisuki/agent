@@ -8,6 +8,12 @@ import {
   getHistory,
 } from "../../src/memory/conversation.js";
 import {
+  DARK_MODE_COMMAND,
+  DARK_MODE_DISABLED_REPLY,
+  DARK_MODE_ENABLED_REPLY,
+  getDarkModeHistoryThreadId,
+} from "../../src/commands/index.js";
+import {
   AgentService,
   BusinessErrorCode,
   ConversationService,
@@ -84,5 +90,49 @@ describe("ConversationService message history", () => {
 
     expect(chat).toHaveBeenCalledOnce();
     expect(events).toEqual([{ type: "text", text: "knowledge answer" }]);
+  });
+
+  it("keeps dark mode and normal agent histories independent", async () => {
+    const conversation = await ConversationService.create("isolated personas");
+    const darkHistoryId = getDarkModeHistoryThreadId(conversation.id);
+    await ConversationService.appendUserMessage(conversation.id, "普通问题");
+    await ConversationService.appendAssistantMessage(conversation.id, {
+      id: "normal-answer",
+      role: "assistant",
+      content: "普通回答",
+      createdAt: new Date().toISOString(),
+    });
+    await ConversationService.appendUserMessage(conversation.id, DARK_MODE_COMMAND);
+    await ConversationService.appendAssistantMessage(conversation.id, {
+      id: "enable-dark",
+      role: "assistant",
+      content: DARK_MODE_ENABLED_REPLY,
+      createdAt: new Date().toISOString(),
+    });
+    await ConversationService.appendUserMessage(conversation.id, "大公鸡问题");
+    await ConversationService.appendAssistantMessage(conversation.id, {
+      id: "dark-answer",
+      role: "assistant",
+      content: "大公鸡回答",
+      createdAt: new Date().toISOString(),
+    });
+    await ConversationService.appendUserMessage(conversation.id, DARK_MODE_COMMAND);
+    await ConversationService.appendAssistantMessage(conversation.id, {
+      id: "disable-dark",
+      role: "assistant",
+      content: DARK_MODE_DISABLED_REPLY,
+      createdAt: new Date().toISOString(),
+    });
+    await ConversationService.appendUserMessage(conversation.id, "恢复普通问题");
+
+    expect((await getHistory(conversation.id)).map((message) => message.content)).toEqual([
+      "普通问题",
+      "普通回答",
+      "恢复普通问题",
+    ]);
+    expect((await getHistory(darkHistoryId)).map((message) => message.content)).toEqual([
+      "大公鸡问题",
+      "大公鸡回答",
+    ]);
   });
 });

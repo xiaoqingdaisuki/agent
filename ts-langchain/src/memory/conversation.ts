@@ -8,11 +8,48 @@
 
 import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 import { getRepositories } from "../repositories/index.js";
+import {
+  DARK_MODE_COMMAND,
+  DARK_MODE_DISABLED_REPLY,
+  DARK_MODE_ENABLED_REPLY,
+  getConversationThreadIdFromHistoryThreadId,
+  isDarkModeHistoryThreadId,
+} from "../commands/index.js";
 
 export const MAX_HISTORY_MESSAGES = 50;
 
 // 进程内对话历史（仅当前运行上下文使用）
 const conversations = new Map<string, BaseMessage[]>();
+
+// 按大公鸡开关将同一 UI 会话记录拆分为普通与独立人设历史
+function filterMessagesForAgentHistory(
+  messages: Array<{ role: string; content_json: string }>,
+  isDarkModeHistory: boolean,
+): Array<{ role: string; content_json: string }> {
+  const filtered: Array<{ role: string; content_json: string }> = [];
+  let darkModeEnabled = false;
+  let skipCommandReply = false;
+
+  for (const message of messages) {
+    if (message.role === "user" && message.content_json.trim() === DARK_MODE_COMMAND) {
+      darkModeEnabled = !darkModeEnabled;
+      skipCommandReply = true;
+      continue;
+    }
+    if (
+      skipCommandReply &&
+      message.role === "assistant" &&
+      (message.content_json === DARK_MODE_ENABLED_REPLY ||
+        message.content_json === DARK_MODE_DISABLED_REPLY)
+    ) {
+      skipCommandReply = false;
+      continue;
+    }
+    if (darkModeEnabled === isDarkModeHistory) filtered.push(message);
+  }
+
+  return filtered;
+}
 
 /**
  * 获取指定线程的对话历史，内存未命中时从 D1 加载
@@ -25,9 +62,17 @@ export async function getHistory(threadId: string): Promise<BaseMessage[]> {
   // D1 回退
   try {
     const repos = getRepositories();
-    const { messages } = await repos.message.getMessages(threadId, MAX_HISTORY_MESSAGES, 0);
+    const { messages } = await repos.message.getMessages(
+      getConversationThreadIdFromHistoryThreadId(threadId),
+      MAX_HISTORY_MESSAGES,
+      0,
+    );
+    const agentMessages = filterMessagesForAgentHistory(
+      messages,
+      isDarkModeHistoryThreadId(threadId),
+    );
     const loaded: BaseMessage[] = [];
-    for (const m of messages) {
+    for (const m of agentMessages) {
       const content = m.content_json;
       if (m.role === "user") {
         loaded.push(new HumanMessage(content));

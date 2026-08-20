@@ -6,7 +6,9 @@ import {
   DARK_MODE_ENABLED_REPLY,
   clearAgentCommandState,
   executeAgentCommand,
+  getDarkModeHistoryThreadId,
   getAgentPromptOverride,
+  restoreAgentCommandState,
 } from "../../src/commands/index.js";
 import { DARK_MODE_PROMPT } from "../../src/prompts/system.js";
 import { buildApp } from "../../src/api/index.js";
@@ -30,6 +32,19 @@ describe("agent commands", () => {
     expect(executeAgentCommand("你好", threadId)).toBeUndefined();
     executeAgentCommand(DARK_MODE_COMMAND, threadId);
     expect(getAgentPromptOverride("another-thread")).toBeUndefined();
+  });
+
+  it("restores dark mode from persisted user messages", () => {
+    restoreAgentCommandState(threadId, [DARK_MODE_COMMAND, "你好"]);
+    expect(getAgentPromptOverride(threadId)).toBe(DARK_MODE_PROMPT);
+
+    restoreAgentCommandState(threadId, [DARK_MODE_COMMAND, DARK_MODE_COMMAND]);
+    expect(getAgentPromptOverride(threadId)).toBeUndefined();
+  });
+
+  it("uses an isolated history thread while dark mode is enabled", () => {
+    expect(getDarkModeHistoryThreadId(threadId)).toBe("command-thread__dark_mode");
+    expect(getDarkModeHistoryThreadId(threadId)).not.toBe(threadId);
   });
 
   it("handles the command through the chat API without calling the model", async () => {

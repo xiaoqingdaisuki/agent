@@ -35,7 +35,9 @@ import {
 import {
   clearAgentCommandState,
   executeAgentCommand,
+  getDarkModeHistoryThreadId,
   getAgentPromptOverride,
+  restoreAgentCommandState,
 } from "../commands/index.js";
 import {
   AgentDeadline,
@@ -75,6 +77,37 @@ export type AgentStreamEvent =
       callId: string;
       durationMs?: number;
     };
+
+const STREAM_FALLBACK_CHUNK_SIZE = 8;
+const STREAM_FALLBACK_INTERVAL_MS = 18;
+
+// 将模型完整回答按可见字符拆成平滑的 SSE 分片，避免依赖厂商工具流格式
+async function* splitTextForStreaming(
+  text: string,
+): AsyncGenerator<string, void, unknown> {
+  const characters = Array.from(text);
+  for (let index = 0; index < characters.length; index += STREAM_FALLBACK_CHUNK_SIZE) {
+    yield characters.slice(index, index + STREAM_FALLBACK_CHUNK_SIZE).join("");
+    if (index + STREAM_FALLBACK_CHUNK_SIZE < characters.length) {
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, STREAM_FALLBACK_INTERVAL_MS),
+      );
+    }
+  }
+}
+
+// 从会话消息存储恢复大公鸡模式，避免旧运行时缓存覆盖开关状态
+async function restoreCommandStateFromConversation(
+  conversationId: string,
+): Promise<void> {
+  const messages = await ConversationService.getMessages(conversationId);
+  restoreAgentCommandState(
+    conversationId,
+    messages.flatMap((message) =>
+      message.role === "user" ? [message.content] : [],
+    ),
+  );
+}
 
 class ToolProgressChannel {
   private readonly events: Array<Extract<AgentStreamEvent, { type: "tool" }>> =
@@ -390,6 +423,7 @@ export class ConversationService {
   // 删除会话及其关联的消息和命令状态，同时从 D1 删除
   static async delete(id: string): Promise<boolean> {
     await clearHistory(id);
+    await clearHistory(getDarkModeHistoryThreadId(id));
     clearAgentCommandState(id);
     conversationMessages.delete(id);
     const deletedFromMemory = conversations.delete(id);
@@ -513,6 +547,7 @@ export class ConversationService {
     const conversation = conversations.get(conversationId);
     if (conversation) conversation.messageCount = 0;
     await clearHistory(conversationId);
+    await clearHistory(getDarkModeHistoryThreadId(conversationId));
     clearAgentCommandState(conversationId);
     const repos = getRepositories();
     await repos.message.clear(conversationId);
@@ -541,7 +576,12 @@ export class AgentService {
         return reply;
       }
 
-      const history = await getHistoryBeforeInput(conversationId, content);
+      await restoreCommandStateFromConversation(conversationId);
+      const promptOverride = getAgentPromptOverride(conversationId, content);
+      const agentHistoryThreadId = promptOverride
+        ? getDarkModeHistoryThreadId(conversationId)
+        : conversationId;
+      const history = await getHistoryBeforeInput(agentHistoryThreadId, content);
       const memoryContext: SystemMessage[] = [];
 
       // 注入用户记忆
@@ -560,7 +600,7 @@ export class AgentService {
         conversation?.mode === "knowledge"
           ? null
           : await createToolAgent(
-              getAgentPromptOverride(conversationId, content),
+              promptOverride,
             );
 
       // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
@@ -607,8 +647,8 @@ export class AgentService {
         reply.content = maybeAppendContinuationHint(reply.content, finishReason);
       }
 
-      await appendMessage(conversationId, new HumanMessage(content));
-      await appendMessage(conversationId, new AIMessage(reply.content));
+      await appendMessage(agentHistoryThreadId, new HumanMessage(content));
+      await appendMessage(agentHistoryThreadId, new AIMessage(reply.content));
       await ConversationService.appendAssistantMessage(conversationId, reply);
 
       // 记录问答历史 + 提取新记忆
@@ -629,6 +669,14 @@ export class AgentService {
       return reply;
     } catch (error: any) {
       if (error instanceof BusinessError) throw error;
+      console.error("Agent chat failed", {
+        conversationId,
+        userId,
+        content,
+        errorName: error?.name,
+        errorMessage: error?.message,
+        errorStack: error?.stack,
+      });
       if (isAgentDeadlineError(error)) {
         throw new BusinessError(
           BusinessErrorCode.AGENT_TIMEOUT,
@@ -668,6 +716,7 @@ export class AgentService {
     userId?: string,
   ): AsyncGenerator<AgentStreamEvent, void, unknown> {
     let fullAnswer = "";
+    let agentHistoryThreadId = conversationId;
     try {
       const command = executeAgentCommand(content, conversationId);
       if (command) {
@@ -682,7 +731,12 @@ export class AgentService {
         return;
       }
 
-      const history = await getHistoryBeforeInput(conversationId, content);
+      await restoreCommandStateFromConversation(conversationId);
+      const promptOverride = getAgentPromptOverride(conversationId, content);
+      agentHistoryThreadId = promptOverride
+        ? getDarkModeHistoryThreadId(conversationId)
+        : conversationId;
+      const history = await getHistoryBeforeInput(agentHistoryThreadId, content);
       const memoryContext: SystemMessage[] = [];
 
       if (userId) {
@@ -703,8 +757,8 @@ export class AgentService {
         fullAnswer = maybeAppendContinuationHint(
           String(result.output || "抱歉，我没有理解您的问题。"),
         );
-        await appendMessage(conversationId, new HumanMessage(content));
-        await appendMessage(conversationId, new AIMessage(fullAnswer));
+        await appendMessage(agentHistoryThreadId, new HumanMessage(content));
+        await appendMessage(agentHistoryThreadId, new AIMessage(fullAnswer));
         await ConversationService.appendAssistantMessage(conversationId, {
           id: crypto.randomUUID(),
           role: "assistant",
@@ -729,7 +783,7 @@ export class AgentService {
       }
 
       const agent = await createToolAgent(
-        getAgentPromptOverride(conversationId, content),
+        promptOverride,
       );
 
       const toolContext = {
@@ -794,8 +848,10 @@ export class AgentService {
           if (done) break;
           if (chunk?.output) {
             const text = String(chunk.output);
-            fullAnswer += text;
-            yield { type: "text", text };
+            fullAnswer = text;
+            for await (const delta of splitTextForStreaming(text)) {
+              yield { type: "text", text: delta };
+            }
           }
           next = scope.run(() => iterator.next()) as Promise<
             IteratorResult<any>
@@ -808,8 +864,8 @@ export class AgentService {
 
       if (fullAnswer) {
         const finalAnswer = maybeAppendContinuationHint(fullAnswer);
-        await appendMessage(conversationId, new HumanMessage(content));
-        await appendMessage(conversationId, new AIMessage(finalAnswer));
+        await appendMessage(agentHistoryThreadId, new HumanMessage(content));
+        await appendMessage(agentHistoryThreadId, new AIMessage(finalAnswer));
         await ConversationService.appendAssistantMessage(conversationId, {
           id: crypto.randomUUID(),
           role: "assistant",
@@ -834,12 +890,20 @@ export class AgentService {
       }
     } catch (error: any) {
       if (error instanceof BusinessError) throw error;
+      console.error("Agent stream failed", {
+        conversationId,
+        userId,
+        content,
+        errorName: error?.name,
+        errorMessage: error?.message,
+        errorStack: error?.stack,
+      });
       if (isAgentDeadlineError(error)) {
         // 超时但有部分结果 → 返回部分内容 + 继续提示
         if (fullAnswer) {
           const partial = maybeAppendContinuationHint(fullAnswer);
-          await appendMessage(conversationId, new HumanMessage(content));
-          await appendMessage(conversationId, new AIMessage(partial));
+          await appendMessage(agentHistoryThreadId, new HumanMessage(content));
+          await appendMessage(agentHistoryThreadId, new AIMessage(partial));
           await ConversationService.appendAssistantMessage(conversationId, {
             id: crypto.randomUUID(),
             role: "assistant",

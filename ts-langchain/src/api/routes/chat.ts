@@ -10,7 +10,9 @@ import {
 import { runWithToolCallContext } from "../../tools/runtime/executor.js";
 import {
   executeAgentCommand,
+  getDarkModeHistoryThreadId,
   getAgentPromptOverride,
+  restoreAgentCommandState,
 } from "../../commands/index.js";
 import {
   isAgentDeadlineError,
@@ -23,6 +25,7 @@ import {
 } from "../../agents/response-handler.js";
 import { BusinessError, ConversationService } from "../../services/index.js";
 import { requireAgentUserId } from "../middleware/auth.js";
+import { logRequestError } from "../middleware/error.js";
 
 // 创建或注册 registerChatRoutes 所需的数据
 export async function registerChatRoutes(app: FastifyInstance) {
@@ -65,10 +68,21 @@ export async function registerChatRoutes(app: FastifyInstance) {
           }
         }
 
-        const agent = await createToolAgent(
-          getAgentPromptOverride(threadId, message),
+        const conversationMessages = await ConversationService.getMessages(threadId);
+        restoreAgentCommandState(
+          threadId,
+          conversationMessages.flatMap((entry) =>
+            entry.role === "user" ? [entry.content] : [],
+          ),
         );
-        const history = await getHistoryBeforeInput(threadId, message);
+        const promptOverride = getAgentPromptOverride(threadId, message);
+        const agentHistoryThreadId = promptOverride
+          ? getDarkModeHistoryThreadId(threadId)
+          : threadId;
+        const history = await getHistoryBeforeInput(agentHistoryThreadId, message);
+        const agent = await createToolAgent(
+          promptOverride,
+        );
 
         // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
         const toolContext = {
@@ -111,8 +125,8 @@ export async function registerChatRoutes(app: FastifyInstance) {
           replyText = maybeAppendContinuationHint(replyText, finishReason);
         }
 
-        await appendMessage(threadId, new HumanMessage(message));
-        await appendMessage(threadId, new AIMessage(replyText));
+        await appendMessage(agentHistoryThreadId, new HumanMessage(message));
+        await appendMessage(agentHistoryThreadId, new AIMessage(replyText));
         await ConversationService.appendAssistantMessage(threadId, {
           id: crypto.randomUUID(),
           role: "assistant",
@@ -122,7 +136,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
 
         return { reply: replyText, thread_id: threadId };
       } catch (error: any) {
-        console.error("Chat error:", error);
+        logRequestError(request, error);
         if (error instanceof BusinessError) {
           return reply.status(error.statusCode).send(error.toJSON());
         }
