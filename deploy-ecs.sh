@@ -2,8 +2,8 @@
 set -eu
 
 TARGET="${1:-}"
-ENV_FILE="${AGENT_ENV_FILE:-.env.ecs}"
-COMPOSE_FILE="docker-compose.ecs.yml"
+ENV_FILE="${AGENT_ENV_FILE:-.env}"
+COMPOSE_FILE="docker-compose.yml"
 
 # 输出部署脚本的用法说明
 usage() {
@@ -29,7 +29,7 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 if [ ! -f "$ENV_FILE" ]; then
-  cp .env.ecs.example "$ENV_FILE"
+  cp .env.example "$ENV_FILE"
   echo "Created $ENV_FILE. Fill in OPENAI_API_KEY, IMAGE_API_KEY, memory gateway settings, AGENT_API_SECRET and CORS_ORIGIN, then run this command again."
   exit 1
 fi

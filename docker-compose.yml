@@ -1,4 +1,4 @@
-name: agent-ecs
+name: agent
 
 x-agent-common: &agent-common
   restart: unless-stopped
@@ -49,7 +49,7 @@ services:
       - "${TS_PUBLIC_PORT:-6001}:6001"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:6001/api/v1/health"]
-      interval: 15s
+      interval: 60s
       timeout: 5s
       retries: 5
       start_period: 20s
@@ -72,7 +72,7 @@ services:
         - python
         - -c
         - import urllib.request; urllib.request.urlopen('http://127.0.0.1:6002/api/v1/health', timeout=3)
-      interval: 15s
+      interval: 60s
       timeout: 5s
       retries: 5
       start_period: 20s

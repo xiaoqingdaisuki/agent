@@ -40,9 +40,7 @@
 
 ## 基础设施
 
-`docker-compose.yml` 提供共享基础设施：
-- Postgres 16 — Python 版 LangGraph checkpoint 存储
-- Qdrant — RAG 向量数据库
+`docker-compose.yml` 提供共享基础设施
 
 ## 目录结构
 

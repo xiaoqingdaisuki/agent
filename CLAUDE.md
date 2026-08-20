@@ -9,6 +9,11 @@
 两个项目**完全独立**，各自维护自己的上下文（工具、Prompt、配置），互不依赖。
 目的是对比 LangChain 声明式 vs LangGraph 显式图控制的编程范式差异。
 
+## 与 Vibe 项目的协作
+
+- 本仓库的 Agent 项目是 Vibe 项目中 Agent 功能的 API 服务。
+- 定位问题或修复 Bug 时，如有必要，可以阅读 Vibe 项目代码进行联合分析，并开展前后端联调。
+
 ## 开发规范
 
 - TS 项目：TypeScript strict 模式，ESM
@@ -35,9 +40,7 @@
 
 ## 基础设施
 
-`docker-compose.yml` 提供共享基础设施：
-- Postgres 16 — Python 版 LangGraph checkpoint 存储
-- Qdrant — RAG 向量数据库
+`docker-compose.yml` 提供共享基础设施
 
 ## 目录结构
 
