@@ -100,6 +100,7 @@ const envSchema = z.object({
     ),
 
   // ============ Cloudflare Service 配置 ============
+  MEMORY_ENABLED: z.preprocess(parseBooleanEnv, z.boolean()).default(true),
   CLOUDFLARE_MEMORY_BASE_URL: z.string().url().default("http://localhost:8787"),
   CLOUDFLARE_MEMORY_SECRET: z.string().default(""),
   MEMORY_SEARCH_MODE: z

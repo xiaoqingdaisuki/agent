@@ -10,6 +10,7 @@ from src.commands import execute_agent_command, get_agent_prompt_override
 from src.api.auth import require_agent_user_id
 from src.services import BusinessError, ConversationService, Message
 from src.tools.runtime.executor import create_tool_call_context, tool_call_scope
+from src.config.settings import settings
 
 router = APIRouter()
 
@@ -36,22 +37,24 @@ async def chat(payload: ChatRequest, request: Request):
     trusted_user_id = require_agent_user_id(request, payload.user_id)
     try:
         thread_id = payload.thread_id or str(uuid4())
-        ConversationService.ensure(thread_id, trusted_user_id)
-        ConversationService.append_user_message(
-            thread_id,
-            payload.message,
-            trusted_user_id,
-        )
-        command = execute_agent_command(payload.message, thread_id)
-        if command:
-            ConversationService.append_assistant_message(
+        if settings.memory_enabled:
+            ConversationService.ensure(thread_id, trusted_user_id)
+            ConversationService.append_user_message(
                 thread_id,
-                Message("assistant", command.reply),
+                payload.message,
                 trusted_user_id,
             )
+        command = execute_agent_command(payload.message, thread_id)
+        if command:
+            if settings.memory_enabled:
+                ConversationService.append_assistant_message(
+                    thread_id,
+                    Message("assistant", command.reply),
+                    trusted_user_id,
+                )
             return ChatResponse(reply=command.reply, thread_id=thread_id)
 
-        if trusted_user_id:
+        if settings.memory_enabled and trusted_user_id:
             try:
                 from src.profile.service import ProfileService
 
@@ -91,11 +94,12 @@ async def chat(payload: ChatRequest, request: Request):
         if is_likely_truncated(reply_text, finish_reason):
             reply_text = maybe_append_continuation_hint(reply_text, finish_reason)
 
-        ConversationService.append_assistant_message(
-            thread_id,
-            Message("assistant", reply_text),
-            trusted_user_id,
-        )
+        if settings.memory_enabled:
+            ConversationService.append_assistant_message(
+                thread_id,
+                Message("assistant", reply_text),
+                trusted_user_id,
+            )
 
         return ChatResponse(reply=reply_text, thread_id=thread_id)
     except BusinessError as error:

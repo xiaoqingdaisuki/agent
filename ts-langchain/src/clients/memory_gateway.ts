@@ -27,6 +27,7 @@ export class MemoryGatewayError extends Error {
 // ============ Schema 校验 ==========
 
 import { z } from "zod";
+import { config } from "../config/index.js";
 import {
   type UserProfileData,
   type ConversationData,
@@ -157,6 +158,13 @@ export class CloudflareMemoryClient {
     body?: unknown,
     idempotencyKey?: string,
   ): Promise<unknown> {
+    if (!config.MEMORY_ENABLED) {
+      throw new MemoryGatewayError(
+        "MEMORY_DISABLED",
+        "记忆模式已关闭，LLM 直连模式不会调用 Cloudflare Gateway",
+        503,
+      );
+    }
     const url = `${this.baseUrl}${path}`;
 
     const headers: Record<string, string> = {

@@ -11,6 +11,7 @@ from src.agents.response_handler import maybe_append_continuation_hint
 from src.commands import execute_agent_command, get_agent_prompt_override
 from src.api.auth import require_agent_user_id
 from src.tools.runtime.executor import create_tool_call_context, tool_call_scope
+from src.config.settings import settings
 
 router = APIRouter()
 
@@ -34,19 +35,21 @@ async def stream(payload: StreamRequest, request: Request):
     # 确保会话记录存在于 D1（前端传入的 thread_id 需关联 conversations 表）
     from src.services import ConversationService, Message
 
-    ConversationService.ensure(thread_id, trusted_user_id)
+    if settings.memory_enabled:
+        ConversationService.ensure(thread_id, trusted_user_id)
 
     command = execute_agent_command(payload.message, thread_id)
 
     if command:
-        ConversationService.append_user_message(
-            thread_id, payload.message, trusted_user_id
-        )
-        ConversationService.append_assistant_message(
-            thread_id,
-            Message("assistant", command.reply),
-            trusted_user_id,
-        )
+        if settings.memory_enabled:
+            ConversationService.append_user_message(
+                thread_id, payload.message, trusted_user_id
+            )
+            ConversationService.append_assistant_message(
+                thread_id,
+                Message("assistant", command.reply),
+                trusted_user_id,
+            )
         # 生成命令响应的 SSE 事件流
         async def command_event_generator():
             payload = json.dumps({"text": command.reply}, ensure_ascii=False)
@@ -55,9 +58,10 @@ async def stream(payload: StreamRequest, request: Request):
 
         return StreamingResponse(command_event_generator(), media_type="text/event-stream")
 
-    ConversationService.append_user_message(
-        thread_id, payload.message, trusted_user_id
-    )
+    if settings.memory_enabled:
+        ConversationService.append_user_message(
+            thread_id, payload.message, trusted_user_id
+        )
     agent = build_tool_agent(
         system_prompt_override=get_agent_prompt_override(thread_id, payload.message)
     )
@@ -65,7 +69,7 @@ async def stream(payload: StreamRequest, request: Request):
         "configurable": {"thread_id": thread_id},
         "recursion_limit": AGENT_RECURSION_LIMIT,
     }
-    if trusted_user_id:
+    if settings.memory_enabled and trusted_user_id:
         config["configurable"]["user_id"] = trusted_user_id
         try:
             from src.profile.service import ProfileService
@@ -138,7 +142,7 @@ async def stream(payload: StreamRequest, request: Request):
                                 yield f"data: {payload}\n\n"
 
             # 正常完成：保存完整回答
-            if full_answer:
+            if settings.memory_enabled and full_answer:
                 ConversationService.append_assistant_message(
                     thread_id,
                     Message("assistant", maybe_append_continuation_hint(full_answer)),
@@ -148,11 +152,12 @@ async def stream(payload: StreamRequest, request: Request):
             if full_answer:
                 # 超时但有部分结果 → 返回部分内容 + 继续提示
                 partial = maybe_append_continuation_hint(full_answer)
-                ConversationService.append_assistant_message(
-                    thread_id,
-                    Message("assistant", partial),
-                    trusted_user_id,
-                )
+                if settings.memory_enabled:
+                    ConversationService.append_assistant_message(
+                        thread_id,
+                        Message("assistant", partial),
+                        trusted_user_id,
+                    )
                 yield f"data: {json.dumps({'text': partial, 'partial': True}, ensure_ascii=False)}\n\n"
             else:
                 payload = json.dumps(
@@ -164,11 +169,12 @@ async def stream(payload: StreamRequest, request: Request):
             logging.getLogger("agent.stream").exception("Stream failed")
             if full_answer:
                 partial = maybe_append_continuation_hint(full_answer)
-                ConversationService.append_assistant_message(
-                    thread_id,
-                    Message("assistant", partial),
-                    trusted_user_id,
-                )
+                if settings.memory_enabled:
+                    ConversationService.append_assistant_message(
+                        thread_id,
+                        Message("assistant", partial),
+                        trusted_user_id,
+                    )
                 yield f"data: {json.dumps({'text': partial, 'partial': True}, ensure_ascii=False)}\n\n"
             else:
                 payload = json.dumps({"error": "Internal server error"}, ensure_ascii=False)

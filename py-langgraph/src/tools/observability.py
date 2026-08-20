@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.config.settings import settings
+
 
 # ============ 指标模型 ============
 
@@ -132,6 +134,8 @@ def get_metrics_collector() -> MetricsCollector:
 # 异步批量刷入 Gateway（不阻塞工具执行）
 def _flush_metrics() -> None:
     """将工具指标批量写入 Gateway D1"""
+    if not settings.memory_enabled:
+        return
     events = _metrics.get_events()
     if not events:
         return

@@ -23,6 +23,7 @@ import {
 } from "../../agents/response-handler.js";
 import { BusinessError, ConversationService } from "../../services/index.js";
 import { requireAgentUserId } from "../middleware/auth.js";
+import { config } from "../../config/index.js";
 
 // 创建或注册 registerChatRoutes 所需的数据
 export async function registerChatRoutes(app: FastifyInstance) {
@@ -37,23 +38,27 @@ export async function registerChatRoutes(app: FastifyInstance) {
         }
 
         const threadId = thread_id || crypto.randomUUID();
-        await ConversationService.ensure(threadId, trustedUserId);
-        await ConversationService.appendUserMessage(threadId, message);
+        if (config.MEMORY_ENABLED) {
+          await ConversationService.ensure(threadId, trustedUserId);
+          await ConversationService.appendUserMessage(threadId, message);
+        }
 
         const command = executeAgentCommand(message, threadId);
         if (command) {
-          await ConversationService.appendAssistantMessage(threadId, {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: command.reply,
-            createdAt: new Date().toISOString(),
-          });
+          if (config.MEMORY_ENABLED) {
+            await ConversationService.appendAssistantMessage(threadId, {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: command.reply,
+              createdAt: new Date().toISOString(),
+            });
+          }
           return { reply: command.reply, thread_id: threadId };
         }
 
         // 注入用户记忆（与 v1 API 保持一致）
         const memoryContext: SystemMessage[] = [];
-        if (trustedUserId) {
+        if (config.MEMORY_ENABLED && trustedUserId) {
           try {
             await ProfileService.getOrCreate(trustedUserId);
             const context = await MemoryService.buildMemoryContext(trustedUserId);
@@ -68,7 +73,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
         const agent = await createToolAgent(
           getAgentPromptOverride(threadId, message),
         );
-        const history = await getHistoryBeforeInput(threadId, message);
+        const history = config.MEMORY_ENABLED
+          ? await getHistoryBeforeInput(threadId, message)
+          : [];
 
         // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
         const toolContext = {
@@ -111,14 +118,16 @@ export async function registerChatRoutes(app: FastifyInstance) {
           replyText = maybeAppendContinuationHint(replyText, finishReason);
         }
 
-        await appendMessage(threadId, new HumanMessage(message));
-        await appendMessage(threadId, new AIMessage(replyText));
-        await ConversationService.appendAssistantMessage(threadId, {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: replyText,
-          createdAt: new Date().toISOString(),
-        });
+        if (config.MEMORY_ENABLED) {
+          await appendMessage(threadId, new HumanMessage(message));
+          await appendMessage(threadId, new AIMessage(replyText));
+          await ConversationService.appendAssistantMessage(threadId, {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: replyText,
+            createdAt: new Date().toISOString(),
+          });
+        }
 
         return { reply: replyText, thread_id: threadId };
       } catch (error: any) {

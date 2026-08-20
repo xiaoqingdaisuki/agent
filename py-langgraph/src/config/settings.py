@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     cors_origin: str = ""
 
     # ============ Cloudflare Service 配置 ============
+    memory_enabled: bool = True
     memory_gateway_base_url: str = Field(
         default="http://localhost:8787",
         validation_alias=AliasChoices(

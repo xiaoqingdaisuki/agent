@@ -97,6 +97,12 @@ class CloudflareMemoryClient:
         body: Any = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        if not settings.memory_enabled:
+            raise MemoryGatewayError(
+                "MEMORY_DISABLED",
+                "记忆模式已关闭，LLM 直连模式不会调用 Cloudflare Gateway",
+                503,
+            )
         client = await self._get_client()
         headers = self._headers(idempotency_key)
 

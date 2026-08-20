@@ -14,6 +14,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 from src.tools.contracts import ToolDescriptor, ToolCategory
+from src.config.settings import settings
 from src.tools.runtime.executor import (
     ToolExecutor,
     clear_audit_log,
@@ -59,12 +60,17 @@ class ToolRegistry:
             (web_search, SEARCH_DESCRIPTOR),
             (web_read, READ_DESCRIPTOR),
             (calculator, CALC_DESCRIPTOR),
-            (knowledge_search, KNOWLEDGE_DESCRIPTOR),
             (file_read, FILE_READ_DESCRIPTOR),
-            (memory_session_search, SESSION_DESCRIPTOR),
-            (memory_user_search, _USER_SEARCH_DESCRIPTOR),
-            (memory_user_save, _USER_SAVE_DESCRIPTOR),
         ]
+        if settings.memory_enabled:
+            default_tools.extend(
+                [
+                    (knowledge_search, KNOWLEDGE_DESCRIPTOR),
+                    (memory_session_search, SESSION_DESCRIPTOR),
+                    (memory_user_search, _USER_SEARCH_DESCRIPTOR),
+                    (memory_user_save, _USER_SAVE_DESCRIPTOR),
+                ]
+            )
 
         for tool_fn, descriptor in default_tools:
             self.register(tool_fn, descriptor)

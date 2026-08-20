@@ -119,6 +119,7 @@ function getGatewayClient() {
 
 // 批量刷新指标到 Gateway（异步，不阻塞）
 async function flushToolMetrics(): Promise<void> {
+  if (process.env.MEMORY_ENABLED?.toLowerCase() === "false") return;
   const events = metricsCollector.getEvents(metricsCollector["maxEvents"]);
   if (events.length === 0) return;
   const toFlush = events.splice(0, events.length);

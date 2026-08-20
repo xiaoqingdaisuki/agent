@@ -21,3 +21,11 @@ def test_memory_gateway_legacy_environment_names_remain_compatible(monkeypatch):
 
     assert settings.memory_gateway_base_url == "https://legacy.example.com"
     assert settings.memory_gateway_secret == "legacy-secret"
+
+
+def test_memory_enabled_false_selects_llm_direct_mode(monkeypatch):
+    monkeypatch.setenv("MEMORY_ENABLED", "false")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.memory_enabled is False

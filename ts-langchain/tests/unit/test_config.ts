@@ -23,4 +23,13 @@ describe("配置契约", () => {
 
     expect(config.MEMORY_AUTO_EXTRACT).toBe(true);
   });
+
+  it("将字符串 false 解析为关闭记忆模式", async () => {
+    vi.stubEnv("MEMORY_ENABLED", "false");
+    vi.resetModules();
+
+    const { config } = await import("../../src/config/index.js");
+
+    expect(config.MEMORY_ENABLED).toBe(false);
+  });
 });

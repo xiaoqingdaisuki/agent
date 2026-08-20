@@ -37,6 +37,7 @@ from src.tools.contracts import (
 )
 from src.tools.observability import record_tool_metric
 from src.tools.runtime.data_redaction import redact_text_content
+from src.config.settings import settings
 
 TInput = TypeVar("TInput")
 TOutput = TypeVar("TOutput")
@@ -275,6 +276,8 @@ def record_audit(entry: dict[str, Any]) -> None:
 # 异步批量刷入 Gateway（不阻塞工具执行）
 def _flush_audit_logs() -> None:
     """将审计日志批量写入 Gateway D1"""
+    if not settings.memory_enabled:
+        return
     if not _audit_log:
         return
     entries = _audit_log.copy()

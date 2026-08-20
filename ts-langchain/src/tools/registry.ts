@@ -25,6 +25,7 @@ import {
   userMemorySaveDescriptor,
 } from "./memory-user.js";
 import type { DynamicStructuredTool } from "langchain/tools";
+import { config } from "../config/index.js";
 
 // ============ 工具注册表 ============
 
@@ -47,11 +48,13 @@ class ToolRegistry {
     this.register(webSearchTool, webSearchDescriptor);
     this.register(webReadTool, webReadDescriptor);
     this.register(calculatorTool, calculatorDescriptor);
-    this.register(knowledgeSearchTool, knowledgeSearchDescriptor);
     this.register(fileReadTool, fileReadDescriptor);
-    this.register(memorySessionSearchTool, sessionMemoryDescriptor);
-    this.register(memoryUserSearchTool, userMemorySearchDescriptor);
-    this.register(memoryUserSaveTool, userMemorySaveDescriptor);
+    if (config.MEMORY_ENABLED) {
+      this.register(knowledgeSearchTool, knowledgeSearchDescriptor);
+      this.register(memorySessionSearchTool, sessionMemoryDescriptor);
+      this.register(memoryUserSearchTool, userMemorySearchDescriptor);
+      this.register(memoryUserSaveTool, userMemorySaveDescriptor);
+    }
   }
 
   // 创建或注册 register 所需的数据

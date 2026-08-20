@@ -22,6 +22,7 @@ import type {
 } from "../contracts.js";
 import { recordToolMetric } from "../observability.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { config } from "../../config/index.js";
 
 // ============ 审计记录 ============
 
@@ -57,6 +58,7 @@ function getGatewayClient() {
 
 // 批量写入审计日志到 Gateway（异步，不阻塞）
 async function flushAuditLogs(): Promise<void> {
+  if (!config.MEMORY_ENABLED) return;
   if (auditLog.length === 0) return;
   const entries = auditLog.splice(0, auditLog.length);
   try {

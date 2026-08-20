@@ -27,6 +27,7 @@ import {
   userMemorySearchDescriptor,
   userMemorySaveDescriptor,
 } from "./memory-user.js";
+import { config } from "../config/index.js";
 
 export { registry, getToolsForUser, getToolMetadata } from "./registry.js";
 
@@ -53,17 +54,22 @@ export {
 };
 
 // 所有可用工具的聚合列表，供 Agent 使用
-export const tools = [
+const directTools = [
   weatherTool,
   webSearchTool,
   webReadTool,
   fileReadTool,
   calculatorTool,
+];
+
+// 关闭记忆模式时排除所有依赖 Cloudflare Gateway 的工具。
+export const tools = config.MEMORY_ENABLED ? [
+  ...directTools,
   knowledgeSearchTool,
   memorySessionSearchTool,
   memoryUserSearchTool,
   memoryUserSaveTool,
-];
+] : directTools;
 
 /**
  * 工具名称 → ToolDescriptor 映射，用于 invokeTool 管线的权限/审计检查。

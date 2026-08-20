@@ -18,9 +18,10 @@ _checkpointer: D1Checkpointer | None = None
 def get_default_checkpointer() -> D1Checkpointer:
     """获取默认 checkpointer（单例）"""
     global _checkpointer
+    from src.config.settings import settings
+    if not settings.memory_enabled:
+        return get_memory_saver()
     if _checkpointer is None:
-        from src.config.settings import settings
-
         _checkpointer = D1Checkpointer(
             gateway_base_url=settings.memory_gateway_base_url,
             gateway_secret=settings.memory_gateway_secret,

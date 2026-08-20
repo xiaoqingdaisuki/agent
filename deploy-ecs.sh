@@ -53,14 +53,17 @@ fi
 
 MEMORY_BASE_URL="$(read_env CLOUDFLARE_MEMORY_BASE_URL)"
 MEMORY_SECRET="$(read_env CLOUDFLARE_MEMORY_SECRET)"
+MEMORY_ENABLED="$(read_env MEMORY_ENABLED)"
 AGENT_API_SECRET="$(read_env AGENT_API_SECRET)"
-if [ -z "$MEMORY_BASE_URL" ] || [ "$MEMORY_BASE_URL" = "https://change-me.workers.dev" ]; then
-  echo "CLOUDFLARE_MEMORY_BASE_URL is not configured in $ENV_FILE."
-  exit 1
-fi
-if [ -z "$MEMORY_SECRET" ] || [ "$MEMORY_SECRET" = "change-me" ]; then
-  echo "CLOUDFLARE_MEMORY_SECRET is not configured in $ENV_FILE."
-  exit 1
+if [ "${MEMORY_ENABLED:-true}" != "false" ]; then
+  if [ -z "$MEMORY_BASE_URL" ] || [ "$MEMORY_BASE_URL" = "https://change-me.workers.dev" ]; then
+    echo "CLOUDFLARE_MEMORY_BASE_URL is not configured in $ENV_FILE."
+    exit 1
+  fi
+  if [ -z "$MEMORY_SECRET" ] || [ "$MEMORY_SECRET" = "change-me" ]; then
+    echo "CLOUDFLARE_MEMORY_SECRET is not configured in $ENV_FILE."
+    exit 1
+  fi
 fi
 if [ -z "$AGENT_API_SECRET" ] || [ "$AGENT_API_SECRET" = "change-me" ]; then
   echo "AGENT_API_SECRET is not configured in $ENV_FILE."
