@@ -1,6 +1,7 @@
 import logging
 import re
 import time
+from html import unescape
 from functools import lru_cache
 from typing import Annotated, Literal
 
@@ -153,66 +154,138 @@ def _get_default_checkpointer():
     return get_default_checkpointer()
 
 
-# 将 XML 格式工具调用转换为 LangGraph 可识别的标准格式
-def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
-    """Handle XML tool call format for non-OpenAI models.
+# 解码模型工具参数中的常见 XML 实体，避免把转义文本传给工具。
+def _decode_xml_text(value: str) -> str:
+    """Decode XML entities in a model-generated tool argument."""
+    return unescape(value.strip())
 
-    Some providers (e.g. StepFun) return tool calls embedded in message.content
-    as XML rather than in the standard AIMessage.tool_calls attribute. This
-    function detects that format and converts it so the downstream ToolNode
-    can execute the call normally.
-    """
+
+# 解析一次 XML 工具调用中的参数，兼容两种供应商标签格式。
+def _parse_xml_parameters(body: str) -> dict[str, str]:
+    """Parse both parameter=name and parameter name=name syntaxes."""
+    args: dict[str, str] = {}
+    patterns = (
+        re.compile(
+            r'<parameter\s+name\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)</parameter\s*>',
+            re.DOTALL | re.IGNORECASE,
+        ),
+        re.compile(
+            r"<parameter\s*=\s*([^\s>]+)\s*>(.*?)</parameter\s*>",
+            re.DOTALL | re.IGNORECASE,
+        ),
+    )
+    for pattern in patterns:
+        for match in pattern.finditer(body):
+            args[_decode_xml_text(match.group(1))] = _decode_xml_text(match.group(2))
+    return args
+
+
+# 提取模型返回的 invoke/function XML，并记录原文范围以便从最终回答中移除。
+def _parse_xml_tool_calls(content: str) -> list[dict]:
+    """Parse supported XML tool calls and their source spans."""
+    patterns = (
+        re.compile(
+            r'<invoke\s+name\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)</invoke\s*>',
+            re.DOTALL | re.IGNORECASE,
+        ),
+        re.compile(
+            r"<function\s*=\s*([^\s>]+)\s*>(.*?)</function\s*>",
+            re.DOTALL | re.IGNORECASE,
+        ),
+    )
+    calls: list[dict] = []
+    for pattern in patterns:
+        for match in pattern.finditer(content):
+            calls.append(
+                {
+                    "name": _decode_xml_text(match.group(1)),
+                    "args": _parse_xml_parameters(match.group(2)),
+                    "start": match.start(),
+                    "end": match.end(),
+                }
+            )
+    return sorted(calls, key=lambda call: call["start"])
+
+
+TOOL_NAME_ALIASES = {
+    "weather.current": "get_weather",
+    "web.search": "web_search",
+    "web.read": "web_read",
+    "web.extract": "web_extract",
+    "time.current": "get_current_time",
+    "time.convert": "convert_timezone",
+    "math.calculate": "calculator",
+    "knowledge.search": "knowledge_search",
+    "file.read": "file_read",
+    "file.search": "file_search",
+    "memory.session.search": "memory_session_search",
+    "memory.user.search": "memory_user_search",
+    "memory.user.save": "memory_user_save",
+    "memory.user.list": "memory_user_list",
+    "memory.user.delete": "memory_user_delete",
+}
+
+
+# 将供应商使用的 Descriptor 名称映射为 LangGraph 实际注册的工具名称。
+def _normalize_tool_name(name: str) -> str:
+    return TOOL_NAME_ALIASES.get(name, name)
+
+
+# 规范化标准 tool_calls，兼容供应商把 descriptor 名称直接作为调用名称。
+def _normalize_standard_tool_calls(message: BaseMessage) -> BaseMessage:
+    tool_calls = getattr(message, "tool_calls", None) or []
+    normalized_calls = []
+    changed = False
+    for tool_call in tool_calls:
+        call = dict(tool_call)
+        if isinstance(call.get("name"), str):
+            normalized = _normalize_tool_name(call["name"])
+            changed = changed or normalized != call["name"]
+            call["name"] = normalized
+        elif isinstance(call.get("function"), dict) and isinstance(
+            call["function"].get("name"), str
+        ):
+            function = dict(call["function"])
+            normalized = _normalize_tool_name(function["name"])
+            changed = changed or normalized != function["name"]
+            function["name"] = normalized
+            call["function"] = function
+        normalized_calls.append(call)
+    if not changed:
+        return message
+    return message.model_copy(update={"tool_calls": normalized_calls})
+
+
+# 判断消息是否仍包含未转换的 XML 工具调用。
+def _contains_xml_tool_calls(content: object) -> bool:
+    """Return whether content contains either supported XML call syntax."""
+    return isinstance(content, str) and bool(_parse_xml_tool_calls(content))
+
+
+# 将 XML 格式工具调用转换为 LangGraph 可识别的标准格式。
+def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
+    """Convert provider XML calls into standard AIMessage tool calls."""
     content = message.content if hasattr(message, "content") else ""
     if not isinstance(content, str):
         return message
-    # Quick check: does content contain XML tool call markers?
-    func_tag_start = "<function="
-    if func_tag_start not in content:
-        return message
 
-    tool_calls = []
-    # Build regex patterns from parts
-    func_pat = "<function=(\\w+)"  # capture group for func name only
-    tag_open = func_pat + ">"
-    tag_close = "</function>"
-    param_open = "<parameter=(\\w+)>"
-    param_close = "</parameter>"
+    parsed_calls = _parse_xml_tool_calls(content)
+    if not parsed_calls:
+        return _normalize_standard_tool_calls(message)
 
-    for index, func_match in enumerate(
-        re.finditer(tag_open + "(.*?)" + tag_close, content, re.DOTALL),
-        start=1,
-    ):
-        func_name = func_match.group(1)
-        params_text = func_match.group(2)
-        args: dict[str, str] = {}
-        for param_match in re.finditer(
-            param_open + "(.*?)" + param_close,
-            params_text,
-            re.DOTALL,
-        ):
-            args[param_match.group(1)] = param_match.group(2).strip()
-        tool_calls.append(
-            {
-                "name": func_name,
-                "args": args,
-                "id": f"call_{func_name}_{index}",
-            }
-        )
-
-    if not tool_calls:
-        return message
-
-    # Strip XML tool calls from content using non-capturing patterns
-    strip_open = "<function=\\w+>"
-    strip_close = "</function>"
-    clean_content = re.sub(
-        strip_open + ".*?" + strip_close + "\\s*",
-        "",
-        content,
-        flags=re.DOTALL,
-    ).strip()
+    tool_calls = [
+        {
+            "name": _normalize_tool_name(call["name"]),
+            "args": call["args"],
+            "id": f"call_{_normalize_tool_name(call['name'])}_{index}",
+        }
+        for index, call in enumerate(parsed_calls, start=1)
+    ]
+    clean_content = content
+    for call in reversed(parsed_calls):
+        clean_content = clean_content[: call["start"]] + clean_content[call["end"] :]
     return AIMessage(
-        content=clean_content,
+        content=clean_content.strip(),
         tool_calls=tool_calls,
         id=message.id,
         response_metadata=message.response_metadata,
@@ -360,7 +433,7 @@ def should_continue(state: AgentState) -> Literal["tools", "limit", END]:
         return "tools"
     # Also check for XML-format tool calls (e.g. StepFun models)
     content = last_message.content if hasattr(last_message, "content") else ""
-    if isinstance(content, str) and "<function=" in content:
+    if _contains_xml_tool_calls(content):
         enable_tool_budget()
         return "tools"
     return END

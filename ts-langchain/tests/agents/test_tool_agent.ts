@@ -1,7 +1,9 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { AIMessage } from "@langchain/core/messages";
+import { tool } from "@langchain/core/tools";
 import { FakeListChatModel } from "@langchain/core/utils/testing";
 import { createAgent } from "langchain";
+import { z } from "zod";
 
 import {
   MAX_AGENT_ITERATIONS,
@@ -48,6 +50,43 @@ describe("tool agent", () => {
     ]);
   });
 
+  it("converts invoke/name XML tool calls returned by providers", () => {
+    const message = new AIMessage(
+      '<invoke name="memory_user_search">' +
+        '<parameter name="query">\n用户身份个人信息\n</parameter>' +
+        "</invoke>",
+    );
+
+    const result = convertXmlToolCalls(message);
+
+    expect(result.content).toBe("");
+    expect(result.tool_calls).toEqual([
+      {
+        id: "call_memory_user_search_1",
+        type: "tool_call",
+        name: "memory_user_search",
+        args: { query: "用户身份个人信息" },
+      },
+    ]);
+  });
+
+  it("normalizes descriptor names in provider XML tool calls", () => {
+    const result = convertXmlToolCalls(
+      new AIMessage(
+        '<invoke name="web.search"><parameter name="query">南山美食</parameter></invoke>',
+      ),
+    );
+
+    expect(result.tool_calls).toEqual([
+      {
+        id: "call_web_search_1",
+        type: "tool_call",
+        name: "web_search",
+        args: { query: "南山美食" },
+      },
+    ]);
+  });
+
   it("normalizes plain provider responses before middleware validation", () => {
     const result = convertXmlToolCalls({ content: "你好", type: "ai" });
 
@@ -90,5 +129,35 @@ describe("tool agent", () => {
 
     expect(AIMessage.isInstance(result.messages.at(-1))).toBe(true);
     expect(result.messages.at(-1)?.content).toBe("你好");
+  });
+
+  it("executes invoke/name XML calls through the real Agent loop", async () => {
+    const calculator = tool(
+      async () => "4",
+      {
+        name: "calculator",
+        description: "Calculate an expression",
+        schema: z.object({ expression: z.string() }),
+      },
+    );
+    const model = new FakeListChatModel({
+      responses: [
+        '<invoke name="calculator"><parameter name="expression">2 + 2</parameter></invoke>',
+        "4",
+      ],
+    });
+    vi.spyOn(model, "bindTools").mockImplementation(() => model as any);
+    const agent = createAgent({
+      model,
+      tools: [calculator],
+      middleware: [createReActPolicyMiddleware()],
+    });
+    const tracker = new ReActRunTracker(createDefaultReActLimits());
+    const result = await runWithReActTracker(tracker, () =>
+      agent.invoke({ messages: [{ role: "user", content: "2 + 2?" }] }),
+    );
+
+    expect(result.messages.at(-1)?.content).toBe("4");
+    expect(result.messages.some((message) => message.type === "tool")).toBe(true);
   });
 });

@@ -18,6 +18,7 @@ import {
   BusinessErrorCode,
   ConversationService,
   KnowledgeService,
+  drainXmlToolStream,
 } from "../../src/services/index.js";
 
 describe("conversation history", () => {
@@ -38,6 +39,25 @@ describe("conversation history", () => {
 });
 
 describe("ConversationService message history", () => {
+  it("does not expose invoke XML while streaming tool calls", () => {
+    let buffer = "";
+    let visible = "";
+    for (const chunk of [
+      "<inv",
+      'oke name="memory_user_search"><parameter name="query">用户',
+      "身份个人信息</parameter></invoke>",
+      "已完成",
+    ]) {
+      buffer += chunk;
+      const drained = drainXmlToolStream(buffer);
+      visible += drained.text;
+      buffer = drained.remainder;
+    }
+    visible += drainXmlToolStream(buffer, true).text;
+
+    expect(visible).toBe("已完成");
+  });
+
   it("stores and clears API messages without duplicating agent history", async () => {
     const conversation = await ConversationService.create("history");
     await ConversationService.appendUserMessage(conversation.id, "hello");

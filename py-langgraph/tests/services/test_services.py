@@ -174,8 +174,8 @@ class TestAgentService:
         assert events == [{"type": "text", "text": "knowledge answer"}]
 
     @pytest.mark.asyncio
-    async def test_streamed_tool_event_uses_shared_call_id_field(self, monkeypatch):
-        """Tool progress events must use the same call_id field as the TS API."""
+    async def test_tool_only_stream_emits_fallback_answer(self, monkeypatch):
+        """Tool-only streams must still end with visible assistant text."""
         from src.agents import graph_agents
         from langchain_core.messages import AIMessage
 
@@ -206,12 +206,100 @@ class TestAgentService:
             )
         ]
 
-        assert events == [{
-            "type": "tool",
-            "tool_name": "calculator",
-            "status": "started",
-            "call_id": "call-contract",
-        }]
+        assert events == [
+            {
+                "type": "tool",
+                "tool_name": "calculator",
+                "status": "started",
+                "call_id": "call-contract",
+            },
+            {"type": "text", "text": "抱歉，我没有理解您的问题。"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_stream_ignores_tool_message_as_final_answer(self, monkeypatch):
+        """Tool node output must not be mistaken for the assistant's final answer."""
+        from langchain_core.messages import ToolMessage
+        from src.agents import graph_agents
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {
+                    "event": "on_chain_end",
+                    "data": {
+                        "output": {
+                            "messages": [
+                                ToolMessage(
+                                    content="internal memory result",
+                                    tool_call_id="call-tool-result",
+                                )
+                            ]
+                        }
+                    },
+                }
+
+        conversation = ConversationService.create("tool output stream")
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(
+                conversation.id, "who am I?"
+            )
+        ]
+
+        assert events == [{"type": "text", "text": "抱歉，我没有理解您的问题。"}]
+
+    @pytest.mark.asyncio
+    async def test_stream_treats_whitespace_around_xml_as_empty(self, monkeypatch):
+        """Whitespace left after filtering an XML tool call must not count as an answer."""
+        from langchain_core.messages import AIMessage
+        from src.agents import graph_agents
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {
+                    "event": "on_chat_model_stream",
+                    "data": {
+                        "chunk": AIMessage(
+                            content='\n<invoke name="memory_user_search"></invoke>\n'
+                        )
+                    },
+                }
+
+        conversation = ConversationService.create("xml-only stream")
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(
+                conversation.id, "who am I?"
+            )
+        ]
+
+        assert events == [{"type": "text", "text": "抱歉，我没有理解您的问题。"}]
+
+    @pytest.mark.asyncio
+    async def test_stream_returns_visible_text_when_tool_request_times_out(self, monkeypatch):
+        """A timeout before the first answer must not become an empty SSE stream."""
+        from src.agents import graph_agents
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                raise TimeoutError
+                yield  # Make this an async generator for the stream contract.
+
+        conversation = ConversationService.create("timeout stream")
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(
+                conversation.id, "南山有什么好吃的？"
+            )
+        ]
+
+        assert events == [{"type": "text", "text": "AI助手响应超时，请稍后重试。"}]
 
 
 class TestKnowledgeService:

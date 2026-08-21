@@ -29,6 +29,104 @@ function contentToText(content: unknown): string {
     .join("");
 }
 
+type ParsedXmlToolCall = {
+  name: string;
+  args: Record<string, string>;
+  start: number;
+  end: number;
+};
+
+const TOOL_NAME_ALIASES: Record<string, string> = {
+  "weather.current": "get_weather",
+  "web.search": "web_search",
+  "web.read": "web_read",
+  "web.extract": "web_extract",
+  "time.current": "get_current_time",
+  "time.convert": "convert_timezone",
+  "math.calculate": "calculator",
+  "knowledge.search": "knowledge_search",
+  "file.read": "file_read",
+  "file.search": "file_search",
+  "memory.session.search": "memory_session_search",
+  "memory.user.search": "memory_user_search",
+  "memory.user.save": "memory_user_save",
+  "memory.user.list": "memory_user_list",
+  "memory.user.delete": "memory_user_delete",
+};
+
+// 将供应商使用的 Descriptor 名称映射为 LangChain 实际注册的工具名称。
+function normalizeToolName(name: string): string {
+  return TOOL_NAME_ALIASES[name] || name;
+}
+
+// 规范化标准 tool_calls，兼容供应商把 descriptor 名称直接作为调用名称。
+function normalizeToolCalls(calls: unknown[]): unknown[] {
+  return calls.map((call) => {
+    if (!call || typeof call !== "object") return call;
+    const candidate = call as Record<string, any>;
+    if (typeof candidate.name === "string") {
+      return { ...candidate, name: normalizeToolName(candidate.name) };
+    }
+    if (candidate.function && typeof candidate.function.name === "string") {
+      return {
+        ...candidate,
+        function: {
+          ...candidate.function,
+          name: normalizeToolName(candidate.function.name),
+        },
+      };
+    }
+    return call;
+  });
+}
+
+// 解码模型工具参数中的常见 XML 实体，避免把转义文本传给工具。
+function decodeXmlText(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+// 解析一次 XML 工具调用中的参数，兼容两种供应商标签格式。
+function parseXmlParameters(body: string): Record<string, string> {
+  const args: Record<string, string> = {};
+  const patterns = [
+    /<parameter\s+name\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter\s*>/gi,
+    /<parameter\s*=\s*([^\s>]+)\s*>([\s\S]*?)<\/parameter\s*>/gi,
+  ];
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(body)) !== null) {
+      args[decodeXmlText(match[1].trim())] = decodeXmlText(match[2].trim());
+    }
+  }
+  return args;
+}
+
+// 提取模型返回的 invoke/function XML，并记录原文范围以便从最终回答中移除。
+function parseXmlToolCalls(content: string): ParsedXmlToolCall[] {
+  const matches: ParsedXmlToolCall[] = [];
+  const patterns = [
+    /<invoke\s+name\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/invoke\s*>/gi,
+    /<function\s*=\s*([^\s>]+)\s*>([\s\S]*?)<\/function\s*>/gi,
+  ];
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(content)) !== null) {
+      matches.push({
+        name: decodeXmlText(match[1].trim()),
+        args: parseXmlParameters(match[2]),
+        start: match.index,
+        end: match.index + match[0].length,
+      });
+    }
+  }
+  return matches.sort((left, right) => left.start - right.start);
+}
+
 // 将任意模型响应规范化为当前 LangChain 运行时可识别的 AIMessage，并兼容 XML 工具调用。
 export function convertXmlToolCalls(message: unknown): AIMessage {
   const candidate = message as Partial<BaseMessage> | null;
@@ -37,73 +135,26 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
   const originalToolCalls = Array.isArray((candidate as any)?.tool_calls)
     ? (candidate as any).tool_calls
     : [];
-  const functionOpen = "<func" + "tion=";
-  const functionClose = "</func" + "tion>";
-  const parameterOpen = "<para" + "meter=";
-  const parameterClose = "</para" + "meter>";
-  if (!content.includes(functionOpen)) {
+  const parsedCalls = parseXmlToolCalls(content);
+  if (parsedCalls.length === 0) {
     return new AIMessage({
       content: rawContent as any,
-      tool_calls: originalToolCalls,
+      tool_calls: normalizeToolCalls(originalToolCalls) as any,
       id: candidate?.id,
       response_metadata: candidate?.response_metadata,
       additional_kwargs: (candidate as any)?.additional_kwargs,
     });
   }
 
-  const toolCalls: any[] = [];
-  let position = 0;
-  while (true) {
-    const functionStart = content.indexOf(functionOpen, position);
-    if (functionStart === -1) break;
-    const nameEnd = content.indexOf(">", functionStart + functionOpen.length);
-    if (nameEnd === -1) break;
-    const name = content.substring(functionStart + functionOpen.length, nameEnd);
-    const bodyStart = nameEnd + 1;
-    const functionEnd = content.indexOf(functionClose, bodyStart);
-    if (functionEnd === -1) break;
-    const body = content.substring(bodyStart, functionEnd);
-    const args: Record<string, string> = {};
-    let parameterPosition = 0;
-    while (true) {
-      const parameterStart = body.indexOf(parameterOpen, parameterPosition);
-      if (parameterStart === -1) break;
-      const parameterNameEnd = body.indexOf(">", parameterStart + parameterOpen.length);
-      if (parameterNameEnd === -1) break;
-      const parameterName = body.substring(parameterStart + parameterOpen.length, parameterNameEnd);
-      const valueStart = parameterNameEnd + 1;
-      const valueEnd = body.indexOf(parameterClose, valueStart);
-      if (valueEnd === -1) break;
-      args[parameterName] = body.substring(valueStart, valueEnd).trim();
-      parameterPosition = valueEnd + parameterClose.length;
-    }
-    toolCalls.push({
-      id: `call_${name}_${toolCalls.length + 1}`,
-      type: "tool_call",
-      name,
-      args,
-    });
-    position = functionEnd + functionClose.length;
-  }
-  if (toolCalls.length === 0) {
-    return new AIMessage({
-      content: rawContent as any,
-      tool_calls: originalToolCalls,
-      id: candidate?.id,
-      response_metadata: candidate?.response_metadata,
-      additional_kwargs: (candidate as any)?.additional_kwargs,
-    });
-  }
-
+  const toolCalls = parsedCalls.map((call, index) => ({
+    id: `call_${normalizeToolName(call.name)}_${index + 1}`,
+    type: "tool_call" as const,
+    name: normalizeToolName(call.name),
+    args: call.args,
+  }));
   let cleanContent = content;
-  for (const call of toolCalls) {
-    const startTag = `${functionOpen}${call.name}>`;
-    const start = cleanContent.indexOf(startTag);
-    if (start === -1) continue;
-    const end = cleanContent.indexOf(functionClose, start);
-    if (end !== -1) {
-      cleanContent = cleanContent.substring(0, start) + cleanContent.substring(end + functionClose.length);
-    }
+  for (const call of [...parsedCalls].sort((left, right) => right.start - left.start)) {
+    cleanContent = cleanContent.slice(0, call.start) + cleanContent.slice(call.end);
   }
   return new AIMessage({
     content: cleanContent.trim(),

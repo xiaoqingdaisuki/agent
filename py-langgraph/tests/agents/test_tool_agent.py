@@ -47,6 +47,33 @@ async def test_tool_agent_binds_tools_and_preserves_the_full_message_chain(monke
     assert result["messages"][-1].content == "4"
 
 
+async def test_tool_agent_executes_invoke_name_xml_calls(monkeypatch):
+    """The provider invoke/name XML format must enter the normal tool graph."""
+    model = ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content=(
+                    '<invoke name="calculator">'
+                    '<parameter name="expression">2 + 2</parameter>'
+                    "</invoke>"
+                )
+            ),
+            AIMessage(content="4"),
+        ]
+    )
+    monkeypatch.setattr(graph_agents, "get_llm", lambda provider="openai": model)
+
+    agent = graph_agents.build_tool_agent(checkpointer=MemorySaver())
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage(content="2 + 2?")]},
+        config={"configurable": {"thread_id": "invoke-xml-chain"}},
+    )
+
+    assert result["messages"][1].tool_calls[0]["name"] == "calculator"
+    assert result["messages"][1].tool_calls[0]["args"] == {"expression": "2 + 2"}
+    assert result["messages"][-1].content == "4"
+
+
 def test_agent_graph_is_cached(monkeypatch):
     model = ToolCapableFakeModel(responses=[AIMessage(content="done")])
     monkeypatch.setattr(graph_agents, "get_llm", lambda provider="openai": model)

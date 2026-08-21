@@ -76,6 +76,49 @@ def get_stream_text(chunk) -> str:
     )
 
 
+XML_TOOL_STREAM_MARKERS = ("<invoke", "<function=")
+
+
+# 从模型流中提取安全可展示文本，并丢弃完整的 XML 工具调用块。
+def drain_xml_tool_stream(buffer: str, final: bool = False) -> tuple[str, str]:
+    """Return visible text and the incomplete XML candidate kept for the next chunk."""
+    visible = ""
+    cursor = 0
+    while cursor < len(buffer):
+        lower = buffer.lower()
+        marker_index = -1
+        for marker in XML_TOOL_STREAM_MARKERS:
+            index = lower.find(marker, cursor)
+            if index != -1 and (marker_index == -1 or index < marker_index):
+                marker_index = index
+        if marker_index == -1:
+            tail = buffer[cursor:]
+            if final:
+                return visible + tail, ""
+            hold_length = 0
+            for marker in XML_TOOL_STREAM_MARKERS:
+                for length in range(1, min(len(marker) - 1, len(tail)) + 1):
+                    if marker.startswith(tail[-length:].lower()):
+                        hold_length = max(hold_length, length)
+            return visible + tail[:-hold_length] if hold_length else visible + tail, (
+                tail[-hold_length:] if hold_length else ""
+            )
+        visible += buffer[cursor:marker_index]
+        rest = lower[marker_index:]
+        close = "</invoke>" if rest.startswith("<invoke") else "</function>"
+        close_index = rest.find(close)
+        if close_index == -1:
+            return visible, buffer[marker_index:]
+        cursor = marker_index + close_index + len(close)
+    return visible, ""
+
+
+# 清理非流式回退路径中的 XML 工具调用文本。
+def strip_xml_tool_stream(text: str) -> str:
+    """Remove complete XML tool calls from a complete model response."""
+    return drain_xml_tool_stream(text, final=True)[0].strip()
+
+
 # 在回答生成后异步保存会话、历史和记忆，保证失败不影响已发送内容。
 def schedule_answer_persistence(
     conversation_id: str,
@@ -915,7 +958,7 @@ class AgentService:
     # 执行 chat stream 对应的业务逻辑
     async def chat_stream(conversation_id: str, content: str, user_id: str = None):
         full_answer = ""
-        saw_stream_event = False
+        stream_text_buffer = ""
         emitted_text = False
         react_summary = None
         try:
@@ -1038,12 +1081,14 @@ class AgentService:
                             if event_name == "on_chat_model_stream":
                                 delta = get_stream_text(event.get("data", {}).get("chunk"))
                                 if delta:
-                                    full_answer += delta
-                                    saw_stream_event = True
-                                    emitted_text = True
-                                    yield {"type": "text", "text": delta}
+                                    stream_text_buffer += delta
+                                    visible, stream_text_buffer = drain_xml_tool_stream(stream_text_buffer)
+                                    if visible:
+                                        full_answer += visible
+                                        if full_answer.strip():
+                                            emitted_text = True
+                                            yield {"type": "text", "text": visible}
                             elif event_name == "on_tool_start":
-                                saw_stream_event = True
                                 yield {
                                     "type": "tool",
                                     "tool_name": event.get("name") or "tool",
@@ -1051,7 +1096,6 @@ class AgentService:
                                     "call_id": event.get("run_id", ""),
                                 }
                             elif event_name == "on_tool_end":
-                                saw_stream_event = True
                                 yield {
                                     "type": "tool",
                                     "tool_name": event.get("name") or "tool",
@@ -1059,7 +1103,6 @@ class AgentService:
                                     "call_id": event.get("run_id", ""),
                                 }
                             elif event_name == "on_tool_error":
-                                saw_stream_event = True
                                 yield {
                                     "type": "tool",
                                     "tool_name": event.get("name") or "tool",
@@ -1069,10 +1112,14 @@ class AgentService:
                             elif event_name == "on_chain_end" and not full_answer:
                                 output = event.get("data", {}).get("output", {})
                                 messages = output.get("messages", []) if isinstance(output, dict) else []
-                                if messages:
-                                    candidate = getattr(messages[-1], "content", "")
+                                for message in reversed(messages):
+                                    # 工具节点的 ToolMessage 不是用户可见答案，必须等待最终 AIMessage。
+                                    if getattr(message, "type", "") != "ai":
+                                        continue
+                                    candidate = getattr(message, "content", "")
                                     if isinstance(candidate, str):
-                                        full_answer = candidate
+                                        full_answer = strip_xml_tool_stream(candidate)
+                                    break
                                 if isinstance(output, dict) and output.get("stop_reason"):
                                     from src.agents.react_policy import summarize_react_state
 
@@ -1105,7 +1152,6 @@ class AgentService:
                                 if node_name == "agent":
                                     tool_calls = getattr(latest_message, "tool_calls", [])
                                     for tool_call in tool_calls:
-                                        saw_stream_event = True
                                         yield {
                                             "type": "tool",
                                             "tool_name": tool_call.get("name", "tool"),
@@ -1113,7 +1159,7 @@ class AgentService:
                                             "call_id": tool_call.get("id", ""),
                                         }
                                     if not tool_calls and isinstance(latest_message.content, str):
-                                        full_answer = latest_message.content
+                                        full_answer = strip_xml_tool_stream(latest_message.content)
                                 elif node_name == "tools":
                                     call_id = getattr(latest_message, "tool_call_id", "")
                                     yield {
@@ -1124,46 +1170,52 @@ class AgentService:
                                         "call_id": call_id,
                                     }
 
-            if full_answer and not emitted_text:
+            visible_tail, stream_text_buffer = drain_xml_tool_stream(stream_text_buffer, final=True)
+            if visible_tail:
+                full_answer += visible_tail
+                if full_answer.strip():
+                    emitted_text = True
+                    yield {"type": "text", "text": visible_tail}
+
+            if full_answer.strip() and not emitted_text:
                 async for text in stream_text_chunks(full_answer):
                     emitted_text = True
                     yield {"type": "text", "text": text}
 
-            if full_answer:
-                final_answer = maybe_append_continuation_hint(full_answer)
-                if final_answer != full_answer:
-                    yield {"type": "text", "text": final_answer[len(full_answer):]}
-                schedule_answer_persistence(
-                    conversation_id, content, final_answer, user_id or ""
-                )
-                if react_summary:
-                    yield {
-                        "type": "agent",
-                        "event": "agent.complete",
-                        "state": react_summary["state"],
-                        "stop_reason": react_summary["stop_reason"],
-                        "react": react_summary,
-                    }
-            elif not saw_stream_event:
+            # 工具调用或模型空响应不能让 SSE 以无文本事件结束，否则前端会误判接口失败。
+            if not full_answer.strip():
                 full_answer = "抱歉，我没有理解您的问题。"
+                emitted_text = True
                 yield {"type": "text", "text": full_answer}
-                schedule_answer_persistence(
-                    conversation_id, content, full_answer, user_id or ""
-                )
+
+            final_answer = maybe_append_continuation_hint(full_answer)
+            if final_answer != full_answer:
+                yield {"type": "text", "text": final_answer[len(full_answer):]}
+            schedule_answer_persistence(
+                conversation_id, content, final_answer, user_id or ""
+            )
+            if react_summary:
+                yield {
+                    "type": "agent",
+                    "event": "agent.complete",
+                    "state": react_summary["state"],
+                    "stop_reason": react_summary["stop_reason"],
+                    "react": react_summary,
+                }
 
         except TimeoutError:
-            if full_answer:
+            if full_answer.strip():
                 partial = maybe_append_continuation_hint(full_answer)
                 schedule_answer_persistence(
                     conversation_id, content, partial, user_id or ""
                 )
                 yield {"type": "text", "text": partial, "partial": True}
             else:
-                raise BusinessError(
-                    BusinessErrorCode.AGENT_TIMEOUT,
-                    "AI助手响应超时，请稍后重试。",
-                    504,
+                timeout_answer = "AI助手响应超时，请稍后重试。"
+                schedule_answer_persistence(
+                    conversation_id, content, timeout_answer, user_id or ""
                 )
+                yield {"type": "text", "text": timeout_answer}
         except BusinessError:
             raise
         except Exception as error:

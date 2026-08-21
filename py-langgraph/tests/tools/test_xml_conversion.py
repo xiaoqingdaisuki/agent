@@ -15,6 +15,9 @@ F_OPEN = chr(60) + "function=get_weather>"       # <
 F_CLOSE = chr(60) + "/function>"                 # </>
 P_OPEN = chr(60) + "parameter=city>"             # <
 P_CLOSE = chr(60) + "/parameter>"                # </
+INVOKE_OPEN = chr(60) + 'invoke name="memory_user_search">'
+INVOKE_CLOSE = chr(60) + "/invoke>"
+NAMED_PARAM_OPEN = chr(60) + 'parameter name="query">'
 
 
 def test_convert_xml_tool_calls():
@@ -60,4 +63,47 @@ def test_multiple_xml_calls():
     assert [call["id"] for call in result.tool_calls] == [
         "call_get_weather_1",
         "call_get_weather_2",
+    ]
+
+
+def test_invoke_name_xml_tool_call():
+    """Provider invoke/name XML calls should be converted and removed from content."""
+    xml_content = (
+        INVOKE_OPEN
+        + "\n"
+        + NAMED_PARAM_OPEN
+        + "\n用户身份个人信息\n"
+        + P_CLOSE
+        + "\n"
+        + INVOKE_CLOSE
+    )
+    result = _convert_xml_tool_calls(AIMessage(content=xml_content))
+
+    assert result.content == ""
+    assert result.tool_calls == [
+        {
+            "name": "memory_user_search",
+            "args": {"query": "用户身份个人信息"},
+            "id": "call_memory_user_search_1",
+            "type": "tool_call",
+        }
+    ]
+
+
+def test_invoke_name_xml_normalizes_descriptor_tool_name():
+    """Descriptor names must resolve to the actual registered LangGraph tool."""
+    xml_content = (
+        '<invoke name="web.search">'
+        '<parameter name="query">南山美食</parameter>'
+        "</invoke>"
+    )
+    result = _convert_xml_tool_calls(AIMessage(content=xml_content))
+
+    assert result.tool_calls == [
+        {
+            "name": "web_search",
+            "args": {"query": "南山美食"},
+            "id": "call_web_search_1",
+            "type": "tool_call",
+        }
     ]

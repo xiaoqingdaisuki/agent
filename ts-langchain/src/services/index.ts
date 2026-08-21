@@ -135,6 +135,51 @@ function getStreamText(chunk: any): string {
     .join("");
 }
 
+const XML_TOOL_STREAM_MARKERS = ["<invoke", "<function="];
+
+// 从模型流中提取安全可展示文本，并丢弃完整的 XML 工具调用块。
+export function drainXmlToolStream(
+  buffer: string,
+  final = false,
+): { text: string; remainder: string } {
+  let text = "";
+  let cursor = 0;
+  while (cursor < buffer.length) {
+    const lower = buffer.toLowerCase();
+    let markerIndex = -1;
+    for (const marker of XML_TOOL_STREAM_MARKERS) {
+      const index = lower.indexOf(marker, cursor);
+      if (index !== -1 && (markerIndex === -1 || index < markerIndex)) markerIndex = index;
+    }
+    if (markerIndex === -1) {
+      const tail = buffer.slice(cursor);
+      if (final) return { text: text + tail, remainder: "" };
+      let holdLength = 0;
+      for (const marker of XML_TOOL_STREAM_MARKERS) {
+        for (let length = 1; length <= Math.min(marker.length - 1, tail.length); length += 1) {
+          if (marker.startsWith(tail.slice(-length).toLowerCase())) holdLength = Math.max(holdLength, length);
+        }
+      }
+      return {
+        text: text + tail.slice(0, tail.length - holdLength),
+        remainder: tail.slice(tail.length - holdLength),
+      };
+    }
+    text += buffer.slice(cursor, markerIndex);
+    const rest = lower.slice(markerIndex);
+    const close = rest.startsWith("<invoke") ? "</invoke>" : "</function>";
+    const closeIndex = rest.indexOf(close);
+    if (closeIndex === -1) return { text, remainder: buffer.slice(markerIndex) };
+    cursor = markerIndex + closeIndex + close.length;
+  }
+  return { text, remainder: "" };
+}
+
+// 清理非流式回退路径中的 XML 工具调用文本。
+function stripXmlToolStream(text: string): string {
+  return drainXmlToolStream(text, true).text.trim();
+}
+
 // 在回答生成后异步保存会话、历史和记忆，保证失败不影响已发送内容。
 function scheduleAnswerPersistence(
   conversationId: string,
@@ -796,6 +841,7 @@ export class AgentService {
     requestSignal?: AbortSignal,
   ): AsyncGenerator<AgentStreamEvent, void, unknown> {
     let fullAnswer = "";
+    let streamTextBuffer = "";
     let agentHistoryThreadId = conversationId;
     try {
       const command = executeAgentCommand(content, conversationId);
@@ -906,9 +952,16 @@ export class AgentService {
             if (event.event === "on_chat_model_stream") {
               const delta = getStreamText(event.data?.chunk);
               if (delta) {
-                fullAnswer += delta;
-                emittedText = true;
-                yield { type: "text", text: delta };
+                streamTextBuffer += delta;
+                const visible = drainXmlToolStream(streamTextBuffer);
+                streamTextBuffer = visible.remainder;
+                if (visible.text) {
+                  fullAnswer += visible.text;
+                  if (fullAnswer.trim()) {
+                    emittedText = true;
+                    yield { type: "text", text: visible.text };
+                  }
+                }
               }
             } else if (event.event === "on_tool_start") {
               yield {
@@ -933,7 +986,7 @@ export class AgentService {
               };
             } else if (!fullAnswer && event.event === "on_chain_end") {
               const output = event.data?.output?.output;
-              if (typeof output === "string") fullAnswer = output;
+              if (typeof output === "string") fullAnswer = stripXmlToolStream(output);
               const summary = event.data?.output?.react;
               if (summary) reactSummary = summary as ReActRunSummary;
             } else if (event.event === "on_chain_end") {
@@ -953,7 +1006,7 @@ export class AgentService {
           );
           for await (const chunk of stream as AsyncIterable<any>) {
             if (chunk?.output) {
-              fullAnswer = String(chunk.output);
+              fullAnswer = stripXmlToolStream(String(chunk.output));
               emittedText = true;
               for await (const delta of splitTextForStreaming(fullAnswer)) {
                 yield { type: "text", text: delta };
@@ -966,14 +1019,28 @@ export class AgentService {
         deadline.dispose();
       }
 
+      const visibleTail = drainXmlToolStream(streamTextBuffer, true).text;
+      if (visibleTail) {
+        fullAnswer += visibleTail;
+        if (fullAnswer.trim()) {
+          emittedText = true;
+          yield { type: "text", text: visibleTail };
+        }
+      }
+
       // 不支持 token 事件的模型仍返回完整答案，按兼容路径输出而不是空流。
-      if (fullAnswer && !emittedText) {
+      if (fullAnswer.trim() && !emittedText) {
         for await (const delta of splitTextForStreaming(fullAnswer)) {
           emittedText = true;
           yield { type: "text", text: delta };
         }
       }
-      if (!fullAnswer) fullAnswer = "抱歉，我没有理解您的问题。";
+      // 工具调用或模型空响应不能让 SSE 以无文本事件结束，否则前端会误判接口失败。
+      if (!fullAnswer.trim()) {
+        fullAnswer = "抱歉，我没有理解您的问题。";
+        emittedText = true;
+        yield { type: "text", text: fullAnswer };
+      }
       const finalAnswer = maybeAppendContinuationHint(fullAnswer);
       if (finalAnswer !== fullAnswer) {
         yield { type: "text", text: finalAnswer.slice(fullAnswer.length) };
@@ -1007,7 +1074,7 @@ export class AgentService {
       });
       if (isAgentDeadlineError(error)) {
         // 超时但有部分结果 → 返回部分内容 + 继续提示
-        if (fullAnswer) {
+        if (fullAnswer.trim()) {
           const partial = maybeAppendContinuationHint(fullAnswer);
           scheduleAnswerPersistence(
             conversationId,
@@ -1019,11 +1086,16 @@ export class AgentService {
           yield { type: "text", text: partial, partial: true };
           return;
         }
-        throw new BusinessError(
-          BusinessErrorCode.AGENT_TIMEOUT,
-          "AI助手响应超时，请稍后重试。",
-          504,
+        const timeoutAnswer = "AI助手响应超时，请稍后重试。";
+        scheduleAnswerPersistence(
+          conversationId,
+          agentHistoryThreadId,
+          content,
+          timeoutAnswer,
+          userId,
         );
+        yield { type: "text", text: timeoutAnswer };
+        return;
       }
       if (error.message?.includes("rate limit")) {
         throw new BusinessError(
