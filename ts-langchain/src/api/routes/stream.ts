@@ -2,6 +2,23 @@ import type { FastifyInstance } from "fastify";
 import { AgentService, ConversationService } from "../../services/index.js";
 import { requireAgentUserId } from "../middleware/auth.js";
 import { logRequestError } from "../middleware/error.js";
+import { encodeSseDone, encodeSseEvent } from "../sse.js";
+
+// 向 SSE 客户端写入一条事件，并在内核背压时等待 drain。
+async function writeSse(raw: any, data: string): Promise<void> {
+  if (raw.writableEnded || raw.destroyed) return;
+  if (!raw.write(data)) {
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        raw.removeListener("drain", finish);
+        raw.removeListener("close", finish);
+        resolve();
+      };
+      raw.once("drain", finish);
+      raw.once("close", finish);
+    });
+  }
+}
 
 // 创建或注册 registerStreamRoutes 所需的数据
 export async function registerStreamRoutes(app: FastifyInstance) {
@@ -25,17 +42,41 @@ export async function registerStreamRoutes(app: FastifyInstance) {
       reply.raw.setHeader("Connection", "keep-alive");
       reply.raw.setHeader("X-Accel-Buffering", "no");
       reply.raw.flushHeaders();
-      reply.raw.write(`data: ${JSON.stringify({ thread_id: threadId })}\n\n`);
+      const requestController = new AbortController();
+      const abortOnDisconnect = () => {
+        if (!reply.raw.writableEnded) {
+          requestController.abort(new Error("Client disconnected"));
+        }
+      };
+      request.raw.once("aborted", abortOnDisconnect);
+      reply.raw.once("close", abortOnDisconnect);
 
       try {
+        await writeSse(reply.raw, encodeSseEvent("meta", { thread_id: threadId }));
         for await (const event of AgentService.chatStream(
           threadId,
           message,
           trustedUserId,
+          requestController.signal,
         )) {
           if (event.type === "text") {
-            reply.raw.write(
-              `data: ${JSON.stringify({ text: event.text, partial: event.partial })}\n\n`,
+            await writeSse(
+              reply.raw,
+              encodeSseEvent("text", {
+                text: event.text,
+                partial: event.partial ?? false,
+              }),
+            );
+          } else {
+            await writeSse(
+              reply.raw,
+              encodeSseEvent("tool", {
+                event: "tool",
+                tool_name: event.toolName,
+                status: event.status,
+                call_id: event.callId,
+                duration_ms: event.durationMs,
+              }),
             );
           }
         }
@@ -45,17 +86,24 @@ export async function registerStreamRoutes(app: FastifyInstance) {
           user_id: trustedUserId,
           stream: true,
         });
-        reply.raw.write(
-          `data: ${JSON.stringify({
+        await writeSse(
+          reply.raw,
+          encodeSseEvent("error", {
+            ok: false,
             error: {
               code: error?.code || "INTERNAL_ERROR",
               message: error?.message || "处理请求时发生错误",
             },
-          })}\n\n`,
+          }),
         );
       } finally {
-        reply.raw.write("data: [DONE]\n\n");
-        reply.raw.end();
+        request.raw.removeListener("aborted", abortOnDisconnect);
+        reply.raw.removeListener("close", abortOnDisconnect);
+        try {
+          await writeSse(reply.raw, encodeSseDone());
+        } finally {
+          reply.raw.end();
+        }
       }
     },
   );

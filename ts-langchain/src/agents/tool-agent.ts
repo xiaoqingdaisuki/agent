@@ -261,9 +261,8 @@ async function buildToolAgent(
     llm: model as any,
     tools: wrappedTools as any,
     prompt: dynamicPrompt,
-    // XML compatibility is applied in the bound model's invoke path. Keeping
-    // planning non-streaming also avoids assembling partial XML fragments.
-    streamRunnable: false,
+    // 开启底层模型增量事件，供 AgentService.chatStream 输出真实 token 流。
+    streamRunnable: true,
   });
 
   // Runnable agents only support LangChain's default "force" stop, whose

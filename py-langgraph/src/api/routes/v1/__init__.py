@@ -3,6 +3,7 @@ External API v1 — 给前端 UI 使用
 """
 
 import json
+import asyncio
 from datetime import datetime
 from typing import Optional
 
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from src.api.auth import require_agent_user_id
 from src.api.request_logging import log_request_error
+from src.api.sse import encode_sse_done, encode_sse_event
 from src.services import (
     AgentService,
     BusinessError,
@@ -218,12 +220,13 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
 
     # 执行 event generator 对应的业务逻辑
     async def event_generator():
-        metadata = json.dumps({"conversation_id": conv_id}, ensure_ascii=False)
-        yield f"data: {metadata}\n\n"
+        yield encode_sse_event("meta", {"conversation_id": conv_id})
         try:
             async for event in AgentService.chat_stream(
                 conv_id, req.content, user_id=trusted_user_id
             ):
+                if await request.is_disconnected():
+                    return
                 payload = json.dumps(
                     {"delta": event["text"]}
                     if event["type"] == "text"
@@ -235,16 +238,35 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
                     },
                     ensure_ascii=False,
                 )
-                yield f"data: {payload}\n\n"
+                yield encode_sse_event(
+                    "text" if event["type"] == "text" else "tool",
+                    json.loads(payload),
+                )
         except BusinessError as error:
             log_request_error(
                 request,
                 error,
                 {"conversation_id": conv_id, "user_id": trusted_user_id, "stream": True},
             )
-            payload = json.dumps(error.to_dict(), ensure_ascii=False)
-            yield f"data: {payload}\n\n"
-        yield "data: [DONE]\n\n"
+            yield encode_sse_event(
+                "error", {"ok": False, "error": error.to_dict().get("error", error.to_dict())}
+            )
+        except asyncio.CancelledError:
+            log_request_error(
+                request,
+                RuntimeError("Client disconnected"),
+                {"conversation_id": conv_id, "user_id": trusted_user_id, "stream": True},
+            )
+            raise
+        except Exception as error:
+            log_request_error(
+                request, error, {"conversation_id": conv_id, "user_id": trusted_user_id, "stream": True}
+            )
+            yield encode_sse_event(
+                "error",
+                {"ok": False, "error": {"code": "INTERNAL_ERROR", "message": "处理请求时发生错误"}},
+            )
+        yield encode_sse_done()
 
     return StreamingResponse(
         event_generator(),

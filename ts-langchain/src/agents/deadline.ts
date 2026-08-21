@@ -14,23 +14,42 @@ export class AgentDeadline {
   private timeoutId!: NodeJS.Timeout;
   private readonly timeoutPromise: Promise<never>;
   private readonly startedAt = Date.now();
+  private readonly parentSignal?: AbortSignal;
+  private readonly onParentAbort = () => {
+    this.controller.abort(this.parentSignal?.reason);
+  };
 
   // 初始化 AbortController 和超时定时器，启动计时
-  constructor(private timeoutMs: number = config.AGENT_DEADLINE_MS) {
+  constructor(
+    private timeoutMs: number = config.AGENT_DEADLINE_MS,
+    parentSignal?: AbortSignal,
+  ) {
+    this.parentSignal = parentSignal;
     this.signal = this.controller.signal;
     this.timeoutPromise = new Promise((_, reject) => {
+      const rejectAbort = () =>
+        reject(
+          this.signal.reason instanceof Error
+            ? this.signal.reason
+            : new AgentDeadlineError(this.timeoutMs),
+        );
+      if (this.signal.aborted) {
+        rejectAbort();
+        return;
+      }
       this.signal.addEventListener(
         "abort",
-        () => {
-          reject(
-            this.signal.reason instanceof Error
-              ? this.signal.reason
-              : new AgentDeadlineError(this.timeoutMs),
-          );
-        },
+        rejectAbort,
         { once: true },
       );
     });
+    if (parentSignal) {
+      if (parentSignal.aborted) {
+        this.controller.abort(parentSignal.reason);
+      } else {
+        parentSignal.addEventListener("abort", this.onParentAbort, { once: true });
+      }
+    }
     this.scheduleTimeout();
   }
 
@@ -53,6 +72,7 @@ export class AgentDeadline {
   // 清理超时定时器，防止内存泄漏
   dispose(): void {
     clearTimeout(this.timeoutId);
+    this.parentSignal?.removeEventListener("abort", this.onParentAbort);
   }
 
   // 设置或重置超时截止时间，保证剩余时间足够
@@ -72,8 +92,9 @@ export class AgentDeadline {
 // 执行带截止时间的任务，自动清理超时资源
 export async function runWithAgentDeadline<T>(
   task: (deadline: AgentDeadline) => Promise<T>,
+  parentSignal?: AbortSignal,
 ): Promise<T> {
-  const deadline = new AgentDeadline();
+  const deadline = new AgentDeadline(undefined, parentSignal);
   try {
     return await deadline.run(task(deadline));
   } finally {
@@ -87,5 +108,15 @@ export function isAgentDeadlineError(error: unknown): boolean {
     error instanceof AgentDeadlineError ||
     (error instanceof Error &&
       (error.name === "AbortError" || error.name === "TimeoutError"))
+  );
+}
+
+// 判断错误是否由客户端主动断开请求引起。
+export function isClientAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" ||
+      error.message === "Client disconnected" ||
+      error.message === "The operation was aborted")
   );
 }

@@ -41,6 +41,7 @@ import {
 } from "../commands/index.js";
 import {
   AgentDeadline,
+  isClientAbortError,
   isAgentDeadlineError,
   runWithAgentDeadline,
 } from "../agents/deadline.js";
@@ -80,6 +81,75 @@ export type AgentStreamEvent =
 
 const STREAM_FALLBACK_CHUNK_SIZE = 8;
 const STREAM_FALLBACK_INTERVAL_MS = 18;
+
+const backgroundTasks = new Set<Promise<void>>();
+const backgroundChains = new Map<string, Promise<void>>();
+
+// 将回答落库、历史记录和记忆提取移出流式响应关键路径。
+function scheduleBackgroundTask(label: string, task: () => Promise<void>): void {
+  const previous = backgroundChains.get(label);
+  const work = new Promise<void>((resolve) => {
+    setImmediate(() => {
+      void (previous || Promise.resolve())
+        .catch(() => undefined)
+        .then(task)
+        .catch((error) => {
+          console.error(`[service] background task ${label} failed`, error);
+        })
+        .finally(resolve);
+    });
+  });
+  backgroundTasks.add(work);
+  backgroundChains.set(label, work);
+  void work.finally(() => backgroundTasks.delete(work));
+  void work.finally(() => {
+    if (backgroundChains.get(label) === work) backgroundChains.delete(label);
+  });
+}
+
+// 等待已排队的后台任务，供优雅停机和集成测试使用。
+export async function flushBackgroundTasks(): Promise<void> {
+  while (backgroundTasks.size > 0) {
+    await Promise.all([...backgroundTasks]);
+  }
+}
+
+// 从 LangChain 消息块中提取可展示的文本增量。
+function getStreamText(chunk: any): string {
+  const content = chunk?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part: any) =>
+      typeof part === "string" ? part : typeof part?.text === "string" ? part.text : "",
+    )
+    .join("");
+}
+
+// 在回答生成后异步保存会话、历史和记忆，保证失败不影响已发送内容。
+function scheduleAnswerPersistence(
+  conversationId: string,
+  agentHistoryThreadId: string,
+  content: string,
+  answer: string,
+  userId?: string,
+): void {
+  scheduleBackgroundTask(`answer:${conversationId}`, async () => {
+    await appendMessage(agentHistoryThreadId, new HumanMessage(content));
+    await appendMessage(agentHistoryThreadId, new AIMessage(answer));
+    await ConversationService.appendAssistantMessage(conversationId, {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: answer,
+      createdAt: new Date().toISOString(),
+    });
+    if (userId) {
+      await HistoryService.record(userId, conversationId, content, answer);
+      await MemoryService.extractMemoriesFromConversation(userId, content, answer);
+      await ProfileService.update(userId);
+    }
+  });
+}
 
 // 将模型完整回答按可见字符拆成平滑的 SSE 分片，避免依赖厂商工具流格式
 async function* splitTextForStreaming(
@@ -714,6 +784,7 @@ export class AgentService {
     conversationId: string,
     content: string,
     userId?: string,
+    requestSignal?: AbortSignal,
   ): AsyncGenerator<AgentStreamEvent, void, unknown> {
     let fullAnswer = "";
     let agentHistoryThreadId = conversationId;
@@ -751,34 +822,21 @@ export class AgentService {
 
       const conversation = await ConversationService.get(conversationId);
       if (conversation?.mode === "knowledge") {
-        const result = await runWithAgentDeadline(() =>
-          KnowledgeService.chat(content, history),
+        const result = await runWithAgentDeadline(
+          () => KnowledgeService.chat(content, history),
+          requestSignal,
         );
         fullAnswer = maybeAppendContinuationHint(
           String(result.output || "抱歉，我没有理解您的问题。"),
         );
-        await appendMessage(agentHistoryThreadId, new HumanMessage(content));
-        await appendMessage(agentHistoryThreadId, new AIMessage(fullAnswer));
-        await ConversationService.appendAssistantMessage(conversationId, {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: fullAnswer,
-          createdAt: new Date().toISOString(),
-        });
+        scheduleAnswerPersistence(
+          conversationId,
+          agentHistoryThreadId,
+          content,
+          fullAnswer,
+          userId,
+        );
         yield { type: "text", text: fullAnswer };
-        if (userId) {
-          try {
-            await HistoryService.record(userId, conversationId, content, fullAnswer);
-            await MemoryService.extractMemoriesFromConversation(
-              userId,
-              content,
-              fullAnswer,
-            );
-            await ProfileService.update(userId);
-          } catch {
-            // 记忆记录失败不影响知识库回答
-          }
-        }
         return;
       }
 
@@ -795,8 +853,9 @@ export class AgentService {
         actor_type: "user",
       } as const;
 
-      const deadline = new AgentDeadline();
+      const deadline = new AgentDeadline(undefined, requestSignal);
       const progress = new ToolProgressChannel();
+      let emittedText = false;
       const scope = createToolCallScope(toolContext, {
         onToolProgress: (event) => {
           if (event.type === "started") deadline.enableToolBudget();
@@ -810,85 +869,94 @@ export class AgentService {
         },
       });
       try {
-        const stream = await deadline.run<any>(
-          scope.run(() =>
-            (agent as any).stream(
-              {
-                input: content,
-                chat_history: history,
-                memory_context: memoryContext,
-              },
-              { tags: ["stream"], signal: deadline.signal },
-            ),
-          ),
-        );
-        const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<any>;
-        let next = scope.run(() => iterator.next()) as Promise<
-          IteratorResult<any>
-        >;
-
-        while (true) {
-          const pendingProgress = progress.take();
-          const winner = await deadline.run(
-            Promise.race([
-              next.then((result) => ({ kind: "agent" as const, result })),
-              pendingProgress.promise.then((event) => ({
-                kind: "tool" as const,
-                event,
-              })),
-            ]),
-          );
-          pendingProgress.cancel();
-          if (winner.kind === "tool") {
-            yield winner.event;
-            continue;
-          }
-
-          const { value: chunk, done } = winner.result;
-          if (done) break;
-          if (chunk?.output) {
-            const text = String(chunk.output);
-            fullAnswer = text;
-            for await (const delta of splitTextForStreaming(text)) {
-              yield { type: "text", text: delta };
+        const input = {
+          input: content,
+          chat_history: history,
+          memory_context: memoryContext,
+        };
+        const eventStream = (agent as any).streamEvents
+          ? (agent as any).streamEvents(input, {
+              version: "v2",
+              tags: ["stream"],
+              signal: deadline.signal,
+            })
+          : null;
+        if (eventStream) {
+          for await (const event of eventStream) {
+            if (event.event === "on_chat_model_stream") {
+              const delta = getStreamText(event.data?.chunk);
+              if (delta) {
+                fullAnswer += delta;
+                emittedText = true;
+                yield { type: "text", text: delta };
+              }
+            } else if (event.event === "on_tool_start") {
+              yield {
+                type: "tool",
+                toolName: event.name || "tool",
+                status: "started",
+                callId: event.run_id || "",
+              };
+            } else if (event.event === "on_tool_end") {
+              yield {
+                type: "tool",
+                toolName: event.name || "tool",
+                status: "completed",
+                callId: event.run_id || "",
+              };
+            } else if (event.event === "on_tool_error") {
+              yield {
+                type: "tool",
+                toolName: event.name || "tool",
+                status: "failed",
+                callId: event.run_id || "",
+              };
+            } else if (!fullAnswer && event.event === "on_chain_end") {
+              const output = event.data?.output?.output;
+              if (typeof output === "string") fullAnswer = output;
             }
           }
-          next = scope.run(() => iterator.next()) as Promise<
-            IteratorResult<any>
-          >;
+        } else {
+          // 兼容旧版 LangChain 或测试替身，仍保留工具进度通道。
+          const stream = await deadline.run<any>(
+            scope.run(() => (agent as any).stream(input, { signal: deadline.signal })),
+          );
+          for await (const chunk of stream as AsyncIterable<any>) {
+            if (chunk?.output) {
+              fullAnswer = String(chunk.output);
+              emittedText = true;
+              for await (const delta of splitTextForStreaming(fullAnswer)) {
+                yield { type: "text", text: delta };
+              }
+            }
+            for (const event of progress.drain()) yield event;
+          }
         }
-        for (const event of progress.drain()) yield event;
       } finally {
         deadline.dispose();
       }
 
-      if (fullAnswer) {
-        const finalAnswer = maybeAppendContinuationHint(fullAnswer);
-        await appendMessage(agentHistoryThreadId, new HumanMessage(content));
-        await appendMessage(agentHistoryThreadId, new AIMessage(finalAnswer));
-        await ConversationService.appendAssistantMessage(conversationId, {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: finalAnswer,
-          createdAt: new Date().toISOString(),
-        });
-      }
-
-      // Record Q&A + extract memories
-      if (userId && fullAnswer) {
-        try {
-          await HistoryService.record(userId, conversationId, content, fullAnswer);
-          await MemoryService.extractMemoriesFromConversation(
-            userId,
-            content,
-            fullAnswer,
-          );
-          await ProfileService.update(userId);
-        } catch {
-          // silent
+      // 不支持 token 事件的模型仍返回完整答案，按兼容路径输出而不是空流。
+      if (fullAnswer && !emittedText) {
+        for await (const delta of splitTextForStreaming(fullAnswer)) {
+          emittedText = true;
+          yield { type: "text", text: delta };
         }
       }
+      if (!fullAnswer) fullAnswer = "抱歉，我没有理解您的问题。";
+      const finalAnswer = maybeAppendContinuationHint(fullAnswer);
+      if (finalAnswer !== fullAnswer) {
+        yield { type: "text", text: finalAnswer.slice(fullAnswer.length) };
+      }
+      scheduleAnswerPersistence(
+        conversationId,
+        agentHistoryThreadId,
+        content,
+        finalAnswer,
+        userId,
+      );
     } catch (error: any) {
+      if (isClientAbortError(error) || requestSignal?.aborted) return;
       if (error instanceof BusinessError) throw error;
       console.error("Agent stream failed", {
         conversationId,
@@ -902,25 +970,14 @@ export class AgentService {
         // 超时但有部分结果 → 返回部分内容 + 继续提示
         if (fullAnswer) {
           const partial = maybeAppendContinuationHint(fullAnswer);
-          await appendMessage(agentHistoryThreadId, new HumanMessage(content));
-          await appendMessage(agentHistoryThreadId, new AIMessage(partial));
-          await ConversationService.appendAssistantMessage(conversationId, {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: partial,
-            createdAt: new Date().toISOString(),
-          });
+          scheduleAnswerPersistence(
+            conversationId,
+            agentHistoryThreadId,
+            content,
+            partial,
+            userId,
+          );
           yield { type: "text", text: partial, partial: true };
-          // 记录问答历史
-          if (userId) {
-            try {
-              await HistoryService.record(userId, conversationId, content, partial);
-              await MemoryService.extractMemoriesFromConversation(userId, content, partial);
-              await ProfileService.update(userId);
-            } catch {
-              // silent
-            }
-          }
           return;
         }
         throw new BusinessError(

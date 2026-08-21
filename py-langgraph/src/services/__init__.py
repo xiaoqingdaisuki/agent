@@ -22,6 +22,80 @@ logger = logging.getLogger(__name__)
 
 STREAM_FALLBACK_CHUNK_SIZE = 8
 STREAM_FALLBACK_INTERVAL_SECONDS = 0.018
+_background_tasks: set[asyncio.Task] = set()
+_background_chains: dict[str, asyncio.Task] = {}
+
+
+# 将同步持久化工作放入线程后台执行，避免阻塞 SSE 事件循环。
+def schedule_background_task(label: str, callback, *args) -> None:
+    previous = _background_chains.get(label)
+
+    # 串行执行同一会话的后台写入，避免快速连续请求乱序落库。
+    async def runner() -> None:
+        try:
+            if previous:
+                await asyncio.shield(previous)
+        except Exception:
+            pass
+        try:
+            await asyncio.to_thread(callback, *args)
+        except Exception:
+            logger.exception("Background task failed | label=%s", label)
+
+    task = asyncio.create_task(runner(), name=f"agent-background-{label}")
+    _background_tasks.add(task)
+    _background_chains[label] = task
+
+    # 任务完成后清理集合和对应会话的串行链。
+    def cleanup(done_task: asyncio.Task) -> None:
+        _background_tasks.discard(done_task)
+        if _background_chains.get(label) is done_task:
+            _background_chains.pop(label, None)
+
+    task.add_done_callback(cleanup)
+
+
+# 等待已排队的后台任务，供优雅停机和集成测试使用。
+async def flush_background_tasks() -> None:
+    while _background_tasks:
+        await asyncio.gather(*tuple(_background_tasks), return_exceptions=True)
+
+
+# 从 LangChain 消息块中提取可展示的文本增量。
+def get_stream_text(chunk) -> str:
+    content = getattr(chunk, "content", chunk)
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        part if isinstance(part, str) else str(part.get("text", ""))
+        for part in content
+        if isinstance(part, (str, dict))
+    )
+
+
+# 在回答生成后异步保存会话、历史和记忆，保证失败不影响已发送内容。
+def schedule_answer_persistence(
+    conversation_id: str,
+    content: str,
+    answer: str,
+    user_id: str = "",
+) -> None:
+    def persist() -> None:
+        ConversationService.append_assistant_message(
+            conversation_id,
+            Message("assistant", answer),
+            user_id,
+        )
+        if user_id:
+            from src.profile.service import HistoryService, MemoryService, ProfileService
+
+            HistoryService.record(user_id, conversation_id, content, answer)
+            MemoryService.extract_memories_from_conversation(user_id, content, answer)
+            ProfileService.update(user_id)
+
+    schedule_background_task(f"answer:{conversation_id}", persist)
 
 
 # 将模型完整回答按可见字符拆成平滑的 SSE 分片，避免依赖厂商工具流格式
@@ -829,6 +903,8 @@ class AgentService:
     # 执行 chat stream 对应的业务逻辑
     async def chat_stream(conversation_id: str, content: str, user_id: str = None):
         full_answer = ""
+        saw_stream_event = False
+        emitted_text = False
         try:
             from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
             from src.agents.deadline import AgentDeadline
@@ -869,36 +945,53 @@ class AgentService:
                 from langchain_core.messages import HumanMessage
                 from src.rag.rag_agent import build_rag_agent
 
+                rag_agent = build_rag_agent()
                 with tool_call_scope(runtime_context):
                     async with AgentDeadline():
-                        result = await build_rag_agent().ainvoke(
-                            {
-                                "messages": [HumanMessage(content=content)],
-                                "context": [],
-                                "should_retrieve": True,
-                            }
-                        )
-                full_answer = maybe_append_continuation_hint(
-                    result["messages"][-1].content
-                    or "抱歉，我没有理解您的问题。"
+                        rag_input = {
+                            "messages": [HumanMessage(content=content)],
+                            "context": [],
+                            "should_retrieve": True,
+                        }
+                        rag_stream_api = hasattr(rag_agent, "astream_events")
+                        if rag_stream_api:
+                            async for event in rag_agent.astream_events(
+                                rag_input, version="v2"
+                            ):
+                                if event.get("event") == "on_chat_model_stream":
+                                    delta = get_stream_text(
+                                        event.get("data", {}).get("chunk")
+                                    )
+                                    if delta:
+                                        full_answer += delta
+                                        emitted_text = True
+                                        yield {"type": "text", "text": delta}
+                                elif event.get("event") == "on_chain_end" and not full_answer:
+                                    output = event.get("data", {}).get("output", {})
+                                    messages = output.get("messages", []) if isinstance(output, dict) else []
+                                    if messages:
+                                        candidate = getattr(messages[-1], "content", "")
+                                        if isinstance(candidate, str):
+                                            full_answer = candidate
+                        else:
+                            result = await rag_agent.ainvoke(rag_input)
+                            full_answer = result["messages"][-1].content
+                if not full_answer:
+                    full_answer = "抱歉，我没有理解您的问题。"
+                raw_answer = full_answer
+                if not emitted_text:
+                    if rag_stream_api:
+                        async for text in stream_text_chunks(raw_answer):
+                            emitted_text = True
+                            yield {"type": "text", "text": text}
+                    else:
+                        yield {"type": "text", "text": raw_answer}
+                final_answer = maybe_append_continuation_hint(raw_answer)
+                if final_answer != raw_answer:
+                    yield {"type": "text", "text": final_answer[len(raw_answer):]}
+                schedule_answer_persistence(
+                    conversation_id, content, final_answer, user_id or ""
                 )
-                ConversationService.append_assistant_message(
-                    conversation_id,
-                    Message("assistant", full_answer),
-                    user_id or "",
-                )
-                yield {"type": "text", "text": full_answer}
-                if user_id:
-                    try:
-                        HistoryService.record(
-                            user_id, conversation_id, content, full_answer
-                        )
-                        MemoryService.extract_memories_from_conversation(
-                            user_id, content, full_answer
-                        )
-                        ProfileService.update(user_id)
-                    except Exception:
-                        pass
                 return
 
             agent = build_tool_agent(
@@ -913,65 +1006,115 @@ class AgentService:
 
             with tool_call_scope(runtime_context):
                 async with AgentDeadline():
-                    async for update in agent.astream(
-                        {
-                            "messages": [{"role": "user", "content": content}],
-                            "user_id": user_id,
-                        },
-                        config=config,
-                        stream_mode="updates",
-                    ):
-                        for node_name, state_update in update.items():
-                            messages = state_update.get("messages", [])
-                            if not messages:
-                                continue
-                            latest_message = messages[-1]
-                            if node_name == "agent":
-                                tool_calls = getattr(latest_message, "tool_calls", [])
-                                for tool_call in tool_calls:
-                                    yield {
-                                        "type": "tool",
-                                        "tool_name": tool_call.get("name", "tool"),
-                                        "status": "started",
-                                        "call_id": tool_call.get("id", ""),
-                                    }
-                                if not tool_calls and isinstance(latest_message.content, str):
-                                    full_answer = latest_message.content
-                            elif node_name == "tools":
-                                call_id = getattr(latest_message, "tool_call_id", "")
+                    if hasattr(agent, "astream_events"):
+                        async for event in agent.astream_events(
+                            {
+                                "messages": [{"role": "user", "content": content}],
+                                "user_id": user_id,
+                            },
+                            config=config,
+                            version="v2",
+                        ):
+                            event_name = event.get("event")
+                            if event_name == "on_chat_model_stream":
+                                delta = get_stream_text(event.get("data", {}).get("chunk"))
+                                if delta:
+                                    full_answer += delta
+                                    saw_stream_event = True
+                                    emitted_text = True
+                                    yield {"type": "text", "text": delta}
+                            elif event_name == "on_tool_start":
+                                saw_stream_event = True
                                 yield {
                                     "type": "tool",
-                                    "tool_name": getattr(latest_message, "name", None) or "tool",
-                                    "status": "completed",
-                                    "call_id": call_id,
+                                    "tool_name": event.get("name") or "tool",
+                                    "status": "started",
+                                    "call_id": event.get("run_id", ""),
                                 }
+                            elif event_name == "on_tool_end":
+                                saw_stream_event = True
+                                yield {
+                                    "type": "tool",
+                                    "tool_name": event.get("name") or "tool",
+                                    "status": "completed",
+                                    "call_id": event.get("run_id", ""),
+                                }
+                            elif event_name == "on_tool_error":
+                                saw_stream_event = True
+                                yield {
+                                    "type": "tool",
+                                    "tool_name": event.get("name") or "tool",
+                                    "status": "failed",
+                                    "call_id": event.get("run_id", ""),
+                                }
+                            elif event_name == "on_chain_end" and not full_answer:
+                                output = event.get("data", {}).get("output", {})
+                                messages = output.get("messages", []) if isinstance(output, dict) else []
+                                if messages:
+                                    candidate = getattr(messages[-1], "content", "")
+                                    if isinstance(candidate, str):
+                                        full_answer = candidate
+                    else:
+                        # 兼容旧版 LangGraph 或测试替身，保留工具事件回退路径。
+                        async for update in agent.astream(
+                            {
+                                "messages": [{"role": "user", "content": content}],
+                                "user_id": user_id,
+                            },
+                            config=config,
+                            stream_mode="updates",
+                        ):
+                            for node_name, state_update in update.items():
+                                messages = state_update.get("messages", [])
+                                if not messages:
+                                    continue
+                                latest_message = messages[-1]
+                                if node_name == "agent":
+                                    tool_calls = getattr(latest_message, "tool_calls", [])
+                                    for tool_call in tool_calls:
+                                        saw_stream_event = True
+                                        yield {
+                                            "type": "tool",
+                                            "tool_name": tool_call.get("name", "tool"),
+                                            "status": "started",
+                                            "call_id": tool_call.get("id", ""),
+                                        }
+                                    if not tool_calls and isinstance(latest_message.content, str):
+                                        full_answer = latest_message.content
+                                elif node_name == "tools":
+                                    call_id = getattr(latest_message, "tool_call_id", "")
+                                    yield {
+                                        # 工具节点本身也是有效的流事件，不能被空答案兜底覆盖。
+                                        "type": "tool",
+                                        "tool_name": getattr(latest_message, "name", None) or "tool",
+                                        "status": "completed",
+                                        "call_id": call_id,
+                                    }
+
+            if full_answer and not emitted_text:
+                async for text in stream_text_chunks(full_answer):
+                    emitted_text = True
+                    yield {"type": "text", "text": text}
 
             if full_answer:
                 final_answer = maybe_append_continuation_hint(full_answer)
-                ConversationService.append_assistant_message(
-                    conversation_id,
-                    Message("assistant", final_answer),
-                    user_id or "",
+                if final_answer != full_answer:
+                    yield {"type": "text", "text": final_answer[len(full_answer):]}
+                schedule_answer_persistence(
+                    conversation_id, content, final_answer, user_id or ""
                 )
-                async for text in stream_text_chunks(full_answer):
-                    yield {"type": "text", "text": text}
-
-            # Record Q&A + extract memories
-            if user_id and full_answer:
-                try:
-                    HistoryService.record(user_id, conversation_id, content, full_answer)
-                    MemoryService.extract_memories_from_conversation(user_id, content, full_answer)
-                    ProfileService.update(user_id)
-                except Exception:
-                    pass
+            elif not saw_stream_event:
+                full_answer = "抱歉，我没有理解您的问题。"
+                yield {"type": "text", "text": full_answer}
+                schedule_answer_persistence(
+                    conversation_id, content, full_answer, user_id or ""
+                )
 
         except TimeoutError:
             if full_answer:
                 partial = maybe_append_continuation_hint(full_answer)
-                ConversationService.append_assistant_message(
-                    conversation_id,
-                    Message("assistant", partial),
-                    user_id or "",
+                schedule_answer_persistence(
+                    conversation_id, content, partial, user_id or ""
                 )
                 yield {"type": "text", "text": partial, "partial": True}
             else:

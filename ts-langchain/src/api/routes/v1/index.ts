@@ -28,6 +28,23 @@ import type {
 } from "../../../services/index.js";
 import { requireAgentUserId } from "../../middleware/auth.js";
 import { logRequestError } from "../../middleware/error.js";
+import { encodeSseDone, encodeSseEvent } from "../../sse.js";
+
+// 向 SSE 客户端写入一条事件，并在内核背压时等待 drain。
+async function writeSse(raw: any, data: string): Promise<void> {
+  if (raw.writableEnded || raw.destroyed) return;
+  if (!raw.write(data)) {
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        raw.removeListener("drain", finish);
+        raw.removeListener("close", finish);
+        resolve();
+      };
+      raw.once("drain", finish);
+      raw.once("close", finish);
+    });
+  }
+}
 
 // 将 Conversation 对象序列化为前端 API 响应格式
 function serializeConversation(conversation: Conversation) {
@@ -249,19 +266,31 @@ export async function registerV1Routes(app: FastifyInstance) {
     reply.raw.setHeader("Connection", "keep-alive");
     reply.raw.setHeader("X-Accel-Buffering", "no");
     reply.raw.flushHeaders();
-    reply.raw.write(
-      `data: ${JSON.stringify({ conversation_id: convId })}\n\n`,
-    );
+    const requestController = new AbortController();
+    const abortOnDisconnect = () => {
+      if (!reply.raw.writableEnded) {
+        requestController.abort(new Error("Client disconnected"));
+      }
+    };
+    request.raw.once("aborted", abortOnDisconnect);
+    reply.raw.once("close", abortOnDisconnect);
 
     try {
+      await writeSse(
+        reply.raw,
+        encodeSseEvent("meta", { conversation_id: convId }),
+      );
       for await (const event of AgentService.chatStream(
         convId,
         content,
         trustedUserId,
+        requestController.signal,
       )) {
         const payload =
           event.type === "text"
-            ? { delta: event.text }
+            ? event.partial === undefined
+              ? { delta: event.text }
+              : { delta: event.text, partial: event.partial }
             : {
                 event: "tool",
                 tool_name: event.toolName,
@@ -269,7 +298,10 @@ export async function registerV1Routes(app: FastifyInstance) {
                 call_id: event.callId,
                 duration_ms: event.durationMs,
               };
-        reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+        await writeSse(
+          reply.raw,
+          encodeSseEvent(event.type === "text" ? "text" : "tool", payload),
+        );
       }
     } catch (error: unknown) {
       logRequestError(request, error, {
@@ -286,19 +318,26 @@ export async function registerV1Routes(app: FastifyInstance) {
               500,
             );
       try {
-        reply.raw.write(
-          `data: ${JSON.stringify(businessError.toJSON())}\n\n`,
+        await writeSse(
+          reply.raw,
+          encodeSseEvent("error", {
+            ok: false,
+            error: businessError.toJSON().error,
+          }),
         );
       } catch {
         // raw response already closed / unreachable — nothing to write
       }
     } finally {
+      request.raw.removeListener("aborted", abortOnDisconnect);
+      reply.raw.removeListener("close", abortOnDisconnect);
       try {
-        reply.raw.write("data: [DONE]\n\n");
+        await writeSse(reply.raw, encodeSseDone());
       } catch {
-        // ignore write errors on teardown
+        // raw response already closed / unreachable — nothing to write
+      } finally {
+        reply.raw.end();
       }
-      reply.raw.end();
     }
   });
 
