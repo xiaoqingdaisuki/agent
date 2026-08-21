@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from functools import lru_cache
 from typing import Annotated, Literal
 
@@ -21,9 +22,17 @@ from src.tools.runtime.executor import (
     get_tool_call_context,
     tool_call_scope,
 )
+from src.agents.react import (
+    is_clarification,
+    observation_from_tool_message,
+    tool_call_signature,
+)
 
-MAX_TOOL_CALLS = settings.max_agent_iterations
-AGENT_RECURSION_LIMIT = MAX_TOOL_CALLS * 2 + 4
+MAX_REACT_STEPS = settings.react_max_steps
+MAX_TOOL_CALLS = settings.react_max_tool_calls
+MAX_SAME_TOOL_CALLS = settings.react_max_same_tool_calls
+MAX_TOTAL_TIME_MS = settings.react_max_total_time_ms
+AGENT_RECURSION_LIMIT = MAX_REACT_STEPS * 3 + 4
 MAX_HISTORY_MESSAGES = 50
 
 
@@ -32,14 +41,42 @@ class AgentState(TypedDict, total=False):
 
     messages: Annotated[list[BaseMessage], add_messages]
     user_id: str | None
+    react_state: str
+    stop_reason: str
+    react_steps: int
+    react_tool_calls: int
+    react_tool_names: list[str]
+    react_call_signatures: dict[str, int]
+    react_failed_signatures: dict[str, int]
+    observations: list[dict]
+    tool_errors: int
+    model_calls: int
+    reason_code: str | None
+    started_at: float
+    total_latency_ms: int
 
 
 # 修剪对话历史，限制消息数量并保持用户轮次边界
-def trim_history(state: AgentState) -> dict[str, list[RemoveMessage]]:
+def trim_history(state: AgentState) -> dict:
     """Bound checkpoint growth while keeping a complete user turn boundary."""
     messages = state["messages"]
+    react_reset = {
+        "react_state": "IDLE",
+        "stop_reason": "",
+        "react_steps": 0,
+        "react_tool_calls": 0,
+        "react_tool_names": [],
+        "react_call_signatures": {},
+        "react_failed_signatures": {},
+        "observations": [],
+        "tool_errors": 0,
+        "model_calls": 0,
+        "reason_code": None,
+        "started_at": time.monotonic(),
+        "total_latency_ms": 0,
+    }
     if len(messages) <= MAX_HISTORY_MESSAGES:
-        return {}
+        return react_reset
 
     keep_from = len(messages) - MAX_HISTORY_MESSAGES
     while keep_from < len(messages) and messages[keep_from].type != "human":
@@ -47,7 +84,7 @@ def trim_history(state: AgentState) -> dict[str, list[RemoveMessage]]:
     removals = [
         RemoveMessage(id=message.id) for message in messages[:keep_from] if message.id is not None
     ]
-    return {"messages": removals} if removals else {}
+    return {**react_reset, "messages": removals} if removals else react_reset
 
 
 # 根据配置获取 LLM 实例（OpenAI 或 Anthropic）
@@ -223,13 +260,98 @@ async def _scope_memory_tool_call(request: ToolCallRequest, execute):
         return await execute(scoped_request)
 
 
+# 读取 LangChain 工具调用中的规范化名称和参数。
+def _tool_call_parts(tool_call: dict) -> tuple[str, object]:
+    """兼容 OpenAI function 格式和 LangChain 简化格式。"""
+    function = tool_call.get("function", {})
+    name = function.get("name") or tool_call.get("name", "")
+    args = function.get("arguments", tool_call.get("args", {}))
+    if isinstance(args, str):
+        try:
+            import json
+
+            args = json.loads(args)
+        except Exception:
+            args = {"raw": args}
+    return str(name), args
+
+
+# 记录本轮模型请求的工具签名，用于步数、总调用数和重复调用防护。
+def _track_react_tool_calls(state: AgentState, response: BaseMessage) -> dict:
+    """只记录结构化计数，不记录模型内部思维文本。"""
+    signatures = dict(state.get("react_call_signatures", {}))
+    names = list(state.get("react_tool_names", []))
+    calls = list(getattr(response, "tool_calls", []) or [])
+    for tool_call in calls:
+        name, args = _tool_call_parts(tool_call)
+        signature = tool_call_signature(name, args)
+        signatures[signature] = signatures.get(signature, 0) + 1
+        names.append(name)
+    return {
+        "react_tool_calls": int(state.get("react_tool_calls", 0)) + len(calls),
+        "react_tool_names": names,
+        "react_call_signatures": signatures,
+    }
+
+
+# 将工具节点输出转为 Observation，并把状态推进到 OBSERVING。
+def observe_node(state: AgentState) -> dict:
+    """统一处理工具成功和工具错误，确保错误也能回到下一轮 Reason。"""
+    messages = state["messages"]
+    new_observations = list(state.get("observations", []))
+    tool_errors = int(state.get("tool_errors", 0))
+    failed_signatures = dict(state.get("react_failed_signatures", {}))
+    call_signatures: dict[str, str] = {}
+    for message in reversed(messages):
+        if message.type == "ai":
+            for tool_call in getattr(message, "tool_calls", []) or []:
+                name, args = _tool_call_parts(tool_call)
+                call_signatures[str(tool_call.get("id", ""))] = tool_call_signature(name, args)
+            break
+        if message.type != "tool":
+            continue
+        observation = observation_from_tool_message(message)
+        new_observations.append(observation.__dict__)
+        if observation.status == "error":
+            tool_errors += 1
+            signature = call_signatures.get(observation.tool_call_id)
+            if signature:
+                failed_signatures[signature] = failed_signatures.get(signature, 0) + 1
+    return {
+        "react_state": "OBSERVING",
+        "observations": new_observations,
+        "tool_errors": tool_errors,
+        "react_failed_signatures": failed_signatures,
+    }
+
+
 # 判断 Agent 是否需要调用工具，或已达到调用上限
 def should_continue(state: AgentState) -> Literal["tools", "limit", END]:
-    """判断是否需要调用工具"""
+    """根据 ReAct 状态和硬限制选择工具节点、限制节点或结束。"""
     last_message = state["messages"][-1]
     tool_calls = getattr(last_message, "tool_calls", None)
     if tool_calls:
-        if _current_turn_tool_call_count(state["messages"]) > MAX_TOOL_CALLS:
+        elapsed_ms = int((time.monotonic() - state.get("started_at", time.monotonic())) * 1000)
+        signatures = state.get("react_call_signatures", {})
+        repeated = any(count > MAX_SAME_TOOL_CALLS for count in signatures.values())
+        if state.get("react_steps", 0) >= MAX_REACT_STEPS:
+            state["stop_reason"] = "MAX_STEPS"
+            state["reason_code"] = "MAX_REACT_STEPS"
+            return "limit"
+        if (
+            state.get("react_tool_calls", 0) > MAX_TOOL_CALLS
+            or _current_turn_tool_call_count(state["messages"]) > MAX_TOOL_CALLS
+        ):
+            state["stop_reason"] = "MAX_STEPS"
+            state["reason_code"] = "MAX_TOOL_CALLS"
+            return "limit"
+        if repeated:
+            state["stop_reason"] = "TOOL_FAILURE"
+            state["reason_code"] = "REPEATED_TOOL_CALL"
+            return "limit"
+        if elapsed_ms >= MAX_TOTAL_TIME_MS:
+            state["stop_reason"] = "TIMEOUT"
+            state["reason_code"] = "TOTAL_TIME_LIMIT"
             return "limit"
         enable_tool_budget()
         return "tools"
@@ -315,7 +437,59 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
                 (response.content or "")[:80],
             )
 
-        return {"messages": [response]}
+        tool_calls = list(getattr(response, "tool_calls", []) or [])
+        started_at = float(state.get("started_at", time.monotonic()))
+        react_steps = int(state.get("react_steps", 0)) + 1
+        react_update = {
+            "react_state": "TOOL_CALLING" if tool_calls else "COMPLETED",
+            "react_steps": react_steps,
+            "started_at": started_at,
+            "model_calls": int(state.get("model_calls", 0)) + 1,
+            "total_latency_ms": int((time.monotonic() - started_at) * 1000),
+        }
+        if tool_calls:
+            react_update.update(_track_react_tool_calls(state, response))
+            failed_signatures = state.get("react_failed_signatures", {})
+            current_signatures = set()
+            for tool_call in tool_calls:
+                name, args = _tool_call_parts(tool_call)
+                current_signatures.add(tool_call_signature(name, args))
+            if react_steps >= MAX_REACT_STEPS:
+                react_update.update(
+                    {"stop_reason": "MAX_STEPS", "reason_code": "MAX_REACT_STEPS"}
+                )
+            elif react_update["react_tool_calls"] > MAX_TOOL_CALLS:
+                react_update.update(
+                    {"stop_reason": "MAX_STEPS", "reason_code": "MAX_TOOL_CALLS"}
+                )
+            elif int((time.monotonic() - started_at) * 1000) >= MAX_TOTAL_TIME_MS:
+                react_update.update(
+                    {"stop_reason": "TIMEOUT", "reason_code": "TOTAL_TIME_LIMIT"}
+                )
+            elif any(
+                count > MAX_SAME_TOOL_CALLS
+                for count in react_update["react_call_signatures"].values()
+            ):
+                react_update.update(
+                    {"stop_reason": "TOOL_FAILURE", "reason_code": "REPEATED_TOOL_CALL"}
+                )
+            elif any(failed_signatures.get(signature, 0) >= 2 for signature in current_signatures):
+                react_update.update(
+                    {"stop_reason": "TOOL_FAILURE", "reason_code": "TOOL_RETRY_EXHAUSTED"}
+                )
+        else:
+            content = response.content if isinstance(response.content, str) else ""
+            react_update.update(
+                {
+                    "stop_reason": (
+                        "CLARIFICATION_REQUIRED"
+                        if is_clarification(content)
+                        else "ANSWER_COMPLETE"
+                    ),
+                    "reason_code": "MISSING_REQUIRED_INPUT" if is_clarification(content) else None,
+                }
+            )
+        return {"messages": [response], **react_update}
 
     # 执行 limit node 对应的业务逻辑
     async def limit_node(state: AgentState):
@@ -346,12 +520,18 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
         pending_message = state["messages"][-1]
         return {
             "messages": [RemoveMessage(id=pending_message.id), response],
+            "react_state": "MAX_STEPS_REACHED",
+            "stop_reason": state.get("stop_reason", "MAX_STEPS"),
+            "total_latency_ms": int(
+                (time.monotonic() - state.get("started_at", time.monotonic())) * 1000
+            ),
         }
 
     builder = StateGraph(AgentState)
     builder.add_node("trim_history", trim_history)
     builder.add_node("agent", agent_node)
     builder.add_node("tools", ToolNode(tools, awrap_tool_call=_scope_memory_tool_call))
+    builder.add_node("observe", observe_node)
     builder.add_node("limit", limit_node)
 
     # 显式定义图的边
@@ -363,7 +543,8 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
         should_continue,
         {"tools": "tools", "limit": "limit", END: END},
     )
-    builder.add_edge("tools", "agent")
+    builder.add_edge("tools", "observe")
+    builder.add_edge("observe", "agent")
     builder.add_edge("limit", END)
 
     # 编译时附加 checkpointer

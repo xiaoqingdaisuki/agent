@@ -67,7 +67,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
                 partial: event.partial ?? false,
               }),
             );
-          } else {
+          } else if (event.type === "tool") {
             await writeSse(
               reply.raw,
               encodeSseEvent("tool", {
@@ -76,6 +76,15 @@ export async function registerStreamRoutes(app: FastifyInstance) {
                 status: event.status,
                 call_id: event.callId,
                 duration_ms: event.durationMs,
+              }),
+            );
+          } else {
+            await writeSse(
+              reply.raw,
+              encodeSseEvent(event.event, {
+                state: event.state,
+                stop_reason: event.stopReason,
+                react: event.react,
               }),
             );
           }

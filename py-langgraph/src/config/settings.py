@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     llm_timeout_ms: int = 30000
     llm_max_retries: int = 1
     max_agent_iterations: int = 6
+    react_max_steps: int = 8
+    react_max_tool_calls: int = 6
+    react_max_same_tool_calls: int = 3
+    react_max_total_time_ms: int = 30000
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-3-5-haiku-20241022"
     tavily_api_key: str = ""

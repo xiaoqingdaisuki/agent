@@ -227,19 +227,32 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
             ):
                 if await request.is_disconnected():
                     return
-                payload = json.dumps(
-                    {"delta": event["text"]}
-                    if event["type"] == "text"
-                    else {
-                        "event": "tool",
-                        "tool_name": event["tool_name"],
-                        "status": event["status"],
-                        "call_id": event["call_id"],
-                    },
-                    ensure_ascii=False,
-                )
+                if event["type"] == "text":
+                    payload = json.dumps({"delta": event["text"]}, ensure_ascii=False)
+                    event_name = "text"
+                elif event["type"] == "tool":
+                    payload = json.dumps(
+                        {
+                            "event": "tool",
+                            "tool_name": event["tool_name"],
+                            "status": event["status"],
+                            "call_id": event["call_id"],
+                        },
+                        ensure_ascii=False,
+                    )
+                    event_name = "tool"
+                else:
+                    payload = json.dumps(
+                        {
+                            "state": event.get("state"),
+                            "stop_reason": event.get("stop_reason"),
+                            "react": event.get("react"),
+                        },
+                        ensure_ascii=False,
+                    )
+                    event_name = event.get("event", "agent")
                 yield encode_sse_event(
-                    "text" if event["type"] == "text" else "tool",
+                    event_name,
                     json.loads(payload),
                 )
         except BusinessError as error:

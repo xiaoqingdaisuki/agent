@@ -43,18 +43,26 @@ async def stream(payload: StreamRequest, request: Request):
             ):
                 if await request.is_disconnected():
                     return
-                response_payload = (
-                    {"text": event["text"], "partial": event.get("partial")}
-                    if event["type"] == "text"
-                    else {
+                if event["type"] == "text":
+                    response_payload = {"text": event["text"], "partial": event.get("partial")}
+                    event_name = "text"
+                elif event["type"] == "tool":
+                    response_payload = {
                         "event": "tool",
                         "tool_name": event["tool_name"],
                         "status": event["status"],
                         "call_id": event["call_id"],
                     }
-                )
+                    event_name = "tool"
+                else:
+                    response_payload = {
+                        "state": event.get("state"),
+                        "stop_reason": event.get("stop_reason"),
+                        "react": event.get("react"),
+                    }
+                    event_name = event.get("event", "agent")
                 yield encode_sse_event(
-                    "text" if event["type"] == "text" else "tool",
+                    event_name,
                     response_payload,
                 )
         except BusinessError as error:

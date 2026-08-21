@@ -286,21 +286,33 @@ export async function registerV1Routes(app: FastifyInstance) {
         trustedUserId,
         requestController.signal,
       )) {
-        const payload =
-          event.type === "text"
-            ? event.partial === undefined
-              ? { delta: event.text }
-              : { delta: event.text, partial: event.partial }
-            : {
-                event: "tool",
-                tool_name: event.toolName,
-                status: event.status,
-                call_id: event.callId,
-                duration_ms: event.durationMs,
-              };
+        let eventName: string;
+        let payload: Record<string, unknown>;
+        if (event.type === "text") {
+          eventName = "text";
+          payload = event.partial === undefined
+            ? { delta: event.text }
+            : { delta: event.text, partial: event.partial };
+        } else if (event.type === "tool") {
+          eventName = "tool";
+          payload = {
+            event: "tool",
+            tool_name: event.toolName,
+            status: event.status,
+            call_id: event.callId,
+            duration_ms: event.durationMs,
+          };
+        } else {
+          eventName = event.event;
+          payload = {
+            state: event.state,
+            stop_reason: event.stopReason,
+            react: event.react,
+          };
+        }
         await writeSse(
           reply.raw,
-          encodeSseEvent(event.type === "text" ? "text" : "tool", payload),
+          encodeSseEvent(eventName, payload),
         );
       }
     } catch (error: unknown) {

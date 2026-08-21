@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
+from src.agents.react import summarize_react_state
 from src.agents.deadline import AgentDeadline
 from src.agents.response_handler import get_finish_reason, is_likely_truncated, maybe_append_continuation_hint
 from src.commands import (
@@ -28,6 +29,8 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     thread_id: str
+    stop_reason: str | None = None
+    react: dict | None = None
 
 
 @router.post("", response_model=ChatResponse)
@@ -102,6 +105,7 @@ async def chat(payload: ChatRequest, request: Request):
 
         last_msg = result["messages"][-1]
         reply_text = last_msg.content or "抱歉，我没有理解您的问题。"
+        react_summary = summarize_react_state(result)
 
         # 检测 LLM 输出截断（finish_reason=length 或文本 abrupt ending）
         finish_reason = get_finish_reason(last_msg)
@@ -114,7 +118,12 @@ async def chat(payload: ChatRequest, request: Request):
             trusted_user_id,
         )
 
-        return ChatResponse(reply=reply_text, thread_id=thread_id)
+        return ChatResponse(
+            reply=reply_text,
+            thread_id=thread_id,
+            stop_reason=react_summary["stop_reason"],
+            react=react_summary,
+        )
     except BusinessError as error:
         raise HTTPException(status_code=error.status_code, detail=error.to_dict())
     except TimeoutError:

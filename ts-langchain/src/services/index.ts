@@ -50,6 +50,7 @@ import {
   isLikelyTruncated,
   maybeAppendContinuationHint,
 } from "../agents/response-handler.js";
+import type { ReActRunSummary } from "../agents/react.js";
 
 // ============ 类型定义 ============
 
@@ -71,6 +72,13 @@ export interface Message {
 
 export type AgentStreamEvent =
   | { type: "text"; text: string; partial?: boolean }
+  | {
+      type: "agent";
+      event: "agent.start" | "agent.complete";
+      state?: string;
+      stopReason?: string;
+      react?: ReActRunSummary;
+    }
   | {
       type: "tool";
       toolName: string;
@@ -844,6 +852,8 @@ export class AgentService {
         promptOverride,
       );
 
+      yield { type: "agent", event: "agent.start" };
+
       const toolContext = {
         request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         trace_id: `trace_${Date.now()}`,
@@ -855,6 +865,7 @@ export class AgentService {
 
       const deadline = new AgentDeadline(undefined, requestSignal);
       const progress = new ToolProgressChannel();
+      let reactSummary: ReActRunSummary | undefined;
       let emittedText = false;
       const scope = createToolCallScope(toolContext, {
         onToolProgress: (event) => {
@@ -879,6 +890,7 @@ export class AgentService {
               version: "v2",
               tags: ["stream"],
               signal: deadline.signal,
+              toolCallScope: scope,
             })
           : null;
         if (eventStream) {
@@ -914,12 +926,22 @@ export class AgentService {
             } else if (!fullAnswer && event.event === "on_chain_end") {
               const output = event.data?.output?.output;
               if (typeof output === "string") fullAnswer = output;
+              const summary = event.data?.output?.react;
+              if (summary) reactSummary = summary as ReActRunSummary;
+            } else if (event.event === "on_chain_end") {
+              const summary = event.data?.output?.react;
+              if (summary) reactSummary = summary as ReActRunSummary;
             }
           }
         } else {
           // 兼容旧版 LangChain 或测试替身，仍保留工具进度通道。
           const stream = await deadline.run<any>(
-            scope.run(() => (agent as any).stream(input, { signal: deadline.signal })),
+            scope.run(() =>
+              (agent as any).stream(input, {
+                signal: deadline.signal,
+                toolCallScope: scope,
+              }),
+            ),
           );
           for await (const chunk of stream as AsyncIterable<any>) {
             if (chunk?.output) {
@@ -955,6 +977,15 @@ export class AgentService {
         finalAnswer,
         userId,
       );
+      if (reactSummary) {
+        yield {
+          type: "agent",
+          event: "agent.complete",
+          state: reactSummary.state,
+          stopReason: reactSummary.stop_reason,
+          react: reactSummary,
+        };
+      }
     } catch (error: any) {
       if (isClientAbortError(error) || requestSignal?.aborted) return;
       if (error instanceof BusinessError) throw error;

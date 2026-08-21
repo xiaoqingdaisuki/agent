@@ -26,6 +26,7 @@ import {
 import { BusinessError, ConversationService } from "../../services/index.js";
 import { requireAgentUserId } from "../middleware/auth.js";
 import { logRequestError } from "../middleware/error.js";
+import type { ReActRunSummary } from "../../agents/react.js";
 
 // 创建或注册 registerChatRoutes 所需的数据
 export async function registerChatRoutes(app: FastifyInstance) {
@@ -94,7 +95,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
           actor_type: "user",
         } as const;
 
-        const result = await runWithAgentDeadline<{ output?: unknown }>(
+        const result = await runWithAgentDeadline<{
+          output?: unknown;
+          react?: ReActRunSummary;
+        }>(
           (deadline) =>
             runWithToolCallContext(
               toolContext,
@@ -134,7 +138,12 @@ export async function registerChatRoutes(app: FastifyInstance) {
           createdAt: new Date().toISOString(),
         });
 
-        return { reply: replyText, thread_id: threadId };
+        return {
+          reply: replyText,
+          thread_id: threadId,
+          stop_reason: result.react?.stop_reason,
+          react: result.react,
+        };
       } catch (error: any) {
         logRequestError(request, error);
         if (error instanceof BusinessError) {

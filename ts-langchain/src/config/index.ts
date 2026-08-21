@@ -54,6 +54,10 @@ const envSchema = z.object({
     .default(30_000),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(2).default(1),
   MAX_AGENT_ITERATIONS: z.coerce.number().int().min(1).max(8).default(6),
+  REACT_MAX_STEPS: z.coerce.number().int().min(1).max(8).default(8),
+  REACT_MAX_TOOL_CALLS: z.coerce.number().int().min(1).max(6).default(6),
+  REACT_MAX_SAME_TOOL_CALLS: z.coerce.number().int().min(1).max(3).default(3),
+  REACT_MAX_TOTAL_TIME_MS: z.coerce.number().int().min(1_000).max(30_000).default(30_000),
 
   // ============ Anthropic 配置 ============
   ANTHROPIC_API_KEY: z.string().optional(),

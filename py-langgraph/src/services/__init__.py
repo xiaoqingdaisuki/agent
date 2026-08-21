@@ -905,6 +905,7 @@ class AgentService:
         full_answer = ""
         saw_stream_event = False
         emitted_text = False
+        react_summary = None
         try:
             from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
             from src.agents.deadline import AgentDeadline
@@ -1054,6 +1055,16 @@ class AgentService:
                                     candidate = getattr(messages[-1], "content", "")
                                     if isinstance(candidate, str):
                                         full_answer = candidate
+                                if isinstance(output, dict) and output.get("stop_reason"):
+                                    from src.agents.react import summarize_react_state
+
+                                    react_summary = summarize_react_state(output)
+                            elif event_name == "on_chain_end":
+                                output = event.get("data", {}).get("output", {})
+                                if isinstance(output, dict) and output.get("stop_reason"):
+                                    from src.agents.react import summarize_react_state
+
+                                    react_summary = summarize_react_state(output)
                     else:
                         # 兼容旧版 LangGraph 或测试替身，保留工具事件回退路径。
                         async for update in agent.astream(
@@ -1065,6 +1076,10 @@ class AgentService:
                             stream_mode="updates",
                         ):
                             for node_name, state_update in update.items():
+                                if isinstance(state_update, dict) and state_update.get("stop_reason"):
+                                    from src.agents.react import summarize_react_state
+
+                                    react_summary = summarize_react_state(state_update)
                                 messages = state_update.get("messages", [])
                                 if not messages:
                                     continue
@@ -1103,6 +1118,14 @@ class AgentService:
                 schedule_answer_persistence(
                     conversation_id, content, final_answer, user_id or ""
                 )
+                if react_summary:
+                    yield {
+                        "type": "agent",
+                        "event": "agent.complete",
+                        "state": react_summary["state"],
+                        "stop_reason": react_summary["stop_reason"],
+                        "react": react_summary,
+                    }
             elif not saw_stream_event:
                 full_answer = "抱歉，我没有理解您的问题。"
                 yield {"type": "text", "text": full_answer}
