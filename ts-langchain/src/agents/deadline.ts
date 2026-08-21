@@ -46,6 +46,8 @@ export class AgentDeadline {
         { once: true },
       );
     });
+    // 流式调用可能只传递 signal 而不调用 run，提前消费拒绝避免超时触发未处理异常。
+    void this.timeoutPromise.catch(() => undefined);
     if (parentSignal) {
       if (parentSignal.aborted) {
         this.controller.abort(parentSignal.reason);

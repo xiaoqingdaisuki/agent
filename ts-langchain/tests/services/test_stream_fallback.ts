@@ -10,6 +10,7 @@ vi.mock("../../src/agents/tool-agent.js", () => ({
 
 import { AgentService, ConversationService } from "../../src/services/index.js";
 import { AgentDeadlineError } from "../../src/agents/deadline.js";
+import { MemoryService, ProfileService } from "../../src/profile/service.js";
 
 describe("AgentService empty streams", () => {
   beforeEach(() => createToolAgentMock.mockReset());
@@ -98,5 +99,48 @@ describe("AgentService empty streams", () => {
       type: "text",
       text: "AI助手响应超时，请稍后重试。",
     });
+  });
+
+  it("does not wait for a slow memory gateway before streaming", async () => {
+    createToolAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        yield {
+          event: "on_chat_model_stream",
+          data: { chunk: { content: "你好" } },
+        };
+      },
+    });
+    const profileSpy = vi
+      .spyOn(ProfileService, "getOrCreate")
+      .mockRejectedValue(new Error("gateway unavailable"));
+    const memorySpy = vi
+      .spyOn(MemoryService, "buildMemoryContext")
+      .mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve(""), 2_000)),
+      );
+
+    try {
+      const conversation = await ConversationService.create("slow memory", "chat", "user-1");
+      const events = await Promise.race([
+        (async () => {
+          const values = [];
+          for await (const event of AgentService.chatStream(
+            conversation.id,
+            "你好",
+            "user-1",
+          )) {
+            values.push(event);
+          }
+          return values;
+        })(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("stream blocked by memory gateway")), 1_000),
+        ),
+      ]);
+      expect(events).toContainEqual({ type: "text", text: "你好" });
+    } finally {
+      profileSpy.mockRestore();
+      memorySpy.mockRestore();
+    }
   });
 });

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import time
@@ -35,6 +36,20 @@ MAX_SAME_TOOL_CALLS = settings.react_max_same_tool_calls
 MAX_TOTAL_TIME_MS = settings.react_max_total_time_ms
 AGENT_RECURSION_LIMIT = MAX_REACT_STEPS * 3 + 4
 MAX_HISTORY_MESSAGES = 50
+MEMORY_CONTEXT_TIMEOUT_SECONDS = 0.3
+
+
+# 在短时限内读取记忆上下文，避免记忆网关阻塞模型调用。
+async def _load_memory_context(user_id: str) -> str:
+    try:
+        from src.profile.service import MemoryService
+
+        return await asyncio.wait_for(
+            asyncio.to_thread(MemoryService.build_memory_context, user_id),
+            timeout=MEMORY_CONTEXT_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        return ""
 
 
 class AgentState(TypedDict, total=False):
@@ -124,9 +139,7 @@ def build_chat_agent(checkpointer=None):
         user_id = state.get("user_id")
         if user_id:
             try:
-                from src.profile.service import MemoryService
-
-                memory_context = MemoryService.build_memory_context(user_id)
+                memory_context = await _load_memory_context(user_id)
                 if memory_context:
                     system_prompt = f"{memory_context}\n\n{SYSTEM_PROMPT}"
             except Exception:
@@ -462,9 +475,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
         user_id = state.get("user_id")
         if user_id:
             try:
-                from src.profile.service import MemoryService
-
-                memory_context = MemoryService.build_memory_context(user_id)
+                memory_context = await _load_memory_context(user_id)
                 if memory_context:
                     system_prompt = f"{memory_context}\n\n{base_prompt}"
             except Exception:

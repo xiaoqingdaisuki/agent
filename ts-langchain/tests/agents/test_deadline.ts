@@ -16,4 +16,11 @@ describe("agent deadline", () => {
       deadline.dispose();
     }
   });
+
+  it("does not leave an unhandled rejection for signal-only streams", async () => {
+    const deadline = new AgentDeadline(5);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(deadline.signal.aborted).toBe(true);
+    deadline.dispose();
+  });
 });

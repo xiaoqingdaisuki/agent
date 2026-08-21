@@ -1,3 +1,7 @@
+import asyncio
+import time
+
+import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
@@ -45,6 +49,25 @@ async def test_tool_agent_binds_tools_and_preserves_the_full_message_chain(monke
         "ai",
     ]
     assert result["messages"][-1].content == "4"
+
+
+@pytest.mark.asyncio
+async def test_memory_gateway_timeout_does_not_block_agent_node(monkeypatch):
+    """记忆网关变慢时，Agent 仍应在短时限内继续请求模型。"""
+    from src.profile.service import MemoryService
+
+    def slow_context(_user_id):
+        time.sleep(0.5)
+        return "[记忆] slow"
+
+    monkeypatch.setattr(MemoryService, "build_memory_context", slow_context)
+
+    result = await asyncio.wait_for(
+        graph_agents._load_memory_context("slow-user"),
+        timeout=0.8,
+    )
+
+    assert result == ""
 
 
 async def test_tool_agent_executes_invoke_name_xml_calls(monkeypatch):

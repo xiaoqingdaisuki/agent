@@ -17,6 +17,7 @@ import {
 } from "../commands/index.js";
 
 export const MAX_HISTORY_MESSAGES = 50;
+const HISTORY_LOAD_TIMEOUT_MS = 300;
 
 // 进程内对话历史（仅当前运行上下文使用）
 const conversations = new Map<string, BaseMessage[]>();
@@ -62,11 +63,18 @@ export async function getHistory(threadId: string): Promise<BaseMessage[]> {
   // D1 回退
   try {
     const repos = getRepositories();
-    const { messages } = await repos.message.getMessages(
-      getConversationThreadIdFromHistoryThreadId(threadId),
-      MAX_HISTORY_MESSAGES,
-      0,
-    );
+    const result = await Promise.race([
+      repos.message.getMessages(
+        getConversationThreadIdFromHistoryThreadId(threadId),
+        MAX_HISTORY_MESSAGES,
+        0,
+      ),
+      new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), HISTORY_LOAD_TIMEOUT_MS),
+      ),
+    ]);
+    if (result === null) return conversations.get(threadId) ?? [];
+    const { messages } = result;
     const agentMessages = filterMessagesForAgentHistory(
       messages,
       isDarkModeHistoryThreadId(threadId),

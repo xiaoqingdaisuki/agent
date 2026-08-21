@@ -27,6 +27,16 @@ _background_tasks: set[asyncio.Task] = set()
 _background_chains: dict[str, asyncio.Task] = {}
 
 
+# 后台初始化用户画像，失败时静默降级，不影响当前回答。
+def initialize_profile_background(user_id: str) -> None:
+    try:
+        from src.profile.service import ProfileService
+
+        ProfileService.get_or_create(user_id)
+    except Exception:
+        pass
+
+
 # 将同步持久化工作放入线程后台执行，避免阻塞 SSE 事件循环。
 def schedule_background_task(label: str, callback, *args) -> None:
     previous = _background_chains.get(label)
@@ -834,10 +844,9 @@ class AgentService:
                 return reply
 
             if user_id:
-                try:
-                    ProfileService.get_or_create(user_id)
-                except Exception:
-                    pass
+                schedule_background_task(
+                    f"profile:{user_id}", initialize_profile_background, user_id
+                )
 
             conversation = ConversationService.get(conversation_id)
             restore_command_state_from_conversation(conversation_id)
@@ -983,10 +992,9 @@ class AgentService:
                 return
 
             if user_id:
-                try:
-                    ProfileService.get_or_create(user_id)
-                except Exception:
-                    pass
+                schedule_background_task(
+                    f"profile:{user_id}", initialize_profile_background, user_id
+                )
 
             conversation = ConversationService.get(conversation_id)
             restore_command_state_from_conversation(conversation_id)

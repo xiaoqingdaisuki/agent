@@ -93,6 +93,7 @@ const STREAM_FALLBACK_INTERVAL_MS = 18;
 
 const backgroundTasks = new Set<Promise<void>>();
 const backgroundChains = new Map<string, Promise<void>>();
+const MEMORY_CONTEXT_TIMEOUT_MS = 300;
 
 // 将回答落库、历史记录和记忆提取移出流式响应关键路径。
 function scheduleBackgroundTask(label: string, task: () => Promise<void>): void {
@@ -121,6 +122,37 @@ export async function flushBackgroundTasks(): Promise<void> {
   while (backgroundTasks.size > 0) {
     await Promise.all([...backgroundTasks]);
   }
+}
+
+// 在短时限内加载记忆上下文，避免记忆网关故障阻塞首个 token。
+async function loadMemoryContext(userId: string): Promise<SystemMessage[]> {
+  scheduleBackgroundTask(`profile:${userId}`, async () => {
+    try {
+      await ProfileService.getOrCreate(userId);
+    } catch {
+      // 画像初始化失败不影响当前回答，后续请求继续尝试恢复。
+    }
+  });
+
+  let memoryPromise: Promise<string>;
+  try {
+    memoryPromise = MemoryService.buildMemoryContext(userId);
+  } catch {
+    return [];
+  }
+
+  const context = await new Promise<string>((resolve) => {
+    let settled = false;
+    const finish = (value: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(""), MEMORY_CONTEXT_TIMEOUT_MS);
+    memoryPromise.then(finish, () => finish(""));
+  });
+  return context ? [new SystemMessage(context)] : [];
 }
 
 // 从 LangChain 消息块中提取可展示的文本增量。
@@ -708,16 +740,8 @@ export class AgentService {
       const history = await getHistoryBeforeInput(agentHistoryThreadId, content);
       const memoryContext: SystemMessage[] = [];
 
-      // 注入用户记忆
-      if (userId) {
-        try {
-          const profile = await ProfileService.getOrCreate(userId);
-          const context = await MemoryService.buildMemoryContext(userId);
-          if (context) memoryContext.push(new SystemMessage(context));
-        } catch {
-          // 记忆模块不可用时静默降级
-        }
-      }
+      // 注入用户记忆，但不让记忆网关拖慢模型首响应。
+      if (userId) memoryContext.push(...(await loadMemoryContext(userId)));
 
       const conversation = await ConversationService.get(conversationId);
       const agent =
@@ -865,15 +889,8 @@ export class AgentService {
       const history = await getHistoryBeforeInput(agentHistoryThreadId, content);
       const memoryContext: SystemMessage[] = [];
 
-      if (userId) {
-        try {
-          const profile = await ProfileService.getOrCreate(userId);
-          const context = await MemoryService.buildMemoryContext(userId);
-          if (context) memoryContext.push(new SystemMessage(context));
-        } catch {
-          // memory module unavailable
-        }
-      }
+      // 注入用户记忆，但不让记忆网关拖慢模型首响应。
+      if (userId) memoryContext.push(...(await loadMemoryContext(userId)));
 
       const conversation = await ConversationService.get(conversationId);
       if (conversation?.mode === "knowledge") {
