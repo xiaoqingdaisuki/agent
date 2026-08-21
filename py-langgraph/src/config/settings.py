@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     server_request_timeout_ms: int = 310000
     llm_timeout_ms: int = 30000
     llm_max_retries: int = 1
+    llm_max_concurrency: int = 2
     max_agent_iterations: int = 6
     react_max_steps: int = 8
     react_max_tool_calls: int = 6
@@ -55,6 +56,15 @@ class Settings(BaseSettings):
     memory_auto_extract: bool = True
     memory_max_active_per_user: int = 50
     memory_request_timeout_ms: int = 5000
+
+    @field_validator("openai_base_url")
+    @classmethod
+    # 规范化 OpenAI 兼容网关根地址，避免 SDK 请求根路径而得到 404。
+    def normalize_openai_base_url(cls, value: str | None) -> str | None:
+        if not value:
+            return value
+        normalized = value.rstrip("/")
+        return f"{normalized}/v1" if "/" not in normalized.split("://", 1)[-1] else normalized
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 

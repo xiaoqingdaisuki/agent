@@ -8,7 +8,11 @@
  * 4. 与 API 层解耦，前端看不到内部实现
  */
 
-import { createToolAgent } from "../agents/tool-agent.js";
+import {
+  createDirectChatAgent,
+  createToolAgent,
+  isDirectChatMessage,
+} from "../agents/tool-agent.js";
 import {
   getHistoryBeforeInput,
   clearHistory,
@@ -93,22 +97,50 @@ const STREAM_FALLBACK_INTERVAL_MS = 18;
 
 const backgroundTasks = new Set<Promise<void>>();
 const backgroundChains = new Map<string, Promise<void>>();
-const MEMORY_CONTEXT_TIMEOUT_MS = 300;
+const queuedBackgroundTasks: Array<{ label: string; task: () => Promise<void>; resolve: () => void }> = [];
+const refreshingMemoryContexts = new Set<string>();
+const memoryContextCache = new Map<string, string>();
+let runningBackgroundTasks = 0;
+
+// 在全局并发预算内执行后台任务，避免故障依赖导致无限并发占满连接池。
+function drainBackgroundTaskQueue(): void {
+  while (
+    runningBackgroundTasks < config.BACKGROUND_TASK_CONCURRENCY &&
+    queuedBackgroundTasks.length > 0
+  ) {
+    const next = queuedBackgroundTasks.shift();
+    if (!next) return;
+    runningBackgroundTasks += 1;
+    void next.task()
+      .catch((error) => {
+        console.error(`[service] background task ${next.label} failed`, error);
+      })
+      .finally(() => {
+        runningBackgroundTasks -= 1;
+        next.resolve();
+        drainBackgroundTaskQueue();
+      });
+  }
+}
+
+// 将后台任务加入有界队列，队列饱和时优先保护用户请求关键路径。
+function enqueueBackgroundTask(label: string, task: () => Promise<void>): Promise<void> {
+  if (queuedBackgroundTasks.length >= config.BACKGROUND_TASK_QUEUE_MAX) {
+    console.warn(`[service] background queue is full; skipped ${label}`);
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    queuedBackgroundTasks.push({ label, task, resolve });
+    drainBackgroundTaskQueue();
+  });
+}
 
 // 将回答落库、历史记录和记忆提取移出流式响应关键路径。
 function scheduleBackgroundTask(label: string, task: () => Promise<void>): void {
   const previous = backgroundChains.get(label);
-  const work = new Promise<void>((resolve) => {
-    setImmediate(() => {
-      void (previous || Promise.resolve())
-        .catch(() => undefined)
-        .then(task)
-        .catch((error) => {
-          console.error(`[service] background task ${label} failed`, error);
-        })
-        .finally(resolve);
-    });
-  });
+  const work = (previous || Promise.resolve())
+    .catch(() => undefined)
+    .then(() => enqueueBackgroundTask(label, task));
   backgroundTasks.add(work);
   backgroundChains.set(label, work);
   void work.finally(() => backgroundTasks.delete(work));
@@ -124,34 +156,26 @@ export async function flushBackgroundTasks(): Promise<void> {
   }
 }
 
-// 在短时限内加载记忆上下文，避免记忆网关故障阻塞首个 token。
-async function loadMemoryContext(userId: string): Promise<SystemMessage[]> {
-  scheduleBackgroundTask(`profile:${userId}`, async () => {
+// 在后台刷新记忆上下文，避免故障的记忆网关阻塞首个 token。
+function refreshMemoryContext(userId: string): void {
+  if (refreshingMemoryContexts.has(userId)) return;
+  refreshingMemoryContexts.add(userId);
+  scheduleBackgroundTask(`memory-context:${userId}`, async () => {
     try {
-      await ProfileService.getOrCreate(userId);
+      memoryContextCache.set(userId, await MemoryService.buildMemoryContext(userId));
     } catch {
-      // 画像初始化失败不影响当前回答，后续请求继续尝试恢复。
+      // 保留最近一次成功值；首次失败时使用空上下文。
+      if (!memoryContextCache.has(userId)) memoryContextCache.set(userId, "");
+    } finally {
+      refreshingMemoryContexts.delete(userId);
     }
   });
+}
 
-  let memoryPromise: Promise<string>;
-  try {
-    memoryPromise = MemoryService.buildMemoryContext(userId);
-  } catch {
-    return [];
-  }
-
-  const context = await new Promise<string>((resolve) => {
-    let settled = false;
-    const finish = (value: string) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => finish(""), MEMORY_CONTEXT_TIMEOUT_MS);
-    memoryPromise.then(finish, () => finish(""));
-  });
+// 返回缓存记忆并异步刷新，保证首 token 与 Gateway 可用性解耦。
+async function loadMemoryContext(userId: string): Promise<SystemMessage[]> {
+  refreshMemoryContext(userId);
+  const context = memoryContextCache.get(userId) || "";
   return context ? [new SystemMessage(context)] : [];
 }
 
@@ -440,6 +464,7 @@ export class ConversationService {
         403,
       );
     }
+    if (cached) return cached;
 
     // 检查 D1 是否已有记录
     let persistedConversation: Awaited<
@@ -462,7 +487,7 @@ export class ConversationService {
           title: existing.title,
           mode: existing.mode,
           createdAt: existing.created_at,
-          messageCount: cached?.messageCount ?? 0,
+          messageCount: 0,
           userId: existing.user_id,
         };
         conversations.set(conversationId, conversation);
@@ -747,9 +772,9 @@ export class AgentService {
       const agent =
         conversation?.mode === "knowledge"
           ? null
-          : await createToolAgent(
-              promptOverride,
-            );
+          : await (isDirectChatMessage(content)
+            ? createDirectChatAgent(promptOverride)
+            : createToolAgent(promptOverride));
 
       // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
       const toolContext = {
@@ -795,24 +820,13 @@ export class AgentService {
         reply.content = maybeAppendContinuationHint(reply.content, finishReason);
       }
 
-      await appendMessage(agentHistoryThreadId, new HumanMessage(content));
-      await appendMessage(agentHistoryThreadId, new AIMessage(reply.content));
-      await ConversationService.appendAssistantMessage(conversationId, reply);
-
-      // 记录问答历史 + 提取新记忆
-      if (userId) {
-        try {
-          await HistoryService.record(userId, conversationId, content, reply.content);
-          await MemoryService.extractMemoriesFromConversation(
-            userId,
-            content,
-            reply.content,
-          );
-          await ProfileService.update(userId);
-        } catch {
-          // 记忆记录失败不影响主流程
-        }
-      }
+      scheduleAnswerPersistence(
+        conversationId,
+        agentHistoryThreadId,
+        content,
+        reply.content,
+        userId,
+      );
 
       return reply;
     } catch (error: any) {
@@ -912,9 +926,9 @@ export class AgentService {
         return;
       }
 
-      const agent = await createToolAgent(
-        promptOverride,
-      );
+      const agent = await (isDirectChatMessage(content)
+        ? createDirectChatAgent(promptOverride)
+        : createToolAgent(promptOverride));
 
       yield { type: "agent", event: "agent.start" };
 

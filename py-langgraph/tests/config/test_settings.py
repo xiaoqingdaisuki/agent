@@ -31,6 +31,13 @@ def test_memory_enabled_false_selects_llm_direct_mode(monkeypatch):
     assert settings.memory_enabled is False
 
 
+def test_openai_gateway_root_is_normalized_to_v1():
+    """OpenAI 兼容网关根地址应自动补齐 v1，和 TS 客户端保持一致。"""
+    settings = Settings(_env_file=None, openai_base_url="https://llm.example.com")
+
+    assert settings.openai_base_url == "https://llm.example.com/v1"
+
+
 def test_memory_disabled_uses_singleton_in_memory_storage(monkeypatch):
     from langgraph.checkpoint.memory import MemorySaver
     import src.memory as memory_module

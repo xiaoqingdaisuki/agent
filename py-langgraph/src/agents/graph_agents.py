@@ -37,6 +37,19 @@ MAX_TOTAL_TIME_MS = settings.react_max_total_time_ms
 AGENT_RECURSION_LIMIT = MAX_REACT_STEPS * 3 + 4
 MAX_HISTORY_MESSAGES = 50
 MEMORY_CONTEXT_TIMEOUT_SECONDS = 0.3
+_default_chat_agent = None
+_model_semaphore: asyncio.Semaphore | None = None
+_model_semaphore_loop = None
+
+
+# 获取当前事件循环的模型并发闸门，避免上游模型服务在高并发下产生长尾。
+def _get_model_semaphore() -> asyncio.Semaphore:
+    global _model_semaphore, _model_semaphore_loop
+    loop = asyncio.get_running_loop()
+    if _model_semaphore is None or _model_semaphore_loop is not loop:
+        _model_semaphore = asyncio.Semaphore(settings.llm_max_concurrency)
+        _model_semaphore_loop = loop
+    return _model_semaphore
 
 
 # 在短时限内读取记忆上下文，避免记忆网关阻塞模型调用。
@@ -45,11 +58,26 @@ async def _load_memory_context(user_id: str) -> str:
         from src.profile.service import MemoryService
 
         return await asyncio.wait_for(
-            asyncio.to_thread(MemoryService.build_memory_context, user_id),
+            MemoryService.build_memory_context_async(user_id),
             timeout=MEMORY_CONTEXT_TIMEOUT_SECONDS,
         )
     except Exception:
         return ""
+
+
+# 判断消息是否可跳过完整工具 schema，避免普通闲聊触发 ReAct 编排开销。
+def is_direct_chat_message(content: str) -> bool:
+    normalized = content.strip().lower()
+    if not normalized or len(normalized) > 120:
+        return False
+    if re.fullmatch(r"(你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好)[！!。.?？]?", normalized):
+        return True
+    return bool(
+        re.fullmatch(
+            r"(你是谁|你叫什么|介绍一下你自己|你能做什么|你会做什么|你的能力是什么)[？?。!]?",
+            normalized,
+        )
+    )
 
 
 class AgentState(TypedDict, total=False):
@@ -129,6 +157,10 @@ def build_chat_agent(checkpointer=None):
     TS 版对应: createAgent({ model, systemPrompt })
     Python 版: 显式定义图结构
     """
+    global _default_chat_agent
+    if checkpointer is None and _default_chat_agent is not None:
+        return _default_chat_agent
+
     from src.prompts.system import SYSTEM_PROMPT
 
     llm = get_llm()
@@ -145,7 +177,8 @@ def build_chat_agent(checkpointer=None):
             except Exception:
                 pass
 
-        response = await llm.ainvoke([SystemMessage(content=system_prompt), *state["messages"]])
+        async with _get_model_semaphore():
+            response = await llm.ainvoke([SystemMessage(content=system_prompt), *state["messages"]])
         return {"messages": [response]}
 
     builder = StateGraph(AgentState)
@@ -155,8 +188,10 @@ def build_chat_agent(checkpointer=None):
     builder.add_edge("trim_history", "agent")
     builder.add_edge("agent", END)
 
-    cp = checkpointer if checkpointer is not None else _get_default_checkpointer()
-    return builder.compile(checkpointer=cp)
+    agent = builder.compile(checkpointer=checkpointer)
+    if checkpointer is None:
+        _default_chat_agent = agent
+    return agent
 
 
 # 获取默认 checkpointer 实例，避免循环导入
@@ -482,10 +517,11 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
                 pass
 
         response = None
-        async for chunk in llm_with_tools.astream(
-            [SystemMessage(content=system_prompt), *state["messages"]]
-        ):
-            response = chunk if response is None else response + chunk
+        async with _get_model_semaphore():
+            async for chunk in llm_with_tools.astream(
+                [SystemMessage(content=system_prompt), *state["messages"]]
+            ):
+                response = chunk if response is None else response + chunk
         if response is None:
             raise RuntimeError("模型未返回任何流式响应")
 
@@ -689,3 +725,5 @@ def build_tool_agent(checkpointer=None, system_prompt_override=None):
 # 清空工具调用 Agent 的 LRU 缓存
 def invalidate_tool_agent_cache() -> None:
     _build_cached_tool_agent.cache_clear()
+    global _default_chat_agent
+    _default_chat_agent = None

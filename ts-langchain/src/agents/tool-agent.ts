@@ -2,6 +2,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
 import { createAgent, createMiddleware } from "langchain";
 import { TOOL_CALLING_PROMPT } from "../prompts/system.js";
+import { SYSTEM_PROMPT } from "../prompts/system.js";
 import { tools, toolDescriptors, toolSchemas } from "../tools/index.js";
 import { wrapToolWithRuntime } from "../tools/runtime/executor.js";
 import { config } from "../config/index.js";
@@ -167,7 +168,32 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
 
 // 按系统提示缓存声明式 Agent，避免重复构建模型和工具绑定。
 const agentCache = new Map<string, Promise<DeclarativeToolAgent>>();
+const directAgentCache = new Map<string, Promise<DeclarativeToolAgent>>();
 const MAX_CACHE_SIZE = 10;
+const modelWaiters: Array<() => void> = [];
+let activeModelCalls = 0;
+
+// 在模型服务可承受的并发范围内执行调用，避免上游排队造成请求长尾。
+async function runWithModelCapacity<T>(operation: () => T | Promise<T>): Promise<T> {
+  if (activeModelCalls >= config.LLM_MAX_CONCURRENCY) {
+    await new Promise<void>((resolve) => modelWaiters.push(resolve));
+  }
+  activeModelCalls += 1;
+  try {
+    return await operation();
+  } finally {
+    activeModelCalls -= 1;
+    modelWaiters.shift()?.();
+  }
+}
+
+// 判断消息是否可安全走无工具的快速对话路径，避免普通闲聊携带完整工具定义。
+export function isDirectChatMessage(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized || normalized.length > 120) return false;
+  if (/^(你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好)[！!。.?？]?$/.test(normalized)) return true;
+  return /^(你是谁|你叫什么|介绍一下你自己|你能做什么|你会做什么|你的能力是什么)[？?。!！]?$/.test(normalized);
+}
 
 // 将消息内容规范化为可返回给 API 的文本。
 function getMessageText(message: BaseMessage | undefined): string {
@@ -285,9 +311,9 @@ export function createReActPolicyMiddleware() {
     wrapModelCall: async (request, handler) => {
       const tracker = getActiveReActTracker();
       const finalOnly = tracker?.beginModelCall() || false;
-      const response = await handler(finalOnly
+      const response = await runWithModelCapacity(() => handler(finalOnly
         ? { ...request, tools: [], toolChoice: "none", systemPrompt: `${request.systemPrompt || ""}\n\n工具调用已因安全限制停止。请只基于已有结果给出最终回答，不要请求工具，也不要展示内部推理。` }
-        : request);
+        : request));
       const normalized = convertXmlToolCalls(response);
       if (!normalized.tool_calls?.length) tracker?.complete(getMessageText(normalized));
       return normalized;
@@ -339,9 +365,44 @@ export async function createToolAgent(
   return promise;
 }
 
+// 创建或获取不绑定工具的快速对话 Agent，用于明确不需要外部能力的消息。
+export async function createDirectChatAgent(
+  systemPromptOverride?: string,
+): Promise<DeclarativeToolAgent> {
+  const prompt = systemPromptOverride || SYSTEM_PROMPT;
+  const cached = directAgentCache.get(prompt);
+  if (cached) return cached;
+  if (directAgentCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = directAgentCache.keys().next().value;
+    if (firstKey) directAgentCache.delete(firstKey);
+  }
+  const promise = buildDirectChatAgent(prompt);
+  directAgentCache.set(prompt, promise);
+  return promise;
+}
+
 // 清空 ReAct Agent 缓存。
 export function invalidateToolAgentCache(): void {
   agentCache.clear();
+  directAgentCache.clear();
+}
+
+// 构建不发送工具 schema 的声明式 Agent，缩短首 token 延迟并保留流式事件契约。
+async function buildDirectChatAgent(systemPrompt: string): Promise<DeclarativeToolAgent> {
+  const rawModel = new ChatOpenAI({
+    model: process.env.OPENAI_MODEL,
+    timeout: config.LLM_TIMEOUT_MS,
+    maxRetries: config.LLM_MAX_RETRIES,
+    configuration: {
+      baseURL: process.env.OPENAI_BASE_URL,
+      apiKey: process.env.OPENAI_API_KEY,
+    },
+  });
+  return new DeclarativeToolAgent(createAgent({
+    model: rawModel,
+    systemPrompt,
+    middleware: [createReActPolicyMiddleware()],
+  }));
 }
 
 // 构建带 Runtime 工具管线的声明式 createAgent 实例。

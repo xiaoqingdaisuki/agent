@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createToolAgentMock } = vi.hoisted(() => ({
+const { createToolAgentMock, createDirectChatAgentMock } = vi.hoisted(() => ({
   createToolAgentMock: vi.fn(),
+  createDirectChatAgentMock: vi.fn(),
 }));
 
 vi.mock("../../src/agents/tool-agent.js", () => ({
   createToolAgent: createToolAgentMock,
+  createDirectChatAgent: createDirectChatAgentMock,
+  isDirectChatMessage: (content: string) => content === "你好",
 }));
 
 import { AgentService, ConversationService } from "../../src/services/index.js";
@@ -13,7 +16,10 @@ import { AgentDeadlineError } from "../../src/agents/deadline.js";
 import { MemoryService, ProfileService } from "../../src/profile/service.js";
 
 describe("AgentService empty streams", () => {
-  beforeEach(() => createToolAgentMock.mockReset());
+  beforeEach(() => {
+    createToolAgentMock.mockReset();
+    createDirectChatAgentMock.mockReset();
+  });
 
   it("emits visible fallback text after a tool-only stream", async () => {
     createToolAgentMock.mockResolvedValue({
@@ -102,7 +108,7 @@ describe("AgentService empty streams", () => {
   });
 
   it("does not wait for a slow memory gateway before streaming", async () => {
-    createToolAgentMock.mockResolvedValue({
+    createDirectChatAgentMock.mockResolvedValue({
       streamEvents: async function* () {
         yield {
           event: "on_chat_model_stream",

@@ -53,6 +53,7 @@ const envSchema = z.object({
     .max(120_000)
     .default(30_000),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(2).default(1),
+  LLM_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
   MAX_AGENT_ITERATIONS: z.coerce.number().int().min(1).max(8).default(6),
   REACT_MAX_STEPS: z.coerce.number().int().min(1).max(8).default(8),
   REACT_MAX_TOOL_CALLS: z.coerce.number().int().min(1).max(6).default(6),
@@ -117,6 +118,8 @@ const envSchema = z.object({
   MEMORY_AUTO_EXTRACT: z.preprocess(parseBooleanEnv, z.boolean()).default(true),
   MEMORY_MAX_ACTIVE_PER_USER: z.coerce.number().int().min(1).max(200).default(50),
   MEMORY_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(5_000),
+  BACKGROUND_TASK_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+  BACKGROUND_TASK_QUEUE_MAX: z.coerce.number().int().min(1).max(1_000).default(200),
 });
 
 export const config = envSchema.parse(process.env);

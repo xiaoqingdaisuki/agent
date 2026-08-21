@@ -164,6 +164,20 @@ class MemoryService:
         return "\n".join(lines)
 
     @staticmethod
+    # 异步构建记忆上下文，允许调用方在首 token 预算内真正取消 Gateway 请求。
+    async def build_memory_context_async(user_id: str) -> str:
+        repos = _get_repositories()
+        memories = await repos.list_memories_async(user_id, limit=10)
+        if not memories:
+            return ""
+
+        lines = ["[我记住的关于你的事]"]
+        for memory in memories[:10]:
+            lines.append(f"- {memory['content']}")
+        lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
     # 执行 extract memories from conversation 对应的业务逻辑
     def extract_memories_from_conversation(
         user_id: str, question: str, answer: str

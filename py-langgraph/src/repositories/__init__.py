@@ -248,6 +248,12 @@ class InMemoryRepositories:
         memories.sort(key=lambda item: (item["importance"], item["created_at"]), reverse=True)
         return memories[:limit]
 
+    # 异步读取本地记忆，保持与 Cloudflare 仓储一致的非阻塞调用契约。
+    async def list_memories_async(
+        self, user_id: str, category: str | None = None, limit: int = 50
+    ) -> list[dict]:
+        return self.list_memories(user_id, category, limit)
+
     # 更新用户长期记忆
     def update_memory(self, user_id: str, memory_id: str, **changes) -> dict | None:
         for memory in self._memories.get(user_id, []):
@@ -358,6 +364,12 @@ class Repositories:
     # 获取 list memories 对应的数据
     def list_memories(self, user_id: str, category: str | None = None, limit: int = 50) -> list[dict]:
         return _run_sync(self._client.list_memories(user_id, category, limit))
+
+    # 直接在请求事件循环中读取记忆，避免同步桥接占用默认线程池。
+    async def list_memories_async(
+        self, user_id: str, category: str | None = None, limit: int = 50
+    ) -> list[dict]:
+        return await self._client.list_memories(user_id, category, limit)
 
     # 更新或保存 update memory 对应的数据
     def update_memory(self, user_id: str, memory_id: str, **changes) -> dict | None:

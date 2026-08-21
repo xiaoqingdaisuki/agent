@@ -19,6 +19,7 @@
 - TS 项目：TypeScript strict 模式，ESM
 - Python 项目：Python 3.11+，ruff 格式化，pytest 测试
 - 两个项目的 API 接口保持一致（/chat, /stream, /tools, /health）
+- 性能永远是编码的第一优先考虑的。
 
 ### 注释规范
 

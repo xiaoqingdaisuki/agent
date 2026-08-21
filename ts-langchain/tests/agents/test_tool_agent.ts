@@ -8,6 +8,7 @@ import { z } from "zod";
 import {
   MAX_AGENT_ITERATIONS,
   convertXmlToolCalls,
+  isDirectChatMessage,
   createToolAgent,
   invalidateToolAgentCache,
   createReActPolicyMiddleware,
@@ -92,6 +93,13 @@ describe("tool agent", () => {
 
     expect(AIMessage.isInstance(result)).toBe(true);
     expect(result.content).toBe("你好");
+  });
+
+  it("routes only clear casual messages through the no-tool fast path", () => {
+    expect(isDirectChatMessage("你好")).toBe(true);
+    expect(isDirectChatMessage("你是谁？")).toBe(true);
+    expect(isDirectChatMessage("上海今天的天气")).toBe(false);
+    expect(isDirectChatMessage("搜索今天的新闻")).toBe(false);
   });
 
   it("creates unique IDs for multiple XML tool calls", () => {

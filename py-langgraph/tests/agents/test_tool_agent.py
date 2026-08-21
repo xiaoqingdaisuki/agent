@@ -1,5 +1,4 @@
 import asyncio
-import time
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -56,11 +55,11 @@ async def test_memory_gateway_timeout_does_not_block_agent_node(monkeypatch):
     """记忆网关变慢时，Agent 仍应在短时限内继续请求模型。"""
     from src.profile.service import MemoryService
 
-    def slow_context(_user_id):
-        time.sleep(0.5)
+    async def slow_context(_user_id):
+        await asyncio.sleep(0.5)
         return "[记忆] slow"
 
-    monkeypatch.setattr(MemoryService, "build_memory_context", slow_context)
+    monkeypatch.setattr(MemoryService, "build_memory_context_async", slow_context)
 
     result = await asyncio.wait_for(
         graph_agents._load_memory_context("slow-user"),
@@ -68,6 +67,40 @@ async def test_memory_gateway_timeout_does_not_block_agent_node(monkeypatch):
     )
 
     assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_concurrent_memory_timeouts_cancel_all_gateway_requests(monkeypatch):
+    """并发慢 Gateway 必须被取消，不能遗留线程池任务拖慢后续对话。"""
+    from src.profile.service import MemoryService
+
+    cancelled = 0
+
+    async def slow_context(_user_id):
+        nonlocal cancelled
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled += 1
+            raise
+        return "[记忆] slow"
+
+    monkeypatch.setattr(MemoryService, "build_memory_context_async", slow_context)
+
+    results = await asyncio.gather(
+        *(graph_agents._load_memory_context(f"slow-user-{index}") for index in range(20))
+    )
+
+    assert results == [""] * 20
+    assert cancelled == 20
+
+
+def test_direct_chat_routing_skips_tools_only_for_clear_casual_messages():
+    """简单闲聊应走快速路径，实时与工具类请求仍需完整 Agent。"""
+    assert graph_agents.is_direct_chat_message("你好") is True
+    assert graph_agents.is_direct_chat_message("你是谁？") is True
+    assert graph_agents.is_direct_chat_message("上海今天的天气") is False
+    assert graph_agents.is_direct_chat_message("搜索今天的新闻") is False
 
 
 async def test_tool_agent_executes_invoke_name_xml_calls(monkeypatch):

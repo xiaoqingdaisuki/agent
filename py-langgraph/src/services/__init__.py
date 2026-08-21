@@ -27,16 +27,6 @@ _background_tasks: set[asyncio.Task] = set()
 _background_chains: dict[str, asyncio.Task] = {}
 
 
-# 后台初始化用户画像，失败时静默降级，不影响当前回答。
-def initialize_profile_background(user_id: str) -> None:
-    try:
-        from src.profile.service import ProfileService
-
-        ProfileService.get_or_create(user_id)
-    except Exception:
-        pass
-
-
 # 将同步持久化工作放入线程后台执行，避免阻塞 SSE 事件循环。
 def schedule_background_task(label: str, callback, *args) -> None:
     previous = _background_chains.get(label)
@@ -360,6 +350,8 @@ class ConversationService:
                 "无权访问该会话",
                 403,
             )
+        if cached:
+            return cached
 
         # 先检查 D1
         existing = None
@@ -823,7 +815,12 @@ class AgentService:
     # 执行 chat 对应的业务逻辑
     async def chat(conversation_id: str, content: str, user_id: str = None) -> Message:
         try:
-            from src.agents.graph_agents import AGENT_RECURSION_LIMIT, build_tool_agent
+            from src.agents.graph_agents import (
+                AGENT_RECURSION_LIMIT,
+                build_chat_agent,
+                build_tool_agent,
+                is_direct_chat_message,
+            )
             from src.agents.deadline import AgentDeadline
             from src.agents.response_handler import (
                 get_finish_reason,
@@ -843,10 +840,6 @@ class AgentService:
                 ConversationService.append_assistant_message(conversation_id, reply, user_id or "")
                 return reply
 
-            if user_id:
-                schedule_background_task(
-                    f"profile:{user_id}", initialize_profile_background, user_id
-                )
 
             conversation = ConversationService.get(conversation_id)
             restore_command_state_from_conversation(conversation_id)
@@ -857,8 +850,10 @@ class AgentService:
                 else conversation_id
             )
             agent = (
-                build_tool_agent(
-                    system_prompt_override=prompt_override
+                (
+                    build_chat_agent()
+                    if is_direct_chat_message(content)
+                    else build_tool_agent(system_prompt_override=prompt_override)
                 )
                 if not conversation or conversation.mode != "knowledge"
                 else None
@@ -913,18 +908,7 @@ class AgentService:
                 reply_content = maybe_append_continuation_hint(reply_content, finish_reason)
 
             reply = Message("assistant", reply_content)
-            ConversationService.append_assistant_message(conversation_id, reply, user_id or "")
-
-            # 记录问答历史 + 提取新记忆
-            if user_id:
-                try:
-                    HistoryService.record(user_id, conversation_id, content, reply_content)
-                    MemoryService.extract_memories_from_conversation(
-                        user_id, content, reply_content
-                    )
-                    ProfileService.update(user_id)
-                except Exception:
-                    pass
+            schedule_answer_persistence(conversation_id, content, reply_content, user_id or "")
 
             return reply
 
@@ -971,7 +955,12 @@ class AgentService:
         emitted_text = False
         react_summary = None
         try:
-            from src.agents.graph_agents import AGENT_RECURSION_LIMIT, build_tool_agent
+            from src.agents.graph_agents import (
+                AGENT_RECURSION_LIMIT,
+                build_chat_agent,
+                build_tool_agent,
+                is_direct_chat_message,
+            )
             from src.agents.deadline import AgentDeadline
             from src.agents.response_handler import maybe_append_continuation_hint
             from src.commands import (
@@ -991,10 +980,6 @@ class AgentService:
                 yield {"type": "text", "text": command.reply}
                 return
 
-            if user_id:
-                schedule_background_task(
-                    f"profile:{user_id}", initialize_profile_background, user_id
-                )
 
             conversation = ConversationService.get(conversation_id)
             restore_command_state_from_conversation(conversation_id)
@@ -1058,8 +1043,10 @@ class AgentService:
                 )
                 return
 
-            agent = build_tool_agent(
-                system_prompt_override=prompt_override
+            agent = (
+                build_chat_agent()
+                if is_direct_chat_message(content)
+                else build_tool_agent(system_prompt_override=prompt_override)
             )
             config = {
                 "configurable": {"thread_id": agent_thread_id},
