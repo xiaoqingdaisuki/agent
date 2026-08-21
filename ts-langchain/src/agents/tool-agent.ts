@@ -16,14 +16,40 @@ import {
 // ReAct 最大步骤与 Python 版共享配置，避免两种实现的安全边界不一致。
 export const MAX_AGENT_ITERATIONS = config.REACT_MAX_STEPS;
 
-// 将非 OpenAI 模型的 XML 格式工具调用转换为标准 AIMessage 格式。
-export function convertXmlToolCalls(message: BaseMessage): BaseMessage {
-  const content = typeof message.content === "string" ? message.content : "";
+// 将字符串或内容块数组转换为可用于 XML 检测和 API 回退的文本。
+function contentToText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (part && typeof part === "object" && "text" in part) return String((part as { text?: unknown }).text || "");
+      return "";
+    })
+    .join("");
+}
+
+// 将任意模型响应规范化为当前 LangChain 运行时可识别的 AIMessage，并兼容 XML 工具调用。
+export function convertXmlToolCalls(message: unknown): AIMessage {
+  const candidate = message as Partial<BaseMessage> | null;
+  const rawContent = candidate?.content ?? "";
+  const content = contentToText(rawContent);
+  const originalToolCalls = Array.isArray((candidate as any)?.tool_calls)
+    ? (candidate as any).tool_calls
+    : [];
   const functionOpen = "<func" + "tion=";
   const functionClose = "</func" + "tion>";
   const parameterOpen = "<para" + "meter=";
   const parameterClose = "</para" + "meter>";
-  if (!content.includes(functionOpen)) return message;
+  if (!content.includes(functionOpen)) {
+    return new AIMessage({
+      content: rawContent as any,
+      tool_calls: originalToolCalls,
+      id: candidate?.id,
+      response_metadata: candidate?.response_metadata,
+      additional_kwargs: (candidate as any)?.additional_kwargs,
+    });
+  }
 
   const toolCalls: any[] = [];
   let position = 0;
@@ -59,7 +85,15 @@ export function convertXmlToolCalls(message: BaseMessage): BaseMessage {
     });
     position = functionEnd + functionClose.length;
   }
-  if (toolCalls.length === 0) return message;
+  if (toolCalls.length === 0) {
+    return new AIMessage({
+      content: rawContent as any,
+      tool_calls: originalToolCalls,
+      id: candidate?.id,
+      response_metadata: candidate?.response_metadata,
+      additional_kwargs: (candidate as any)?.additional_kwargs,
+    });
+  }
 
   let cleanContent = content;
   for (const call of toolCalls) {
@@ -71,7 +105,13 @@ export function convertXmlToolCalls(message: BaseMessage): BaseMessage {
       cleanContent = cleanContent.substring(0, start) + cleanContent.substring(end + functionClose.length);
     }
   }
-  return new AIMessage({ content: cleanContent.trim(), tool_calls: toolCalls });
+  return new AIMessage({
+    content: cleanContent.trim(),
+    tool_calls: toolCalls,
+    id: candidate?.id,
+    response_metadata: candidate?.response_metadata,
+    additional_kwargs: (candidate as any)?.additional_kwargs,
+  });
 }
 
 // 按系统提示缓存声明式 Agent，避免重复构建模型和工具绑定。
@@ -80,7 +120,7 @@ const MAX_CACHE_SIZE = 10;
 
 // 将消息内容规范化为可返回给 API 的文本。
 function getMessageText(message: BaseMessage | undefined): string {
-  return message && typeof message.content === "string" ? message.content : "";
+  return message ? contentToText(message.content) : "";
 }
 
 // 以 createAgent 封装旧调用约定，并保留现有服务层输入接口。
@@ -187,7 +227,7 @@ function createReActTracker(): ReActRunTracker {
 }
 
 // 将 createAgent 的模型与工具钩子映射到公共 ReAct 策略，而不重写框架循环。
-function createReActPolicyMiddleware() {
+export function createReActPolicyMiddleware() {
   return createMiddleware({
     name: "ReActPolicyMiddleware",
     // 在模型调用前限制步骤，并在停止后只允许模型生成最终答案。
@@ -197,7 +237,7 @@ function createReActPolicyMiddleware() {
       const response = await handler(finalOnly
         ? { ...request, tools: [], toolChoice: "none", systemPrompt: `${request.systemPrompt || ""}\n\n工具调用已因安全限制停止。请只基于已有结果给出最终回答，不要请求工具，也不要展示内部推理。` }
         : request);
-      const normalized = convertXmlToolCalls(response) as AIMessage;
+      const normalized = convertXmlToolCalls(response);
       if (!normalized.tool_calls?.length) tracker?.complete(getMessageText(normalized));
       return normalized;
     },
@@ -214,9 +254,16 @@ function createReActPolicyMiddleware() {
       const startedAt = Date.now();
       try {
         const result = await handler(request);
-        const toolError = result instanceof ToolMessage && result.status === "error";
-        tracker.recordTool(toolCallId, toolName, attempt.signature, startedAt, result instanceof ToolMessage ? result.content : result, toolError ? new Error(String(result.content)) : undefined);
-        return result;
+        const toolResult = ToolMessage.isInstance(result)
+          ? result
+          : new ToolMessage({
+              content: String((result as any)?.content || result),
+              tool_call_id: toolCallId,
+              name: toolName,
+            });
+        const toolError = toolResult.status === "error";
+        tracker.recordTool(toolCallId, toolName, attempt.signature, startedAt, toolResult.content, toolError ? new Error(String(toolResult.content)) : undefined);
+        return toolResult;
       } catch (error) {
         tracker.recordTool(toolCallId, toolName, attempt.signature, startedAt, null, error);
         return new ToolMessage({ content: `Error: ${error instanceof Error ? error.message : "工具执行失败"}`, tool_call_id: toolCallId, name: toolName, status: "error" });

@@ -1,12 +1,20 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { AIMessage } from "@langchain/core/messages";
+import { FakeListChatModel } from "@langchain/core/utils/testing";
+import { createAgent } from "langchain";
 
 import {
   MAX_AGENT_ITERATIONS,
   convertXmlToolCalls,
   createToolAgent,
   invalidateToolAgentCache,
+  createReActPolicyMiddleware,
 } from "../../src/agents/tool-agent.js";
+import {
+  createDefaultReActLimits,
+  ReActRunTracker,
+  runWithReActTracker,
+} from "../../src/agents/react-policy.js";
 
 describe("tool agent", () => {
   const originalApiKey = process.env.OPENAI_API_KEY;
@@ -40,6 +48,13 @@ describe("tool agent", () => {
     ]);
   });
 
+  it("normalizes plain provider responses before middleware validation", () => {
+    const result = convertXmlToolCalls({ content: "你好", type: "ai" });
+
+    expect(AIMessage.isInstance(result)).toBe(true);
+    expect(result.content).toBe("你好");
+  });
+
   it("creates unique IDs for multiple XML tool calls", () => {
     const message = new AIMessage(
       "<function=get_weather><parameter=city>Beijing</parameter></function>" +
@@ -61,5 +76,19 @@ describe("tool agent", () => {
     expect(second).toBe(first);
     expect(first.maxIterations).toBe(MAX_AGENT_ITERATIONS);
     expect(typeof first.agent.streamEvents).toBe("function");
+  });
+
+  it("returns a runtime AIMessage through the ReAct middleware", async () => {
+    const agent = createAgent({
+      model: new FakeListChatModel({ responses: ["你好"] }),
+      middleware: [createReActPolicyMiddleware()],
+    });
+    const tracker = new ReActRunTracker(createDefaultReActLimits());
+    const result = await runWithReActTracker(tracker, () =>
+      agent.invoke({ messages: [{ role: "user", content: "你好" }] }),
+    );
+
+    expect(AIMessage.isInstance(result.messages.at(-1))).toBe(true);
+    expect(result.messages.at(-1)?.content).toBe("你好");
   });
 });
