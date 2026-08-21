@@ -20,6 +20,30 @@ from src.tools.runtime.executor import create_tool_call_context, tool_call_scope
 
 logger = logging.getLogger(__name__)
 
+STREAM_FALLBACK_CHUNK_SIZE = 8
+STREAM_FALLBACK_INTERVAL_SECONDS = 0.018
+
+
+# 将模型完整回答按可见字符拆成平滑的 SSE 分片，避免依赖厂商工具流格式
+async def stream_text_chunks(text: str):
+    for index in range(0, len(text), STREAM_FALLBACK_CHUNK_SIZE):
+        yield text[index : index + STREAM_FALLBACK_CHUNK_SIZE]
+        if index + STREAM_FALLBACK_CHUNK_SIZE < len(text):
+            await asyncio.sleep(STREAM_FALLBACK_INTERVAL_SECONDS)
+
+
+# 从会话记录恢复大公鸡模式，避免进程内状态丢失后人设失效
+def restore_command_state_from_conversation(conversation_id: str) -> None:
+    from src.commands import restore_agent_command_state
+
+    user_messages = [
+        str(message["content"])
+        for message in ConversationService.get_messages(conversation_id)
+        if message.get("role") == "user"
+    ]
+    restore_agent_command_state(conversation_id, user_messages)
+
+
 # ============ 错误码 ============
 
 
@@ -678,7 +702,11 @@ class AgentService:
                 is_likely_truncated,
                 maybe_append_continuation_hint,
             )
-            from src.commands import execute_agent_command, get_agent_prompt_override
+            from src.commands import (
+                execute_agent_command,
+                get_agent_prompt_override,
+                get_dark_mode_thread_id,
+            )
             from src.profile.service import HistoryService, MemoryService, ProfileService
 
             command = execute_agent_command(content, conversation_id)
@@ -694,15 +722,22 @@ class AgentService:
                     pass
 
             conversation = ConversationService.get(conversation_id)
+            restore_command_state_from_conversation(conversation_id)
+            prompt_override = get_agent_prompt_override(conversation_id, content)
+            agent_thread_id = (
+                get_dark_mode_thread_id(conversation_id)
+                if prompt_override
+                else conversation_id
+            )
             agent = (
                 build_tool_agent(
-                    system_prompt_override=get_agent_prompt_override(conversation_id, content)
+                    system_prompt_override=prompt_override
                 )
                 if not conversation or conversation.mode != "knowledge"
                 else None
             )
             config = {
-                "configurable": {"thread_id": conversation_id},
+                "configurable": {"thread_id": agent_thread_id},
                 "recursion_limit": AGENT_RECURSION_LIMIT,
             }
             if user_id:
@@ -764,6 +799,12 @@ class AgentService:
         except BusinessError:
             raise
         except Exception as error:
+            logger.exception(
+                "Agent chat failed | conversation_id=%s user_id=%s content=%r",
+                conversation_id,
+                user_id,
+                content,
+            )
             error_msg = str(error)
             if "rate limit" in error_msg.lower() or "429" in error_msg:
                 raise BusinessError(
@@ -792,7 +833,11 @@ class AgentService:
             from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
             from src.agents.deadline import AgentDeadline
             from src.agents.response_handler import maybe_append_continuation_hint
-            from src.commands import execute_agent_command, get_agent_prompt_override
+            from src.commands import (
+                execute_agent_command,
+                get_agent_prompt_override,
+                get_dark_mode_thread_id,
+            )
             from src.profile.service import HistoryService, MemoryService, ProfileService
 
             command = execute_agent_command(content, conversation_id)
@@ -812,6 +857,13 @@ class AgentService:
                     pass
 
             conversation = ConversationService.get(conversation_id)
+            restore_command_state_from_conversation(conversation_id)
+            prompt_override = get_agent_prompt_override(conversation_id, content)
+            agent_thread_id = (
+                get_dark_mode_thread_id(conversation_id)
+                if prompt_override
+                else conversation_id
+            )
             runtime_context = create_tool_call_context(user_id or "", conversation_id)
             if conversation and conversation.mode == "knowledge":
                 from langchain_core.messages import HumanMessage
@@ -850,10 +902,10 @@ class AgentService:
                 return
 
             agent = build_tool_agent(
-                system_prompt_override=get_agent_prompt_override(conversation_id, content)
+                system_prompt_override=prompt_override
             )
             config = {
-                "configurable": {"thread_id": conversation_id},
+                "configurable": {"thread_id": agent_thread_id},
                 "recursion_limit": AGENT_RECURSION_LIMIT,
             }
             if user_id:
@@ -861,41 +913,38 @@ class AgentService:
 
             with tool_call_scope(runtime_context):
                 async with AgentDeadline():
-                    async for event in agent.astream_events(
+                    async for update in agent.astream(
                         {
                             "messages": [{"role": "user", "content": content}],
                             "user_id": user_id,
                         },
                         config=config,
-                        version="v2",
+                        stream_mode="updates",
                     ):
-                        run_id = event.get("run_id", "")
-                        if event["event"] == "on_tool_start":
-                            yield {
-                                "type": "tool",
-                                "tool_name": event.get("name", "tool"),
-                                "status": "started",
-                                "call_id": run_id,
-                            }
-                        elif event["event"] == "on_tool_end":
-                            yield {
-                                "type": "tool",
-                                "tool_name": event.get("name", "tool"),
-                                "status": "completed",
-                                "call_id": run_id,
-                            }
-                        elif event["event"] == "on_tool_error":
-                            yield {
-                                "type": "tool",
-                                "tool_name": event.get("name", "tool"),
-                                "status": "failed",
-                                "call_id": run_id,
-                            }
-                        elif event["event"] == "on_chat_model_stream":
-                            chunk = event["data"]["chunk"]
-                            if isinstance(chunk.content, str) and chunk.content:
-                                full_answer += chunk.content
-                                yield {"type": "text", "text": chunk.content}
+                        for node_name, state_update in update.items():
+                            messages = state_update.get("messages", [])
+                            if not messages:
+                                continue
+                            latest_message = messages[-1]
+                            if node_name == "agent":
+                                tool_calls = getattr(latest_message, "tool_calls", [])
+                                for tool_call in tool_calls:
+                                    yield {
+                                        "type": "tool",
+                                        "tool_name": tool_call.get("name", "tool"),
+                                        "status": "started",
+                                        "call_id": tool_call.get("id", ""),
+                                    }
+                                if not tool_calls and isinstance(latest_message.content, str):
+                                    full_answer = latest_message.content
+                            elif node_name == "tools":
+                                call_id = getattr(latest_message, "tool_call_id", "")
+                                yield {
+                                    "type": "tool",
+                                    "tool_name": getattr(latest_message, "name", None) or "tool",
+                                    "status": "completed",
+                                    "call_id": call_id,
+                                }
 
             if full_answer:
                 final_answer = maybe_append_continuation_hint(full_answer)
@@ -904,6 +953,8 @@ class AgentService:
                     Message("assistant", final_answer),
                     user_id or "",
                 )
+                async for text in stream_text_chunks(full_answer):
+                    yield {"type": "text", "text": text}
 
             # Record Q&A + extract memories
             if user_id and full_answer:
@@ -932,6 +983,12 @@ class AgentService:
         except BusinessError:
             raise
         except Exception as error:
+            logger.exception(
+                "Agent stream failed | conversation_id=%s user_id=%s content=%r",
+                conversation_id,
+                user_id,
+                content,
+            )
             error_msg = str(error)
             if "rate limit" in error_msg.lower():
                 raise BusinessError(

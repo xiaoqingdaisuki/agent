@@ -7,6 +7,7 @@ from src.prompts.system import DARK_MODE_PROMPT
 DARK_MODE_COMMAND = "切换大公鸡模式"
 DARK_MODE_ENABLED_REPLY = "已切换至大公鸡模式。"
 DARK_MODE_DISABLED_REPLY = "已关闭大公鸡模式。"
+DARK_MODE_THREAD_SUFFIX = "__dark_mode"
 
 
 class AgentCommandResult(NamedTuple):
@@ -35,6 +36,19 @@ def _set_dark_mode(thread_id: str, enabled: bool) -> None:
         _dark_mode_threads.add(thread_id)
     else:
         _dark_mode_threads.discard(thread_id)
+
+
+# 根据已持久化的用户消息恢复指定线程的大公鸡模式状态
+def restore_agent_command_state(thread_id: str, user_messages: list[str]) -> None:
+    command_count = sum(
+        message.strip() == DARK_MODE_COMMAND for message in user_messages
+    )
+    _set_dark_mode(thread_id, command_count % 2 == 1)
+
+
+# 获取指定线程对应的大公鸡独立 Agent 历史标识
+def get_dark_mode_thread_id(thread_id: str) -> str:
+    return f"{thread_id}{DARK_MODE_THREAD_SUFFIX}"
 
 
 # 切换指定线程的大公鸡模式，返回切换后的状态结果

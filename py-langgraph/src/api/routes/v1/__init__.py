@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.api.auth import require_agent_user_id
+from src.api.request_logging import log_request_error
 from src.services import (
     AgentService,
     BusinessError,
@@ -135,8 +136,10 @@ async def delete_conversation(conv_id: str, request: Request):
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
     from src.memory import get_default_checkpointer
+    from src.commands import get_dark_mode_thread_id
 
     await get_default_checkpointer().adelete_thread(conv_id)
+    await get_default_checkpointer().adelete_thread(get_dark_mode_thread_id(conv_id))
     return {"success": True}
 
 
@@ -234,6 +237,11 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
                 )
                 yield f"data: {payload}\n\n"
         except BusinessError as error:
+            log_request_error(
+                request,
+                error,
+                {"conversation_id": conv_id, "user_id": trusted_user_id, "stream": True},
+            )
             payload = json.dumps(error.to_dict(), ensure_ascii=False)
             yield f"data: {payload}\n\n"
         yield "data: [DONE]\n\n"
@@ -257,8 +265,10 @@ async def clear_messages(conv_id: str, request: Request):
     require_agent_user_id(request, conv.user_id)
     ConversationService.clear_messages(conv_id)
     from src.memory import get_default_checkpointer
+    from src.commands import get_dark_mode_thread_id
 
     await get_default_checkpointer().adelete_thread(conv_id)
+    await get_default_checkpointer().adelete_thread(get_dark_mode_thread_id(conv_id))
     return {"success": True}
 
 

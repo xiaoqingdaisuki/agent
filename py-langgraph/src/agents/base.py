@@ -104,9 +104,7 @@ def build_chat_agent(checkpointer=None):
     builder.add_edge("trim_history", "agent")
     builder.add_edge("agent", END)
 
-    cp = checkpointer if checkpointer is not None else (
-        _get_default_checkpointer() if settings.memory_enabled else None
-    )
+    cp = checkpointer if checkpointer is not None else _get_default_checkpointer()
     return builder.compile(checkpointer=cp)
 
 

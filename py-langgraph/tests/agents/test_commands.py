@@ -4,7 +4,9 @@ from src.commands import (
     DARK_MODE_ENABLED_REPLY,
     clear_agent_command_state,
     execute_agent_command,
+    get_dark_mode_thread_id,
     get_agent_prompt_override,
+    restore_agent_command_state,
 )
 from src.prompts.system import DARK_MODE_PROMPT
 
@@ -27,6 +29,24 @@ def test_dark_mode_command_toggles_prompt_for_one_thread():
 def test_command_ignores_normal_messages_and_isolates_thread_state():
     thread_id = "isolated-command-thread"
     clear_agent_command_state(thread_id)
+
+
+def test_restores_dark_mode_from_persisted_user_messages():
+    thread_id = "restored-command-thread"
+    clear_agent_command_state(thread_id)
+
+    restore_agent_command_state(thread_id, [DARK_MODE_COMMAND, "你好"])
+    assert get_agent_prompt_override(thread_id) == DARK_MODE_PROMPT
+
+    restore_agent_command_state(thread_id, [DARK_MODE_COMMAND, DARK_MODE_COMMAND])
+    assert get_agent_prompt_override(thread_id) is None
+
+
+def test_dark_mode_uses_a_dedicated_agent_history_thread():
+    thread_id = "isolated-history-thread"
+
+    assert get_dark_mode_thread_id(thread_id) == "isolated-history-thread__dark_mode"
+    assert get_dark_mode_thread_id(thread_id) != thread_id
 
     assert execute_agent_command("你好", thread_id) is None
     execute_agent_command(DARK_MODE_COMMAND, thread_id)

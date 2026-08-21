@@ -177,13 +177,23 @@ class TestAgentService:
     async def test_streamed_tool_event_uses_shared_call_id_field(self, monkeypatch):
         """Tool progress events must use the same call_id field as the TS API."""
         from src.agents import base
+        from langchain_core.messages import AIMessage
 
         class FakeAgent:
-            async def astream_events(self, *_args, **_kwargs):
+            async def astream(self, *_args, **_kwargs):
                 yield {
-                    "event": "on_tool_start",
-                    "name": "calculator",
-                    "run_id": "call-contract",
+                    "agent": {
+                        "messages": [
+                            AIMessage(
+                                content="",
+                                tool_calls=[{
+                                    "name": "calculator",
+                                    "args": {},
+                                    "id": "call-contract",
+                                }],
+                            )
+                        ]
+                    }
                 }
 
         conversation = ConversationService.create("tool stream")

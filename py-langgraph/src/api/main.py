@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from src.config.settings import settings
 from src.services import BusinessError, BusinessErrorCode
+from src.api.request_logging import log_request_error
 
 from .auth import agent_auth_middleware
 from .routes import chat, images, stream, tools
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     @app.exception_handler(BusinessError)
     # 执行 business error handler 对应的业务逻辑
     async def business_error_handler(request: Request, exc: BusinessError):
+        log_request_error(request, exc)
         return JSONResponse(
             status_code=exc.status_code,
             content=exc.to_dict(),
@@ -76,6 +78,7 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     # 执行 generic error handler 对应的业务逻辑
     async def generic_error_handler(request: Request, exc: Exception):
+        log_request_error(request, exc)
         return JSONResponse(
             status_code=500,
             content={

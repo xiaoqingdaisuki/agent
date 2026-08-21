@@ -436,13 +436,24 @@ def mock_settings(monkeypatch):
 @pytest.fixture(autouse=True)
 def mock_repositories(monkeypatch):
     """Mock CloudflareMemoryClient 返回 FakeCloudflareMemoryClient"""
+    from src.config.settings import settings
+
     # 重置 fake client 状态，确保测试隔离
     _fake_client.reset()
+    # 绝大多数服务测试验证的是已 mock 的 Cloudflare 持久化路径，不能受本地 .env 影响。
+    monkeypatch.setattr(settings, "memory_enabled", True)
 
     # Patch CloudflareMemoryClient at its source module.
     # get_repositories() does late import: from src.clients.memory_gateway import CloudflareMemoryClient
     monkeypatch.setattr("src.clients.memory_gateway.CloudflareMemoryClient", _FakeClientClass)
     # 重置模块级缓存，确保下次调用使用 patched client
     monkeypatch.setattr("src.repositories._repositories", None, raising=False)
+    monkeypatch.setattr("src.services._conversations", {}, raising=False)
+    monkeypatch.setattr("src.memory._checkpointer", None, raising=False)
+    monkeypatch.setattr("src.memory._memory_saver", None, raising=False)
+
+    from src.agents.base import invalidate_tool_agent_cache
+
+    invalidate_tool_agent_cache()
 
     return _fake_client

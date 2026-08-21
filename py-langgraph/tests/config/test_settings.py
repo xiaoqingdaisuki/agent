@@ -29,3 +29,21 @@ def test_memory_enabled_false_selects_llm_direct_mode(monkeypatch):
     settings = Settings(_env_file=None)
 
     assert settings.memory_enabled is False
+
+
+def test_memory_disabled_uses_singleton_in_memory_storage(monkeypatch):
+    from langgraph.checkpoint.memory import MemorySaver
+    import src.memory as memory_module
+    import src.repositories as repositories_module
+    from src.config.settings import settings
+
+    monkeypatch.setattr(settings, "memory_enabled", False)
+    monkeypatch.setattr(repositories_module, "_repositories", None)
+    monkeypatch.setattr(memory_module, "_memory_saver", None)
+
+    repositories = repositories_module.get_repositories()
+    repositories.create_conversation("test-user", "内存会话", conversation_id="conv-memory")
+
+    assert repositories.get_conversation("conv-memory") is not None
+    assert isinstance(memory_module.get_default_checkpointer(), MemorySaver)
+    assert memory_module.get_default_checkpointer() is memory_module.get_default_checkpointer()

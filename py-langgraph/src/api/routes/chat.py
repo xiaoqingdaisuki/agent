@@ -6,7 +6,12 @@ from pydantic import BaseModel
 from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
 from src.agents.deadline import AgentDeadline
 from src.agents.response_handler import get_finish_reason, is_likely_truncated, maybe_append_continuation_hint
-from src.commands import execute_agent_command, get_agent_prompt_override
+from src.commands import (
+    execute_agent_command,
+    get_dark_mode_thread_id,
+    get_agent_prompt_override,
+    restore_agent_command_state,
+)
 from src.api.auth import require_agent_user_id
 from src.services import BusinessError, ConversationService, Message
 from src.tools.runtime.executor import create_tool_call_context, tool_call_scope
@@ -61,12 +66,24 @@ async def chat(payload: ChatRequest, request: Request):
                 # Profile storage is optional; the agent loads memory when available.
                 pass
 
+        user_messages = [
+            str(message["content"])
+            for message in ConversationService.get_messages(thread_id)
+            if message.get("role") == "user"
+        ]
+        restore_agent_command_state(thread_id, user_messages)
+        prompt_override = get_agent_prompt_override(thread_id, payload.message)
+        agent_thread_id = (
+            get_dark_mode_thread_id(thread_id)
+            if prompt_override
+            else thread_id
+        )
         agent = build_tool_agent(
-            system_prompt_override=get_agent_prompt_override(thread_id, payload.message)
+            system_prompt_override=prompt_override
         )
 
         config = {
-            "configurable": {"thread_id": thread_id},
+            "configurable": {"thread_id": agent_thread_id},
             "recursion_limit": AGENT_RECURSION_LIMIT,
         }
         if trusted_user_id:
