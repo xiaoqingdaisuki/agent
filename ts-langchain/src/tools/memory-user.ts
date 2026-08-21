@@ -11,7 +11,7 @@ import { z } from "zod";
 import type { ToolDescriptor } from "./contracts.js";
 import type { MemoryData } from "../repositories/types.js";
 import { getRepositories } from "../repositories/index.js";
-import { config } from "../config/index.js";
+import { getToolCallContext } from "./runtime/executor.js";
 
 // ============ Tool Descriptors ==========
 
@@ -61,6 +61,47 @@ export const userMemorySaveDescriptor: ToolDescriptor = {
   owner: "memory",
   tags: ["memory", "user", "profile"],
   input_schema: memoryUserSaveInputSchema,
+};
+
+export const memoryUserListInputSchema = z.object({
+  category: z.string().default("").describe("可选的记忆类别过滤"),
+  max_results: z.number().int().min(1).max(100).default(50).describe("最多返回条数"),
+});
+
+export const userMemoryListDescriptor: ToolDescriptor = {
+  name: "memory.user.list",
+  version: "1.0.0",
+  title: "查看用户记忆",
+  description: "列出当前用户已保存的长期记忆，返回记忆 ID、内容和类别。",
+  category: "MEMORY",
+  risk_level: "R1",
+  side_effect: "read",
+  timeout_ms: 5000,
+  required_permissions: ["memory.user.read"],
+  data_classification: ["pii"],
+  owner: "memory",
+  tags: ["memory", "user", "list"],
+  input_schema: memoryUserListInputSchema,
+};
+
+export const memoryUserDeleteInputSchema = z.object({
+  memory_ids: z.array(z.string().min(1).max(128)).min(1).max(20).describe("要删除的精确记忆 ID 列表"),
+});
+
+export const userMemoryDeleteDescriptor: ToolDescriptor = {
+  name: "memory.user.delete",
+  version: "1.0.0",
+  title: "删除用户记忆",
+  description: "按精确 memory_id 删除当前用户的长期记忆。禁止根据模糊语义直接批量删除。",
+  category: "MEMORY",
+  risk_level: "R2",
+  side_effect: "write",
+  timeout_ms: 10000,
+  required_permissions: ["memory.user.write"],
+  data_classification: ["pii"],
+  owner: "memory",
+  tags: ["memory", "user", "delete"],
+  input_schema: memoryUserDeleteInputSchema,
 };
 
 // ============ LangChain Tool: memory.user.search ==========
@@ -164,3 +205,55 @@ export const memoryUserSaveTool: DynamicStructuredTool =
       }
     },
   });
+
+// 将长期记忆转换为面向对话的最小公开字段。
+function toPublicMemory(memory: MemoryData): { memory_id: string; content: string; category: string } {
+  return {
+    memory_id: memory.id,
+    content: memory.content,
+    category: memory.category,
+  };
+}
+
+// 列出当前可信用户的长期记忆。
+export const memoryUserListTool: DynamicStructuredTool = new DynamicStructuredTool({
+  name: "memory_user_list",
+  description: "查看当前用户保存了哪些长期记忆。",
+  schema: memoryUserListInputSchema,
+  func: async ({ category, max_results }) => {
+    const userId = getToolCallContext()?.user_id;
+    if (!userId) return JSON.stringify({ memories: [], error: "缺少可信用户上下文" });
+    try {
+      const items = await getRepositories().memory.list(userId, {
+        category: category || undefined,
+        limit: max_results || 50,
+      });
+      return JSON.stringify({ memories: items.map(toPublicMemory) });
+    } catch (error) {
+      return JSON.stringify({ memories: [], error: `长期记忆读取失败：${error instanceof Error ? error.message : "未知错误"}` });
+    }
+  },
+});
+
+// 按精确 ID 删除当前可信用户的长期记忆。
+export const memoryUserDeleteTool: DynamicStructuredTool = new DynamicStructuredTool({
+  name: "memory_user_delete",
+  description: "按精确 memory_id 删除当前用户的长期记忆；不能根据模糊语义猜测要删除的记忆。",
+  schema: memoryUserDeleteInputSchema,
+  func: async ({ memory_ids }) => {
+    const userId = getToolCallContext()?.user_id;
+    if (!userId) return JSON.stringify({ deleted: [], error: "缺少可信用户上下文" });
+    if (new Set(memory_ids).size !== memory_ids.length) {
+      return JSON.stringify({ deleted: [], error: "memory_ids 不能重复" });
+    }
+    try {
+      const deleted: string[] = [];
+      for (const memoryId of memory_ids) {
+        if (await getRepositories().memory.delete(userId, memoryId)) deleted.push(memoryId);
+      }
+      return JSON.stringify({ deleted });
+    } catch (error) {
+      return JSON.stringify({ deleted: [], error: `长期记忆删除失败：${error instanceof Error ? error.message : "未知错误"}` });
+    }
+  },
+});

@@ -315,7 +315,11 @@ export function registerDocumentRoutes(app: any) {
         c.env.AI,
         userId,
         parsed.query,
-        { limit: parsed.limit, minScore: parsed.min_score },
+        {
+          limit: parsed.limit,
+          minScore: parsed.min_score,
+          documentIds: parsed.document_ids,
+        },
       );
 
       return c.json({

@@ -660,7 +660,7 @@ export class CloudflareMemoryClient {
   async searchDocuments(
     userId: string,
     query: string,
-    options: { limit?: number; minScore?: number } = {},
+    options: { limit?: number; minScore?: number; documentIds?: string[] } = {},
   ): Promise<DocumentSearchResponseData> {
     const body: Record<string, unknown> = {
       user_id: userId,
@@ -668,6 +668,9 @@ export class CloudflareMemoryClient {
       limit: options.limit ?? 5,
       min_score: options.minScore ?? 0.6,
     };
+    if (options.documentIds?.length) {
+      body.document_ids = options.documentIds;
+    }
     const result = validateGatewayResponse(await this.request(
       "POST",
       "/internal/v1/documents:search",

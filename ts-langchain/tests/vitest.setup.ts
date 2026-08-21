@@ -246,6 +246,20 @@ export const mockCloudflareClient = {
   getDocument: vi.fn(async () => null),
   deleteDocument: vi.fn(async () => true),
   reindexDocument: vi.fn(async () => ({ chunk_count: 1, degraded: false })),
+  searchDocuments: vi.fn(async (_userId: string, _query: string, options: any = {}) => ({
+    results: options.documentIds?.length
+      ? [{
+          id: "chunk_test",
+          document_id: options.documentIds[0],
+          chunk_index: 17,
+          content: "任何一方提前终止本协议，应至少提前30日通知。",
+          score: 0.92,
+          metadata: { filename: "contract.pdf" },
+          created_at: new Date().toISOString(),
+        }]
+      : [],
+    degraded: false,
+  })),
 };
 
 beforeEach(() => {

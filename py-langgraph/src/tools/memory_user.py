@@ -8,6 +8,7 @@ memory.user — 用户长期记忆管理
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from typing import Annotated, Any
 
 from langchain_core.tools import tool
@@ -20,6 +21,7 @@ from src.tools.contracts import (
     SideEffect,
 )
 from src.repositories import get_repositories
+from src.tools.runtime.executor import get_tool_call_context
 
 
 # ============ Tool Descriptor ==========
@@ -52,6 +54,36 @@ _USER_SAVE_DESCRIPTOR = ToolDescriptor(
     data_classification=["pii"],
     owner="memory",
     tags=["memory", "user", "profile"],
+)
+
+_USER_LIST_DESCRIPTOR = ToolDescriptor(
+    name="memory.user.list",
+    version="1.0.0",
+    title="查看用户记忆",
+    description="列出当前用户已保存的长期记忆，返回记忆 ID、内容和类别。",
+    category="MEMORY",
+    risk_level="R1",
+    side_effect="read",
+    timeout_ms=5000,
+    required_permissions=["memory.user.read"],
+    data_classification=["pii"],
+    owner="memory",
+    tags=["memory", "user", "list"],
+)
+
+_USER_DELETE_DESCRIPTOR = ToolDescriptor(
+    name="memory.user.delete",
+    version="1.0.0",
+    title="删除用户记忆",
+    description="按精确 memory_id 删除当前用户的长期记忆。禁止根据模糊语义直接批量删除。",
+    category="MEMORY",
+    risk_level="R2",
+    side_effect="write",
+    timeout_ms=10000,
+    required_permissions=["memory.user.write"],
+    data_classification=["pii"],
+    owner="memory",
+    tags=["memory", "user", "delete"],
 )
 
 
@@ -118,6 +150,19 @@ class UserSaveInput(BaseModel):
     importance: int = Field(default=3, description="重要性 1-5，越高越重要", ge=1, le=5)
 
 
+class UserListInput(BaseModel):
+    """列出用户记忆的输入模型。"""
+
+    category: str = Field(default="", description="可选的记忆类别过滤")
+    max_results: int = Field(default=50, description="最多返回条数", ge=1, le=100)
+
+
+class UserDeleteInput(BaseModel):
+    """删除用户记忆的输入模型。"""
+
+    memory_ids: list[str] = Field(min_length=1, max_length=20, description="要删除的精确记忆 ID 列表")
+
+
 # 保存一条关于用户的重要信息到长期记忆
 @tool(args_schema=UserSaveInput)
 # 执行 memory user save 对应的业务逻辑
@@ -144,13 +189,72 @@ def memory_user_save(
         return f"🧠 记忆保存失败：{e}"
 
 
+# 获取当前工具调用的可信用户 ID。
+def _scoped_user_id() -> str | None:
+    context = get_tool_call_context()
+    return context.user_id if context is not None and context.user_id else None
+
+
+# 将长期记忆转换为面向对话的最小公开字段。
+def _public_memory(memory: dict[str, Any]) -> dict[str, str]:
+    return {
+        "memory_id": str(memory.get("id", "")),
+        "content": str(memory.get("content", "")),
+        "category": str(memory.get("category", "")),
+    }
+
+
+# 列出当前可信用户的长期记忆。
+@tool(args_schema=UserListInput)
+# 执行 memory user list 对应的业务逻辑
+def memory_user_list(category: str = "", max_results: int = 50) -> str:
+    """查看当前用户保存了哪些长期记忆。"""
+    user_id = _scoped_user_id()
+    if not user_id:
+        return json.dumps({"memories": [], "error": "缺少可信用户上下文"}, ensure_ascii=False)
+    try:
+        memories = get_repositories().list_memories(
+            user_id,
+            category=category or None,
+            limit=max_results,
+        )
+        return json.dumps({"memories": [_public_memory(memory) for memory in memories]}, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({"memories": [], "error": f"长期记忆读取失败：{exc!s}"}, ensure_ascii=False)
+
+
+# 按精确 ID 删除当前可信用户的长期记忆。
+@tool(args_schema=UserDeleteInput)
+# 执行 memory user delete 对应的业务逻辑
+def memory_user_delete(memory_ids: list[str]) -> str:
+    """按精确 memory_id 删除当前用户的长期记忆。"""
+    user_id = _scoped_user_id()
+    if not user_id:
+        return json.dumps({"deleted": [], "error": "缺少可信用户上下文"}, ensure_ascii=False)
+    if len(set(memory_ids)) != len(memory_ids):
+        return json.dumps({"deleted": [], "error": "memory_ids 不能重复"}, ensure_ascii=False)
+    try:
+        deleted = [
+            memory_id
+            for memory_id in memory_ids
+            if get_repositories().delete_memory(user_id, memory_id)
+        ]
+        return json.dumps({"deleted": deleted}, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({"deleted": [], "error": f"长期记忆删除失败：{exc!s}"}, ensure_ascii=False)
+
+
 # ============ 导出 ==========
 
 __all__ = [
     "_USER_SAVE_DESCRIPTOR",
     "_USER_SEARCH_DESCRIPTOR",
+    "UserDeleteInput",
+    "UserListInput",
     "UserSaveInput",
     "UserSearchInput",
+    "memory_user_delete",
+    "memory_user_list",
     "memory_user_save",
     "memory_user_search",
 ]

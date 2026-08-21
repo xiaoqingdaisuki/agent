@@ -361,7 +361,14 @@ class CloudflareMemoryClient:
         return result.get("data", {})
 
     # 查询 search documents 对应的结果
-    async def search_documents(self, user_id: str, query: str, limit: int = 5, min_score: float = 0.6) -> dict:
+    async def search_documents(
+        self,
+        user_id: str,
+        query: str,
+        limit: int = 5,
+        min_score: float = 0.6,
+        document_ids: list[str] | None = None,
+    ) -> dict:
         """语义搜索文档"""
         body: dict[str, Any] = {
             "user_id": user_id,
@@ -369,6 +376,8 @@ class CloudflareMemoryClient:
             "limit": limit,
             "min_score": min_score,
         }
+        if document_ids:
+            body["document_ids"] = document_ids
         result = await self._request("POST", "/internal/v1/documents:search", body)
         return DocumentSearchResponseData.model_validate(result.get("data", {})).model_dump()
 

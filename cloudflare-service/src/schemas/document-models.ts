@@ -64,6 +64,7 @@ export const DocumentSearchRequestSchema = z.object({
   query: z.string().min(1).max(500),
   limit: z.coerce.number().int().min(1).max(20).default(5),
   min_score: z.coerce.number().min(0).max(1).default(0.6),
+  document_ids: z.array(z.string().min(1).max(128)).max(20).default([]),
 });
 
 /** 文档列表查询参数 */

@@ -448,14 +448,14 @@ export async function searchDocuments(
   ai: Ai,
   userId: string,
   query: string,
-  options: { limit?: number; minScore?: number } = {},
+  options: { limit?: number; minScore?: number; documentIds?: string[] } = {},
   forceDegraded = false,
 ): Promise<{ results: DocumentSearchResult[]; degraded: boolean }> {
-  const { limit = 5, minScore = 0.6 } = options;
+  const { limit = 5, minScore = 0.6, documentIds = [] } = options;
 
   // 降级路径：纯 SQL（按 content 匹配）
   if (forceDegraded) {
-    return degradeSearch(db, userId, limit);
+    return degradeSearch(db, userId, query, limit, documentIds);
   }
 
   // 正常路径：Vectorize 语义搜索
@@ -467,6 +467,11 @@ export async function searchDocuments(
       filter: {
         entity_type: { $eq: "document_chunk" },
         user_id: { $eq: userId },
+        ...(documentIds.length === 1
+          ? { document_id: { $eq: documentIds[0] } }
+          : documentIds.length > 1
+            ? { document_id: { $in: documentIds } }
+            : {}),
       },
       returnValues: false,
       returnMetadata: true,
@@ -486,11 +491,14 @@ export async function searchDocuments(
 
     // D1 回表
     const placeholders = matchIds.map(() => "?").join(",");
+    const documentFilter = documentIds.length
+      ? ` AND document_id IN (${documentIds.map(() => "?").join(",")})`
+      : "";
     const { results } = await db
       .prepare(
-        `SELECT id, document_id, user_id, chunk_index, content, content_hash, token_count, embedding_model, embedding_version, vectorize_id, created_at FROM chunks WHERE id IN (${placeholders}) AND user_id = ?`,
+        `SELECT id, document_id, user_id, chunk_index, content, content_hash, token_count, embedding_model, embedding_version, vectorize_id, created_at FROM chunks WHERE id IN (${placeholders}) AND user_id = ?${documentFilter}`,
       )
-      .bind(...matchIds, userId)
+      .bind(...matchIds, userId, ...documentIds)
       .all<Chunk>();
 
     const chunks = (results as Chunk[]) ?? [];
@@ -533,7 +541,7 @@ export async function searchDocuments(
     return { results: scored.slice(0, limit), degraded: false };
   } catch (err) {
     console.error("Vectorize document search failed, degrading to SQL:", err);
-    return degradeSearch(db, userId, limit);
+    return degradeSearch(db, userId, query, limit, documentIds);
   }
 }
 
@@ -544,19 +552,24 @@ export async function searchDocuments(
 async function degradeSearch(
   db: D1Database,
   userId: string,
+  query: string,
   limit: number,
+  documentIds: string[] = [],
 ): Promise<{ results: DocumentSearchResult[]; degraded: boolean }> {
   try {
+    const documentFilter = documentIds.length
+      ? ` AND d.id IN (${documentIds.map(() => "?").join(",")})`
+      : "";
     const { results } = await db
       .prepare(
         `SELECT c.id, c.document_id, c.chunk_index, c.content, c.created_at, d.name as doc_name
          FROM chunks c
          JOIN documents d ON c.document_id = d.id
-         WHERE c.user_id = ? AND d.deleted_at IS NULL
+         WHERE c.user_id = ? AND d.deleted_at IS NULL AND c.content LIKE ?${documentFilter}
          ORDER BY c.created_at DESC
          LIMIT ?`,
       )
-      .bind(userId, limit)
+      .bind(userId, `%${query}%`, ...documentIds, limit)
       .all<any>();
 
     const rows = (results ?? []) as any[];

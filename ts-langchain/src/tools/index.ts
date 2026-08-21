@@ -24,10 +24,22 @@ import {
 import {
   memoryUserSearchTool,
   memoryUserSaveTool,
+  memoryUserListTool,
+  memoryUserDeleteTool,
   userMemorySearchDescriptor,
   userMemorySaveDescriptor,
+  userMemoryListDescriptor,
+  userMemoryDeleteDescriptor,
 } from "./memory-user.js";
 import { config } from "../config/index.js";
+import {
+  currentTimeTool,
+  currentTimeDescriptor,
+  convertTimezoneTool,
+  convertTimezoneDescriptor,
+} from "./time.js";
+import { fileSearchTool, fileSearchDescriptor } from "./file-search.js";
+import { webExtractTool, webExtractDescriptor } from "./web-extract.js";
 
 export { registry, getToolsForUser, getToolMetadata } from "./registry.js";
 
@@ -49,8 +61,20 @@ export {
   sessionMemoryDescriptor,
   memoryUserSearchTool,
   memoryUserSaveTool,
+  memoryUserListTool,
+  memoryUserDeleteTool,
   userMemorySearchDescriptor,
   userMemorySaveDescriptor,
+  userMemoryListDescriptor,
+  userMemoryDeleteDescriptor,
+  currentTimeTool,
+  currentTimeDescriptor,
+  convertTimezoneTool,
+  convertTimezoneDescriptor,
+  fileSearchTool,
+  fileSearchDescriptor,
+  webExtractTool,
+  webExtractDescriptor,
 };
 
 // 所有可用工具的聚合列表，供 Agent 使用
@@ -58,8 +82,12 @@ const directTools = [
   weatherTool,
   webSearchTool,
   webReadTool,
+  webExtractTool,
   fileReadTool,
+  fileSearchTool,
   calculatorTool,
+  currentTimeTool,
+  convertTimezoneTool,
 ];
 
 // 关闭记忆模式时仅排除依赖 Cloudflare 向量库的知识库工具。
@@ -69,11 +97,15 @@ export const tools = config.MEMORY_ENABLED ? [
   memorySessionSearchTool,
   memoryUserSearchTool,
   memoryUserSaveTool,
+  memoryUserListTool,
+  memoryUserDeleteTool,
 ] : [
   ...directTools,
   memorySessionSearchTool,
   memoryUserSearchTool,
   memoryUserSaveTool,
+  memoryUserListTool,
+  memoryUserDeleteTool,
 ];
 
 /**
@@ -86,12 +118,18 @@ export const toolDescriptors: Record<
   [weatherTool.name]: weatherDescriptor,
   [webSearchTool.name]: webSearchDescriptor,
   [webReadTool.name]: webReadDescriptor,
+  [webExtractTool.name]: webExtractDescriptor,
   [calculatorTool.name]: calculatorDescriptor,
+  [currentTimeTool.name]: currentTimeDescriptor,
+  [convertTimezoneTool.name]: convertTimezoneDescriptor,
   [knowledgeSearchTool.name]: knowledgeSearchDescriptor,
   [fileReadTool.name]: fileReadDescriptor,
+  [fileSearchTool.name]: fileSearchDescriptor,
   [memorySessionSearchTool.name]: sessionMemoryDescriptor,
   [memoryUserSearchTool.name]: userMemorySearchDescriptor,
   [memoryUserSaveTool.name]: userMemorySaveDescriptor,
+  [memoryUserListTool.name]: userMemoryListDescriptor,
+  [memoryUserDeleteTool.name]: userMemoryDeleteDescriptor,
 };
 
 /**
@@ -104,10 +142,16 @@ export const toolSchemas: Record<
   [weatherTool.name]: weatherTool.schema as any,
   [webSearchTool.name]: webSearchTool.schema as any,
   [webReadTool.name]: webReadTool.schema as any,
+  [webExtractTool.name]: webExtractTool.schema as any,
   [calculatorTool.name]: calculatorTool.schema as any,
+  [currentTimeTool.name]: currentTimeTool.schema as any,
+  [convertTimezoneTool.name]: convertTimezoneTool.schema as any,
   [knowledgeSearchTool.name]: knowledgeSearchTool.schema as any,
   [fileReadTool.name]: fileReadTool.schema as any,
+  [fileSearchTool.name]: fileSearchTool.schema as any,
   [memorySessionSearchTool.name]: memorySessionSearchTool.schema as any,
   [memoryUserSearchTool.name]: memoryUserSearchTool.schema as any,
   [memoryUserSaveTool.name]: memoryUserSaveTool.schema as any,
+  [memoryUserListTool.name]: memoryUserListTool.schema as any,
+  [memoryUserDeleteTool.name]: memoryUserDeleteTool.schema as any,
 };

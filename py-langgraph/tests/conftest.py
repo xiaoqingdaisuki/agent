@@ -400,7 +400,7 @@ class FakeCloudflareMemoryClient:
     async def reindex_document(self, document_id: str) -> dict:
         return {"chunk_count": 3, "degraded": False}
 
-    async def search_documents(self, user_id: str, query: str, limit: int = 5, min_score: float = 0.6) -> dict:
+    async def search_documents(self, user_id: str, query: str, limit: int = 5, min_score: float = 0.6, document_ids: list[str] = None) -> dict:
         return {"results": [], "degraded": False}
 
 

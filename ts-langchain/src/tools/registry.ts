@@ -21,11 +21,18 @@ import {
 import {
   memoryUserSearchTool,
   memoryUserSaveTool,
+  memoryUserListTool,
+  memoryUserDeleteTool,
   userMemorySearchDescriptor,
   userMemorySaveDescriptor,
+  userMemoryListDescriptor,
+  userMemoryDeleteDescriptor,
 } from "./memory-user.js";
 import type { DynamicStructuredTool } from "langchain/tools";
 import { config } from "../config/index.js";
+import { currentTimeTool, currentTimeDescriptor, convertTimezoneTool, convertTimezoneDescriptor } from "./time.js";
+import { fileSearchTool, fileSearchDescriptor } from "./file-search.js";
+import { webExtractTool, webExtractDescriptor } from "./web-extract.js";
 
 // ============ 工具注册表 ============
 
@@ -47,14 +54,20 @@ class ToolRegistry {
     this.register(weatherTool, weatherDescriptor);
     this.register(webSearchTool, webSearchDescriptor);
     this.register(webReadTool, webReadDescriptor);
+    this.register(webExtractTool, webExtractDescriptor);
     this.register(calculatorTool, calculatorDescriptor);
+    this.register(currentTimeTool, currentTimeDescriptor);
+    this.register(convertTimezoneTool, convertTimezoneDescriptor);
     this.register(fileReadTool, fileReadDescriptor);
+    this.register(fileSearchTool, fileSearchDescriptor);
     if (config.MEMORY_ENABLED) {
       this.register(knowledgeSearchTool, knowledgeSearchDescriptor);
     }
     this.register(memorySessionSearchTool, sessionMemoryDescriptor);
     this.register(memoryUserSearchTool, userMemorySearchDescriptor);
     this.register(memoryUserSaveTool, userMemorySaveDescriptor);
+    this.register(memoryUserListTool, userMemoryListDescriptor);
+    this.register(memoryUserDeleteTool, userMemoryDeleteDescriptor);
   }
 
   // 创建或注册 register 所需的数据

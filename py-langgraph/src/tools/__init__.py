@@ -15,12 +15,15 @@ from src.tools.registry import (
 )
 
 from .calculator import calculator
+from .file_search import file_search
 from .web_read import web_read
+from .web_extract import web_extract
 from .file_read import file_read
 from .knowledge import knowledge_search
 from .memory_session import memory_session_search
-from .memory_user import memory_user_search, memory_user_save
+from .memory_user import memory_user_search, memory_user_save, memory_user_list, memory_user_delete
 from .search import web_search
+from .time import get_current_time, convert_timezone
 from .weather import get_weather
 
 tools = get_registry().get_all_tools()
@@ -28,16 +31,22 @@ tools = get_registry().get_all_tools()
 __all__ = [
     "ToolRegistry",
     "calculator",
+    "convert_timezone",
     "file_read",
+    "file_search",
+    "get_current_time",
     "get_registry",
     "get_tool_metadata_for_user",
     "get_tools_for_user",
     "get_weather",
     "knowledge_search",
     "memory_session_search",
+    "memory_user_delete",
+    "memory_user_list",
     "memory_user_save",
     "memory_user_search",
     "tools",
+    "web_extract",
     "web_read",
     "web_search",
 ]

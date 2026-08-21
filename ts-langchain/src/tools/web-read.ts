@@ -91,7 +91,7 @@ function isBlockedIp(address: string): boolean {
 }
 
 // 对 URL 进行 DNS 解析并验证所有解析结果的安全性
-async function validateNetworkUrl(
+export async function validateNetworkUrl(
   url: string,
 ): Promise<{ safe: boolean; reason?: string }> {
   const syntaxCheck = isSafeUrl(url);
