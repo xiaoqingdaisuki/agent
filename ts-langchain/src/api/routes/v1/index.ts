@@ -291,8 +291,8 @@ export async function registerV1Routes(app: FastifyInstance) {
         if (event.type === "text") {
           eventName = "text";
           payload = event.partial === undefined
-            ? { delta: event.text }
-            : { delta: event.text, partial: event.partial };
+            ? { delta: event.text, text: event.text }
+            : { delta: event.text, text: event.text, partial: event.partial };
         } else if (event.type === "tool") {
           eventName = "tool";
           payload = {

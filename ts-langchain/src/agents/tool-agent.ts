@@ -273,7 +273,15 @@ class DeclarativeToolAgent {
           { messages: [...(input.memory_context || []), ...(input.chat_history || []), { role: "user", content: input.input }] },
           { signal: options.signal, recursionLimit: this.maxIterations * 3 + 4 },
         );
-        const output = getMessageText((result.messages as BaseMessage[]).at(-1)) || "抱歉，我没有理解您的问题。";
+        const answerMessage = [...(result.messages as BaseMessage[])]
+          .reverse()
+          .find((message) => {
+            const messageType = typeof (message as any)?._getType === "function"
+              ? (message as any)._getType()
+              : (message as any)?.type;
+            return messageType === "ai" || messageType === "assistant";
+          });
+        const output = getMessageText(answerMessage) || "抱歉，我没有理解您的问题。";
         tracker.complete(output);
         return { output, react: tracker.summary() };
       });

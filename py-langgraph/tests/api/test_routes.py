@@ -92,6 +92,25 @@ class TestChatEndpoint:
         assert response.json()["thread_id"]
         clear_agent_command_state(response.json()["thread_id"])
 
+    @pytest.mark.asyncio
+    async def test_stream_text_includes_text_and_delta_fields(self, client: AsyncClient):
+        """流式文本同时提供新旧字段，避免客户端因协议差异误判空回复。"""
+        conversation = await client.post(
+            "/api/v1/conversations",
+            json={"title": "sse compatibility", "user_id": "test-user"},
+        )
+        assert conversation.status_code == 201
+        conversation_id = conversation.json()["id"]
+
+        response = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages/stream",
+            json={"content": "你好", "user_id": "test-user"},
+        )
+
+        assert response.status_code == 200
+        assert '"delta":' in response.text
+        assert '"text":' in response.text
+
 
 class TestToolsEndpoint:
     @pytest.mark.asyncio

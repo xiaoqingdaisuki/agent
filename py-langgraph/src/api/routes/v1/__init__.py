@@ -228,7 +228,10 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
                 if await request.is_disconnected():
                     return
                 if event["type"] == "text":
-                    payload = json.dumps({"delta": event["text"]}, ensure_ascii=False)
+                    payload = json.dumps(
+                        {"delta": event["text"], "text": event["text"]},
+                        ensure_ascii=False,
+                    )
                     event_name = "text"
                 elif event["type"] == "tool":
                     payload = json.dumps(

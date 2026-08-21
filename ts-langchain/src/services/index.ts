@@ -880,7 +880,7 @@ export class AgentService {
       const reply: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: (result.output as string) || "抱歉，我没有理解您的问题。",
+        content: extractAgentOutputText(result) || "抱歉，我没有理解您的问题。",
         createdAt: new Date().toISOString(),
       };
 
