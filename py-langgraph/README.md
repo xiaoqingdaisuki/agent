@@ -18,10 +18,10 @@ Python + LangGraph（显式 StateGraph 图编排）实现的 Agent 服务。
 ```
 src/
 ├── agents/
-│   ├── base.py            # 通用图构建基类
-│   ├── chat_agent.py      # 对话 Agent（StateGraph: node=model）
-│   ├── tool_agent.py      # 工具调用 Agent（StateGraph + ToolNode + 条件边）
-│   └── rag_agent.py       # RAG Agent（StateGraph: retrieve → grade → generate）
+│   ├── graph_agents.py    # StateGraph、对话 Agent、工具 Agent
+│   ├── react_policy.py    # ReAct 策略和状态限制
+│   ├── deadline.py        # Agent 执行超时控制
+│   └── response_handler.py # 响应格式化处理
 ├── rag/
 │   ├── loader.py          # 文档加载（TXT, MD）
 │   ├── splitter.py        # 文本切分（递归字符切分）
@@ -31,31 +31,38 @@ src/
 │   └── rag_agent.py       # RAG Agent
 ├── services/
 │   └── __init__.py        # Service Layer（业务编排）
-├── adapters/
-│   ├── types.py           # NormalizedMessage 统一消息格式
-│   ├── qq.py              # QQ 适配器（OneBot v11 HTTP）
-│   ├── bot.py             # Bot Service（指令 + Agent）
-│   ├── registry.py        # 指令注册中心
-│   └── commands/
-│       ├── help.py        # /help
-│       ├── status.py      # /status
-│       └── clear.py       # /clear
+├── clients/
+│   ├── memory_gateway.py  # Cloudflare Service HTTP 客户端
+│   └── schemas.py         # 客户端数据模型
+├── commands/
+│   └── __init__.py        # 命令入口
+├── config/
+│   └── settings.py        # 环境变量配置（Pydantic Settings）
+├── memory/
+│   └── d1_checkpointer.py # D1 checkpoint 适配
+├── profile/
+│   ├── models.py          # 用户画像模型
+│   └── service.py         # Profile、Memory、History 服务
+├── repositories/
+│   └── __init__.py        # 仓储抽象
 ├── api/
 │   ├── routes/
 │   │   ├── v1/            # External API（前端 UI 使用）
 │   │   │   └── __init__.py
-│   │   ├── internal/      # Internal API（QQ Bot 使用）
-│   │   │   └── __init__.py
 │   │   ├── chat.py
 │   │   ├── stream.py
-│   │   └── tools.py
+│   │   ├── tools.py
+│   │   └── images.py
+│   ├── auth.py            # Bearer 鉴权
+│   ├── request_logging.py # 请求日志
+│   ├── sse.py             # SSE 编码
 │   └── main.py            # FastAPI 应用入口
 ├── prompts/
 │   └── system.py          # Prompt 模板
-├── memory/
-│   └── checkpoint.py      # Checkpoint 存储（PostgresSaver）
-└── config/
-    └── settings.py        # 环境变量配置（Pydantic Settings）
+└── tools/
+    ├── registry.py        # 工具注册中心
+    ├── contracts.py       # 工具契约
+    └── runtime/           # 工具安全执行和数据脱敏
 ```
 
 ## 环境要求

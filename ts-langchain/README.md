@@ -17,7 +17,10 @@ src/
 ├── agents/
 │   ├── chat-agent.ts       # 纯对话 Agent
 │   ├── tool-agent.ts       # 工具调用 Agent
-│   └── rag-agent.ts        # RAG Agent（检索器包装成 tool）
+│   ├── react-policy.ts     # ReAct 策略中间件
+│   ├── deadline.ts         # Agent 执行超时控制
+│   ├── response-handler.ts # 响应格式化
+│   └── index.ts            # Agent 导出
 ├── rag/
 │   ├── loader.ts           # 文档加载（TXT, MD）
 │   ├── splitter.ts         # 文本切分（递归字符切分）
@@ -25,35 +28,42 @@ src/
 │   ├── vector-store.ts     # Qdrant 向量存储
 │   ├── retriever.ts        # 检索器
 │   └── rag-agent.ts        # RAG Agent
+├── clients/
+│   ├── memory_gateway.ts   # Cloudflare Service HTTP 客户端
+│   └── schemas.ts          # 客户端数据模型
+├── commands/
+│   └── index.ts            # 命令入口
+├── config/
+│   └── index.ts            # 环境变量配置（Zod）
+├── memory/
+│   └── conversation.ts     # 会话记忆
+├── profile/
+│   ├── index.ts            # 用户画像模型
+│   └── service.ts          # Profile、Memory、History 服务
+├── repositories/
+│   ├── index.ts            # 仓储实现
+│   └── types.ts            # 仓储类型
 ├── services/
 │   └── index.ts            # Service Layer（业务编排）
-├── adapters/
-│   ├── types.ts            # NormalizedMessage 统一消息格式
-│   ├── qq.ts               # QQ 适配器（OneBot v11 HTTP）
-│   ├── bot.ts              # Bot Service（指令 + Agent）
-│   └── commands/
-│       ├── registry.ts     # 指令注册中心
-│       ├── help.ts         # /help
-│       ├── status.ts       # /status
-│       └── clear.ts        # /clear
 ├── api/
 │   ├── routes/
 │   │   ├── v1/             # External API（前端 UI 使用）
 │   │   │   └── index.ts
-│   │   ├── internal/       # Internal API（QQ Bot 使用）
-│   │   │   └── index.ts
 │   │   ├── chat.ts
 │   │   ├── stream.ts
-│   │   └── tools.ts
+│   │   ├── tools.ts
+│   │   └── images.ts
 │   ├── middleware/
+│   │   ├── auth.ts         # Bearer 鉴权
 │   │   └── error.ts        # 统一错误处理
+│   ├── sse.ts              # SSE 编码
 │   └── index.ts            # Fastify 应用入口
 ├── prompts/
 │   └── system.ts           # Prompt 模板
-├── memory/
-│   └── conversation.ts     # 会话记忆（内存 Map）
-└── config/
-    └── index.ts            # 环境变量配置（Zod 校验）
+└── tools/
+    ├── registry.ts         # 工具注册中心
+    ├── contracts.ts        # 工具契约
+    └── runtime/            # 工具安全执行和数据脱敏
 ```
 
 ## 环境要求

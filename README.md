@@ -32,6 +32,7 @@ ts-langchain 和 py-langgraph 均通过 HTTP 调用此服务，不直接持有�
 agent/
 ├── cloudflare-service/       # Cloudflare Workers — 长期记忆网关（独立部署）
 │   ├── src/
+│   │   ├── config/                # Worker 配置
 │   │   ├── index.ts               # Hono 入口，注册路由 + 中间件
 │   │   ├── middleware/
 │   │   │   ├── auth.ts            # Bearer Secret 鉴权
@@ -44,6 +45,9 @@ agent/
 │   │   │   ├── message.ts         # 消息批量写入/查询/清空
 │   │   │   ├── memory.ts          # 记忆 CRUD + 语义搜索
 │   │   │   ├── document.ts        # 文档上传/列表/搜索/重新索引
+│   │   │   ├── checkpoint.ts      # LangGraph checkpoint
+│   │   │   ├── audit-log.ts       # 审计日志
+│   │   │   ├── tool-metrics.ts    # 工具指标
 │   │   │   └── openapi.ts         # GET /openapi.json
 │   │   ├── repositories/          # D1 数据访问层
 │   │   ├── services/              # 业务服务（embedding, index-job）
@@ -57,8 +61,10 @@ agent/
 │   │   ├── agents/
 │   │   │   ├── chat-agent.ts       # 对话 Agent（ChatOpenAI 封装）
 │   │   │   ├── tool-agent.ts       # 工具调用 Agent
+│   │   │   ├── react-policy.ts     # ReAct 策略中间件
 │   │   │   ├── deadline.ts         # Agent 执行超时控制
-│   │   │   └── response-handler.ts # 响应格式化处理
+│   │   │   ├── response-handler.ts # 响应格式化处理
+│   │   │   └── index.ts            # Agent 导出
 │   │   ├── services/
 │   │   │   └── index.ts            # Service Layer（业务编排）
 │   │   ├── commands/
@@ -81,6 +87,7 @@ agent/
 │   │   │   ├── weather.ts          # 天气查询
 │   │   │   ├── web-search.ts       # 联网搜索
 │   │   │   ├── web-read.ts         # 网页读取
+│   │   │   ├── web-extract.ts      # 网页正文提取
 │   │   │   ├── file-read.ts        # 文件读取
 │   │   │   ├── calculator.ts       # 安全计算
 │   │   │   ├── knowledge.ts        # 知识库检索
@@ -88,7 +95,8 @@ agent/
 │   │   │   ├── memory-user.ts      # 用户长期记忆（读写）
 │   │   │   └── observability.ts    # 可观测性（审计日志）
 │   │   ├── clients/
-│   │   │   └── memory_gateway.ts   # Cloudflare Service HTTP 客户端
+│   │   │   ├── memory_gateway.ts   # Cloudflare Service HTTP 客户端
+│   │   │   └── schemas.ts          # 客户端数据模型
 │   │   ├── repositories/           # 仓储层（Cloudflare + InMemory）
 │   │   ├── api/
 │   │   │   ├── routes/
@@ -99,7 +107,9 @@ agent/
 │   │   │   │   ├── tools.ts
 │   │   │   │   └── images.ts       # 图片生成
 │   │   │   ├── middleware/
+│   │   │   │   ├── auth.ts         # Bearer 鉴权
 │   │   │   │   └── error.ts        # 统一错误处理
+│   │   │   ├── sse.ts              # SSE 编码
 │   │   │   └── index.ts            # Fastify 应用入口
 │   │   ├── profile/
 │   │   │   ├── index.ts            # UserProfile / Memory / QARecord 模型
@@ -117,7 +127,8 @@ agent/
 ├── py-langgraph/              # Python 版：LangGraph 显式图编排
 │   ├── src/
 │   │   ├── agents/
-│   │   │   ├── base.py            # 通用图构建基类（AgentState, get_llm）
+│   │   │   ├── graph_agents.py    # StateGraph Agent 图构建
+│   │   │   ├── react_policy.py   # ReAct 策略和状态限制
 │   │   │   ├── deadline.py        # Agent 执行超时控制
 │   │   │   └── response_handler.py # 响应格式化处理
 │   │   ├── services/
@@ -137,8 +148,9 @@ agent/
 │   │   │   ├── __init__.py        # 工具统一导出
 │   │   │   ├── weather.py         # 天气查询
 │   │   │   ├── search.py          # 联网搜索
-│   │   │   ├── fetcher.py         # 网页读取
-│   │   │   ├── file_reader.py     # 文件读取
+│   │   │   ├── web_read.py        # 网页读取
+│   │   │   ├── web_extract.py     # 网页正文提取
+│   │   │   ├── file_read.py       # 文件读取
 │   │   │   ├── calculator.py      # 安全计算
 │   │   │   ├── knowledge.py       # 知识库检索
 │   │   │   ├── memory_session.py  # 会话记忆检索
@@ -162,11 +174,14 @@ agent/
 │   │   │   │   ├── stream.py
 │   │   │   │   ├── tools.py
 │   │   │   │   └── images.py      # 图片生成
+│   │   │   ├── auth.py            # Bearer 鉴权
+│   │   │   ├── request_logging.py # 请求日志
+│   │   │   ├── sse.py             # SSE 编码
 │   │   │   └── main.py            # FastAPI 应用入口
 │   │   ├── prompts/
 │   │   │   └── system.py          # Prompt 模板
 │   │   ├── memory/
-│   │   │   └── __init__.py        # 记忆模块（LangGraph Checkpoint 由图层管理）
+│   │   │   └── d1_checkpointer.py # D1 checkpoint 适配
 │   │   └── config/
 │   │       └── settings.py        # 环境变量配置（Pydantic Settings）
 │   ├── pyproject.toml
@@ -177,13 +192,8 @@ agent/
 │   ├── .gitignore
 │   └── .env.example
 │
-├── contracts/
-│   └── tools/
-│       ├── context.schema.json    # 工具上下文 Schema
-│       ├── error.schema.json      # 工具错误 Schema
-│       └── manifest.schema.json   # 工具清单 Schema
-│
-├── docker-compose.yml      # 共享基础设施（Postgres + Qdrant）
+├── docker-compose.yml      # ts-agent、py-agent 两个 profile
+├── .env.example            # Compose 环境变量示例
 └── README.md
 ```
 
