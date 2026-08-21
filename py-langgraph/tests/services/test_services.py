@@ -225,7 +225,7 @@ class TestAgentService:
         class FakeAgent:
             async def astream_events(self, *_args, **_kwargs):
                 yield {
-                    "event": "on_chain_end",
+                    "event": "on_chat_model_end",
                     "data": {
                         "output": {
                             "messages": [
@@ -249,6 +249,42 @@ class TestAgentService:
         ]
 
         assert events == [{"type": "text", "text": "抱歉，我没有理解您的问题。"}]
+
+    @pytest.mark.asyncio
+    async def test_stream_extracts_final_ai_answer_after_tool_call(self, monkeypatch):
+        """A final AI message after a tool call must be exposed to the client."""
+        from src.agents import graph_agents
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {
+                    "event": "on_chain_end",
+                    "data": {
+                        "output": {
+                            "messages": [
+                                HumanMessage(content="深圳南山有什么好吃的和好玩的"),
+                                ToolMessage(
+                                    content="南山公园、海上世界",
+                                    tool_call_id="call-travel",
+                                ),
+                                AIMessage(content="可以安排南山公园和海上世界两天行程。"),
+                            ]
+                        }
+                    },
+                }
+
+        conversation = ConversationService.create("travel plan stream")
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(
+                conversation.id, "深圳南山有什么好吃的和好玩的"
+            )
+        ]
+
+        assert "".join(event["text"] for event in events) == "可以安排南山公园和海上世界两天行程。"
 
     @pytest.mark.asyncio
     async def test_stream_treats_whitespace_around_xml_as_empty(self, monkeypatch):

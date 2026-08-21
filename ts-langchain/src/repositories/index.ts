@@ -42,6 +42,12 @@ const inMemoryConversations = new Map<string, ConversationData>();
 const inMemoryMessages = new Map<string, MessageData[]>();
 const inMemoryMemories = new Map<string, MemoryData[]>();
 
+// 生成单调递增的 ISO 时间戳，避免同一毫秒内更新被误判为未变化。
+function nextIsoTimestamp(previous?: string): string {
+  const previousMs = previous ? Date.parse(previous) : 0;
+  return new Date(Math.max(Date.now(), previousMs + 1)).toISOString();
+}
+
 // 构建进程内仓储，供关闭 Cloudflare 记忆模式时使用。
 const inMemoryRepositories: Repositories = {
   profile: {
@@ -65,7 +71,7 @@ const inMemoryRepositories: Repositories = {
         ...profile,
         name: name ?? profile.name,
         preferences_json: preferences ? JSON.stringify(preferences) : profile.preferences_json,
-        updated_at: new Date().toISOString(),
+        updated_at: nextIsoTimestamp(profile.updated_at),
       };
       inMemoryProfiles.set(userId, updated);
       return updated;
@@ -198,7 +204,7 @@ const inMemoryRepositories: Repositories = {
         normalized_content: content.toLowerCase(),
         category: (changes.category ?? current.category) as MemoryData["category"],
         importance: changes.importance ?? current.importance,
-        updated_at: new Date().toISOString(),
+        updated_at: nextIsoTimestamp(current.updated_at),
       };
       memories[index] = updated;
       return updated;
@@ -209,7 +215,7 @@ const inMemoryRepositories: Repositories = {
       const memory = memories.find((item) => item.id === memoryId && item.status === "active");
       if (!memory) return false;
       memory.status = "deleted";
-      memory.updated_at = new Date().toISOString();
+      memory.updated_at = nextIsoTimestamp(memory.updated_at);
       return true;
     },
     // 清空指定用户的进程内长期记忆。

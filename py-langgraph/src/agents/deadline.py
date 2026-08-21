@@ -23,13 +23,15 @@ class AgentDeadline:
             tool_timeout_ms or settings.agent_deadline_with_tools_ms
         ) / 1000
         self._timeout: asyncio.Timeout | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._started_at = 0.0
         self._token: Token[AgentDeadline | None] | None = None
         self._tool_budget_enabled = False
 
     # 进入当前上下文
     async def __aenter__(self) -> Self:
-        self._started_at = asyncio.get_running_loop().time()
+        self._loop = asyncio.get_running_loop()
+        self._started_at = self._loop.time()
         self._timeout = asyncio.timeout_at(self._started_at + self._chat_timeout_seconds)
         await self._timeout.__aenter__()
         self._token = _active_deadline.set(self)
@@ -49,7 +51,28 @@ class AgentDeadline:
         if self._tool_budget_enabled or self._timeout is None:
             return
         self._tool_budget_enabled = True
-        self._timeout.reschedule(self._started_at + self._tool_timeout_seconds)
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if self._loop is not None and current_loop is not self._loop:
+            try:
+                self._loop.call_soon_threadsafe(self._reschedule_tool_timeout)
+            except RuntimeError:
+                # 事件循环已关闭时，保持原有截止时间并让调用自然结束。
+                return
+            return
+        self._reschedule_tool_timeout()
+
+    # 在创建 Timeout 的事件循环中安全调整工具阶段截止时间。
+    def _reschedule_tool_timeout(self) -> None:
+        if self._timeout is None or self._loop is None or self._loop.is_closed():
+            return
+        try:
+            self._timeout.reschedule(self._started_at + self._tool_timeout_seconds)
+        except (RuntimeError, ValueError):
+            # 请求已退出或 Timeout 已失效时无需再次调整预算。
+            return
 
 
 _active_deadline: ContextVar[AgentDeadline | None] = ContextVar(

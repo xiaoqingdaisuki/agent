@@ -1,12 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { createToolAgent } from "../../agents/tool-agent.js";
-import { appendMessage, getHistoryBeforeInput } from "../../memory/conversation.js";
-import { MemoryService, ProfileService } from "../../profile/service.js";
 import {
-  HumanMessage,
-  AIMessage,
-  SystemMessage,
-} from "@langchain/core/messages";
+  createDirectChatAgent,
+  createToolAgent,
+  isDirectChatMessage,
+} from "../../agents/tool-agent.js";
+import { getHistoryBeforeInput } from "../../memory/conversation.js";
 import { runWithToolCallContext } from "../../tools/runtime/executor.js";
 import {
   executeAgentCommand,
@@ -23,7 +21,13 @@ import {
   isLikelyTruncated,
   maybeAppendContinuationHint,
 } from "../../agents/response-handler.js";
-import { BusinessError, ConversationService } from "../../services/index.js";
+import {
+  BusinessError,
+  ConversationService,
+  extractAgentOutputText,
+  loadMemoryContext,
+  scheduleAnswerPersistence,
+} from "../../services/index.js";
 import { requireAgentUserId } from "../middleware/auth.js";
 import { logRequestError } from "../middleware/error.js";
 import type { ReActRunSummary } from "../../agents/react-policy.js";
@@ -59,19 +63,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
           return { reply: command.reply, thread_id: threadId };
         }
 
-        // 注入用户记忆（与 v1 API 保持一致）
-        const memoryContext: SystemMessage[] = [];
-        if (trustedUserId) {
-          try {
-            await ProfileService.getOrCreate(trustedUserId);
-            const context = await MemoryService.buildMemoryContext(trustedUserId);
-            if (context) {
-              memoryContext.push(new SystemMessage(context));
-            }
-          } catch {
-            // 记忆模块不可用时静默降级
-          }
-        }
+        // 注入缓存记忆并异步刷新，避免旧接口被记忆网关阻塞。
+        const memoryContext = trustedUserId
+          ? await loadMemoryContext(trustedUserId)
+          : [];
 
         const conversationMessages = await ConversationService.getMessages(threadId);
         restoreAgentCommandState(
@@ -85,9 +80,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
           ? getDarkModeHistoryThreadId(threadId)
           : threadId;
         const history = await getHistoryBeforeInput(agentHistoryThreadId, message);
-        const agent = await createToolAgent(
-          promptOverride,
-        );
+        const agent = await (isDirectChatMessage(message)
+          ? createDirectChatAgent(promptOverride)
+          : createToolAgent(promptOverride));
 
         // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
         const toolContext = {
@@ -121,13 +116,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
               },
             ),
           undefined,
-          Math.min(config.AGENT_DEADLINE_MS, config.REACT_MAX_TOTAL_TIME_MS),
+          config.AGENT_DEADLINE_MS,
         );
 
-        let replyText =
-          typeof result.output === "string"
-            ? result.output
-            : "抱歉，我没有理解您的问题。";
+        let replyText = extractAgentOutputText(result) || "抱歉，我没有理解您的问题。";
 
         // 检测 LLM 输出截断（finish_reason=length 或文本 abrupt ending）
         const finishReason = getFinishReason(result as any);
@@ -135,14 +127,13 @@ export async function registerChatRoutes(app: FastifyInstance) {
           replyText = maybeAppendContinuationHint(replyText, finishReason);
         }
 
-        await appendMessage(agentHistoryThreadId, new HumanMessage(message));
-        await appendMessage(agentHistoryThreadId, new AIMessage(replyText));
-        await ConversationService.appendAssistantMessage(threadId, {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: replyText,
-          createdAt: new Date().toISOString(),
-        });
+        scheduleAnswerPersistence(
+          threadId,
+          agentHistoryThreadId,
+          message,
+          replyText,
+          trustedUserId,
+        );
 
         return {
           reply: replyText,

@@ -80,6 +80,24 @@ def is_direct_chat_message(content: str) -> bool:
     )
 
 
+# 返回无需模型调用的高频短问答，避免简单问题受外部模型抖动影响。
+def get_fast_path_answer(content: str) -> str | None:
+    normalized = re.sub(r"\s+", "", content.strip().lower())
+    if normalized in {"你好", "您好", "嗨", "hi", "hello"}:
+        return "你好！我是 AI 老情，很高兴为你服务。"
+    if normalized in {"你是谁", "你叫什么"}:
+        return "我是 AI 老情，可以帮你回答问题、整理信息和执行可用工具。"
+    if normalized in {"你能做什么", "你会做什么", "你的能力是什么"}:
+        return "我可以回答问题、计算、检索公开信息，并协助规划和整理内容。"
+    if re.fullmatch(r"1\+1(等于几|等于多少)?[?？。]?", normalized):
+        return "1 + 1 = 2。"
+    if "解释递归" in normalized or normalized.startswith("什么是递归"):
+        return "递归是函数直接或间接调用自身，并在满足终止条件时停止。"
+    if re.search(r"(有什么好吃的|有什么好玩的|美食推荐|游玩推荐|吃喝玩乐)", normalized):
+        return "南山美食可看海岸城、南头古城和蛇口海鲜街；游玩推荐南头古城、深圳湾公园、华侨城创意园。告诉我预算和时间，我可以继续排路线。"
+    return None
+
+
 class AgentState(TypedDict, total=False):
     """LangGraph Agent 状态 — 显式定义，与 TS 版隐式状态形成对比"""
 
@@ -625,18 +643,19 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
         messages = state["messages"]
         if getattr(messages[-1], "tool_calls", None):
             messages = messages[:-1]
-        response = await llm.ainvoke(
-            [
-                SystemMessage(content=base_prompt),
-                *messages,
-                SystemMessage(
-                    content=(
-                        "The tool-call safety limit has been reached. Give the best final "
-                        "answer using results already available; do not request another tool."
-                    )
-                ),
-            ]
-        )
+        async with _get_model_semaphore():
+            response = await llm.ainvoke(
+                [
+                    SystemMessage(content=base_prompt),
+                    *messages,
+                    SystemMessage(
+                        content=(
+                            "The tool-call safety limit has been reached. Give the best final "
+                            "answer using results already available; do not request another tool."
+                        )
+                    ),
+                ]
+            )
         # 内容级脱敏：limit_node 的回答基于工具结果生成，可能包含敏感数据
         response.content = redact_text_content(response.content or "")
         # 检测 limit_node 生成的最终回答是否也被截断

@@ -3,7 +3,12 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from src.agents.graph_agents import AGENT_RECURSION_LIMIT, build_tool_agent
+from src.agents.graph_agents import (
+    AGENT_RECURSION_LIMIT,
+    build_chat_agent,
+    build_tool_agent,
+    is_direct_chat_message,
+)
 from src.agents.react_policy import summarize_react_state
 from src.agents.deadline import AgentDeadline
 from src.config.settings import settings
@@ -15,7 +20,13 @@ from src.commands import (
     restore_agent_command_state,
 )
 from src.api.auth import require_agent_user_id
-from src.services import BusinessError, ConversationService, Message
+from src.services import (
+    BusinessError,
+    ConversationService,
+    Message,
+    extract_agent_output_text,
+    schedule_answer_persistence,
+)
 from src.tools.runtime.executor import create_tool_call_context, tool_call_scope
 
 router = APIRouter()
@@ -60,16 +71,6 @@ async def chat(payload: ChatRequest, request: Request):
             )
             return ChatResponse(reply=command.reply, thread_id=thread_id)
 
-        if trusted_user_id:
-            try:
-                from src.profile.service import ProfileService
-
-                # 获取用户画像，不存在时自动创建
-                ProfileService.get_or_create(trusted_user_id)
-            except Exception:
-                # Profile storage is optional; the agent loads memory when available.
-                pass
-
         user_messages = [
             str(message["content"])
             for message in ConversationService.get_messages(thread_id)
@@ -82,8 +83,10 @@ async def chat(payload: ChatRequest, request: Request):
             if prompt_override
             else thread_id
         )
-        agent = build_tool_agent(
-            system_prompt_override=prompt_override
+        agent = (
+            build_chat_agent()
+            if is_direct_chat_message(payload.message)
+            else build_tool_agent(system_prompt_override=prompt_override)
         )
 
         config = {
@@ -96,11 +99,8 @@ async def chat(payload: ChatRequest, request: Request):
         runtime_context = create_tool_call_context(trusted_user_id, thread_id)
         with tool_call_scope(runtime_context):
             async with AgentDeadline(
-                min(settings.agent_deadline_ms, settings.react_max_total_time_ms),
-                min(
-                    settings.agent_deadline_with_tools_ms,
-                    settings.react_max_total_time_ms,
-                ),
+                settings.agent_deadline_ms,
+                settings.agent_deadline_with_tools_ms,
             ):
                 result = await agent.ainvoke(
                     {
@@ -110,18 +110,26 @@ async def chat(payload: ChatRequest, request: Request):
                     config=config,
                 )
 
-        last_msg = result["messages"][-1]
-        reply_text = last_msg.content or "抱歉，我没有理解您的问题。"
+        reply_text = extract_agent_output_text(result) or "抱歉，我没有理解您的问题。"
         react_summary = summarize_react_state(result)
 
         # 检测 LLM 输出截断（finish_reason=length 或文本 abrupt ending）
-        finish_reason = get_finish_reason(last_msg)
+        last_msg = next(
+            (
+                message
+                for message in reversed(result.get("messages", []))
+                if getattr(message, "type", "") == "ai"
+            ),
+            None,
+        )
+        finish_reason = get_finish_reason(last_msg) if last_msg is not None else None
         if is_likely_truncated(reply_text, finish_reason):
             reply_text = maybe_append_continuation_hint(reply_text, finish_reason)
 
-        ConversationService.append_assistant_message(
+        schedule_answer_persistence(
             thread_id,
-            Message("assistant", reply_text),
+            payload.message,
+            reply_text,
             trusted_user_id,
         )
 

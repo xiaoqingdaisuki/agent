@@ -38,6 +38,14 @@ def test_openai_gateway_root_is_normalized_to_v1():
     assert settings.openai_base_url == "https://llm.example.com/v1"
 
 
+def test_background_task_limits_have_safe_defaults():
+    """后台任务并发和队列必须有明确上限，避免高并发耗尽线程池。"""
+    settings = Settings(_env_file=None)
+
+    assert settings.background_task_concurrency == 4
+    assert settings.background_task_queue_max == 200
+
+
 def test_memory_disabled_uses_singleton_in_memory_storage(monkeypatch):
     from langgraph.checkpoint.memory import MemorySaver
     import src.memory as memory_module

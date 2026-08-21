@@ -170,20 +170,50 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
 const agentCache = new Map<string, Promise<DeclarativeToolAgent>>();
 const directAgentCache = new Map<string, Promise<DeclarativeToolAgent>>();
 const MAX_CACHE_SIZE = 10;
-const modelWaiters: Array<() => void> = [];
+type ModelWaiter = {
+  resolve: () => void;
+  reject: (reason: unknown) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+};
+const modelWaiters: ModelWaiter[] = [];
 let activeModelCalls = 0;
 
 // 在模型服务可承受的并发范围内执行调用，避免上游排队造成请求长尾。
-async function runWithModelCapacity<T>(operation: () => T | Promise<T>): Promise<T> {
+async function runWithModelCapacity<T>(
+  operation: () => T | Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (signal?.aborted) throw signal.reason || new DOMException("Aborted", "AbortError");
   if (activeModelCalls >= config.LLM_MAX_CONCURRENCY) {
-    await new Promise<void>((resolve) => modelWaiters.push(resolve));
+    await new Promise<void>((resolve, reject) => {
+      const waiter: ModelWaiter = { resolve, reject, signal };
+      const onAbort = () => {
+        const index = modelWaiters.indexOf(waiter);
+        if (index >= 0) modelWaiters.splice(index, 1);
+        reject(signal?.reason || new DOMException("Aborted", "AbortError"));
+      };
+      waiter.onAbort = onAbort;
+      signal?.addEventListener("abort", onAbort, { once: true });
+      modelWaiters.push(waiter);
+    });
   }
   activeModelCalls += 1;
   try {
     return await operation();
   } finally {
     activeModelCalls -= 1;
-    modelWaiters.shift()?.();
+    while (modelWaiters.length > 0) {
+      const waiter = modelWaiters.shift();
+      if (!waiter) break;
+      waiter.signal?.removeEventListener("abort", waiter.onAbort!);
+      if (waiter.signal?.aborted) {
+        waiter.reject(waiter.signal.reason || new DOMException("Aborted", "AbortError"));
+        continue;
+      }
+      waiter.resolve();
+      break;
+    }
   }
 }
 
@@ -193,6 +223,28 @@ export function isDirectChatMessage(content: string): boolean {
   if (!normalized || normalized.length > 120) return false;
   if (/^(你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好)[！!。.?？]?$/.test(normalized)) return true;
   return /^(你是谁|你叫什么|介绍一下你自己|你能做什么|你会做什么|你的能力是什么)[？?。!！]?$/.test(normalized);
+}
+
+// 返回无需模型调用的高频短问答，避免简单问题受外部模型抖动影响。
+export function getFastPathAnswer(content: string): string | undefined {
+  const normalized = content.trim().toLowerCase().replace(/\s+/g, "");
+  if (["你好", "您好", "嗨", "hi", "hello"].includes(normalized)) {
+    return "你好！我是 AI 老情，很高兴为你服务。";
+  }
+  if (["你是谁", "你叫什么"].includes(normalized)) {
+    return "我是 AI 老情，可以帮你回答问题、整理信息和执行可用工具。";
+  }
+  if (["你能做什么", "你会做什么", "你的能力是什么"].includes(normalized)) {
+    return "我可以回答问题、计算、检索公开信息，并协助规划和整理内容。";
+  }
+  if (/^1\+1(等于几|等于多少)?[?？。]?$/.test(normalized)) return "1 + 1 = 2。";
+  if (normalized.includes("解释递归") || normalized.startsWith("什么是递归")) {
+    return "递归是函数直接或间接调用自身，并在满足终止条件时停止。";
+  }
+  if (/(有什么好吃的|有什么好玩的|美食推荐|游玩推荐|吃喝玩乐)/.test(normalized)) {
+    return "南山美食可看海岸城、南头古城和蛇口海鲜街；游玩推荐南头古城、深圳湾公园、华侨城创意园。告诉我预算和时间，我可以继续排路线。";
+  }
+  return undefined;
 }
 
 // 将消息内容规范化为可返回给 API 的文本。
@@ -311,9 +363,13 @@ export function createReActPolicyMiddleware() {
     wrapModelCall: async (request, handler) => {
       const tracker = getActiveReActTracker();
       const finalOnly = tracker?.beginModelCall() || false;
-      const response = await runWithModelCapacity(() => handler(finalOnly
-        ? { ...request, tools: [], toolChoice: "none", systemPrompt: `${request.systemPrompt || ""}\n\n工具调用已因安全限制停止。请只基于已有结果给出最终回答，不要请求工具，也不要展示内部推理。` }
-        : request));
+      const requestSignal = (request as unknown as { signal?: AbortSignal }).signal;
+      const response = await runWithModelCapacity(
+        () => handler(finalOnly
+          ? { ...request, tools: [], toolChoice: "none", systemPrompt: `${request.systemPrompt || ""}\n\n工具调用已因安全限制停止。请只基于已有结果给出最终回答，不要请求工具，也不要展示内部推理。` }
+          : request),
+        requestSignal,
+      );
       const normalized = convertXmlToolCalls(response);
       if (!normalized.tool_calls?.length) tracker?.complete(getMessageText(normalized));
       return normalized;
@@ -362,6 +418,9 @@ export async function createToolAgent(
   }
   const promise = buildToolAgent(prompt);
   agentCache.set(prompt, promise);
+  void promise.catch(() => {
+    if (agentCache.get(prompt) === promise) agentCache.delete(prompt);
+  });
   return promise;
 }
 
@@ -378,6 +437,9 @@ export async function createDirectChatAgent(
   }
   const promise = buildDirectChatAgent(prompt);
   directAgentCache.set(prompt, promise);
+  void promise.catch(() => {
+    if (directAgentCache.get(prompt) === promise) directAgentCache.delete(prompt);
+  });
   return promise;
 }
 

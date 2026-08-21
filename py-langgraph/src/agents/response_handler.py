@@ -54,6 +54,8 @@ def is_likely_truncated(text: str, finish_reason: str | None = None) -> bool:
     """
     if finish_reason in ("length", "MAX_TOKENS"):
         return True
+    if finish_reason:
+        return False
 
     if not text or len(text) < 100:
         return False

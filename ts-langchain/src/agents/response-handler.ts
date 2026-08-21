@@ -68,6 +68,9 @@ export function isLikelyTruncated(
   if (finishReason === "length" || finishReason === "MAX_TOKENS") {
     return true;
   }
+  if (finishReason) {
+    return false;
+  }
 
   if (!text || text.length < 100) {
     return false;

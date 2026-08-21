@@ -25,10 +25,25 @@ STREAM_FALLBACK_CHUNK_SIZE = 8
 STREAM_FALLBACK_INTERVAL_SECONDS = 0.018
 _background_tasks: set[asyncio.Task] = set()
 _background_chains: dict[str, asyncio.Task] = {}
+_background_semaphore: asyncio.Semaphore | None = None
+_background_semaphore_loop = None
+
+
+# 获取当前事件循环的后台任务并发闸门，避免持久化任务耗尽线程池。
+def _get_background_semaphore() -> asyncio.Semaphore:
+    global _background_semaphore, _background_semaphore_loop
+    loop = asyncio.get_running_loop()
+    if _background_semaphore is None or _background_semaphore_loop is not loop:
+        _background_semaphore = asyncio.Semaphore(settings.background_task_concurrency)
+        _background_semaphore_loop = loop
+    return _background_semaphore
 
 
 # 将同步持久化工作放入线程后台执行，避免阻塞 SSE 事件循环。
 def schedule_background_task(label: str, callback, *args) -> None:
+    if len(_background_tasks) >= settings.background_task_queue_max:
+        logger.warning("Background task queue is full; skipped label=%s", label)
+        return
     previous = _background_chains.get(label)
 
     # 串行执行同一会话的后台写入，避免快速连续请求乱序落库。
@@ -39,7 +54,8 @@ def schedule_background_task(label: str, callback, *args) -> None:
         except Exception:
             pass
         try:
-            await asyncio.to_thread(callback, *args)
+            async with _get_background_semaphore():
+                await asyncio.to_thread(callback, *args)
         except Exception:
             logger.exception("Background task failed | label=%s", label)
 
@@ -64,7 +80,7 @@ async def flush_background_tasks() -> None:
 
 # 从 LangChain 消息块中提取可展示的文本增量。
 def get_stream_text(chunk) -> str:
-    content = getattr(chunk, "content", chunk)
+    content = chunk.get("content", chunk) if isinstance(chunk, dict) else getattr(chunk, "content", chunk)
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
@@ -74,6 +90,35 @@ def get_stream_text(chunk) -> str:
         for part in content
         if isinstance(part, (str, dict))
     )
+
+
+# 从 LangChain 链路结束事件中提取最终 AI 消息，兼容 output/output.messages 两种结构。
+def extract_agent_output_text(output) -> str:
+    if isinstance(output, str):
+        return strip_xml_tool_stream(output)
+    if not isinstance(output, dict):
+        return ""
+    nested = output.get("output")
+    if isinstance(nested, str):
+        return strip_xml_tool_stream(nested)
+    if isinstance(nested, dict):
+        text = extract_agent_output_text(nested)
+        if text:
+            return text
+    messages = output.get("messages")
+    if isinstance(messages, list):
+        for message in reversed(messages):
+            message_type = (
+                message.get("type", "")
+                if isinstance(message, dict)
+                else getattr(message, "type", "")
+            )
+            if message_type in {"human", "tool"}:
+                continue
+            text = get_stream_text(message)
+            if text.strip():
+                return strip_xml_tool_stream(text)
+    return strip_xml_tool_stream(get_stream_text(output))
 
 
 XML_TOOL_STREAM_MARKERS = ("<invoke", "<function=")
@@ -819,6 +864,7 @@ class AgentService:
                 AGENT_RECURSION_LIMIT,
                 build_chat_agent,
                 build_tool_agent,
+                get_fast_path_answer,
                 is_direct_chat_message,
             )
             from src.agents.deadline import AgentDeadline
@@ -839,6 +885,11 @@ class AgentService:
                 reply = Message("assistant", command.reply)
                 ConversationService.append_assistant_message(conversation_id, reply, user_id or "")
                 return reply
+
+            fast_answer = get_fast_path_answer(content)
+            if fast_answer and (user_id or not any(token in content for token in ("有什么好吃的", "有什么好玩的", "美食推荐", "游玩推荐", "吃喝玩乐"))):
+                schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
+                return Message("assistant", fast_answer)
 
 
             conversation = ConversationService.get(conversation_id)
@@ -868,11 +919,8 @@ class AgentService:
             runtime_context = create_tool_call_context(user_id or "", conversation_id)
             deadline_args = (
                 (
-                    min(settings.agent_deadline_ms, settings.react_max_total_time_ms),
-                    min(
-                        settings.agent_deadline_with_tools_ms,
-                        settings.react_max_total_time_ms,
-                    ),
+                    settings.agent_deadline_ms,
+                    settings.agent_deadline_with_tools_ms,
                 )
                 if not conversation or conversation.mode != "knowledge"
                 else ()
@@ -899,10 +947,17 @@ class AgentService:
                             config=config,
                         )
 
-            reply_content = result["messages"][-1].content or "抱歉，我没有理解您的问题。"
+            reply_content = extract_agent_output_text(result) or "抱歉，我没有理解您的问题。"
 
             # 检测 LLM 输出截断
-            last_ai_msg = result["messages"][-1]
+            last_ai_msg = next(
+                (
+                    message
+                    for message in reversed(result.get("messages", []))
+                    if getattr(message, "type", "") == "ai"
+                ),
+                result["messages"][-1],
+            )
             finish_reason = get_finish_reason(last_ai_msg)
             if is_likely_truncated(reply_content, finish_reason):
                 reply_content = maybe_append_continuation_hint(reply_content, finish_reason)
@@ -959,6 +1014,7 @@ class AgentService:
                 AGENT_RECURSION_LIMIT,
                 build_chat_agent,
                 build_tool_agent,
+                get_fast_path_answer,
                 is_direct_chat_message,
             )
             from src.agents.deadline import AgentDeadline
@@ -978,6 +1034,12 @@ class AgentService:
                     user_id or "",
                 )
                 yield {"type": "text", "text": command.reply}
+                return
+
+            fast_answer = get_fast_path_answer(content)
+            if fast_answer and (user_id or not any(token in content for token in ("有什么好吃的", "有什么好玩的", "美食推荐", "游玩推荐", "吃喝玩乐"))):
+                schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
+                yield {"type": "text", "text": fast_answer}
                 return
 
 
@@ -1015,13 +1077,12 @@ class AgentService:
                                         full_answer += delta
                                         emitted_text = True
                                         yield {"type": "text", "text": delta}
-                                elif event.get("event") == "on_chain_end" and not full_answer:
+                                elif (
+                                    event.get("event") in {"on_chain_end", "on_chat_model_end"}
+                                    and not full_answer
+                                ):
                                     output = event.get("data", {}).get("output", {})
-                                    messages = output.get("messages", []) if isinstance(output, dict) else []
-                                    if messages:
-                                        candidate = getattr(messages[-1], "content", "")
-                                        if isinstance(candidate, str):
-                                            full_answer = candidate
+                                    full_answer = extract_agent_output_text(output)
                         else:
                             result = await rag_agent.ainvoke(rag_input)
                             full_answer = result["messages"][-1].content
@@ -1057,11 +1118,8 @@ class AgentService:
 
             with tool_call_scope(runtime_context):
                 async with AgentDeadline(
-                    min(settings.agent_deadline_ms, settings.react_max_total_time_ms),
-                    min(
-                        settings.agent_deadline_with_tools_ms,
-                        settings.react_max_total_time_ms,
-                    ),
+                    settings.agent_deadline_ms,
+                    settings.agent_deadline_with_tools_ms,
                 ):
                     if hasattr(agent, "astream_events"):
                         async for event in agent.astream_events(
@@ -1104,17 +1162,12 @@ class AgentService:
                                     "status": "failed",
                                     "call_id": event.get("run_id", ""),
                                 }
-                            elif event_name == "on_chain_end" and not full_answer:
+                            elif (
+                                event_name in {"on_chain_end", "on_chat_model_end"}
+                                and not full_answer
+                            ):
                                 output = event.get("data", {}).get("output", {})
-                                messages = output.get("messages", []) if isinstance(output, dict) else []
-                                for message in reversed(messages):
-                                    # 工具节点的 ToolMessage 不是用户可见答案，必须等待最终 AIMessage。
-                                    if getattr(message, "type", "") != "ai":
-                                        continue
-                                    candidate = getattr(message, "content", "")
-                                    if isinstance(candidate, str):
-                                        full_answer = strip_xml_tool_stream(candidate)
-                                    break
+                                full_answer = extract_agent_output_text(output)
                                 if isinstance(output, dict) and output.get("stop_reason"):
                                     from src.agents.react_policy import summarize_react_state
 

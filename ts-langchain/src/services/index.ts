@@ -11,6 +11,7 @@
 import {
   createDirectChatAgent,
   createToolAgent,
+  getFastPathAnswer,
   isDirectChatMessage,
 } from "../agents/tool-agent.js";
 import {
@@ -173,7 +174,7 @@ function refreshMemoryContext(userId: string): void {
 }
 
 // 返回缓存记忆并异步刷新，保证首 token 与 Gateway 可用性解耦。
-async function loadMemoryContext(userId: string): Promise<SystemMessage[]> {
+export async function loadMemoryContext(userId: string): Promise<SystemMessage[]> {
   refreshMemoryContext(userId);
   const context = memoryContextCache.get(userId) || "";
   return context ? [new SystemMessage(context)] : [];
@@ -181,6 +182,8 @@ async function loadMemoryContext(userId: string): Promise<SystemMessage[]> {
 
 // 从 LangChain 消息块中提取可展示的文本增量。
 function getStreamText(chunk: any): string {
+  if (typeof chunk === "string") return chunk;
+  if (typeof chunk?.text === "string") return chunk.text;
   const content = chunk?.content;
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -189,6 +192,62 @@ function getStreamText(chunk: any): string {
       typeof part === "string" ? part : typeof part?.text === "string" ? part.text : "",
     )
     .join("");
+}
+
+// 从 LangChain 链路结束事件中提取最终 AI 消息，兼容 output/output.messages 两种结构。
+export function extractAgentOutputText(output: unknown): string {
+  if (typeof output === "string") return stripXmlToolStream(output);
+  if (!output || typeof output !== "object") return "";
+  const candidate = output as Record<string, any>;
+  if (typeof candidate.output === "string") {
+    return stripXmlToolStream(candidate.output);
+  }
+  if (candidate.output && candidate.output !== output) {
+    const nested = extractAgentOutputText(candidate.output);
+    if (nested) return nested;
+  }
+  if (Array.isArray(candidate.messages)) {
+    for (const message of [...candidate.messages].reverse()) {
+      if (message?.type === "human" || message?.type === "tool") continue;
+      const text = getStreamText(message);
+      if (text.trim()) return stripXmlToolStream(text);
+    }
+  }
+  return stripXmlToolStream(getStreamText(candidate));
+}
+
+// 逐项读取异步流并绑定请求截止信号，避免上游不响应取消时连接无限悬挂。
+async function* iterateWithAbort<T>(
+  stream: AsyncIterable<T>,
+  signal: AbortSignal,
+): AsyncGenerator<T, void, unknown> {
+  const iterator = stream[Symbol.asyncIterator]();
+  try {
+    while (true) {
+      let onAbort: (() => void) | undefined;
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (signal.aborted) {
+          reject(signal.reason || new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        onAbort = () => {
+          signal.removeEventListener("abort", onAbort!);
+          reject(signal.reason || new DOMException("Aborted", "AbortError"));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      let next: IteratorResult<T>;
+      try {
+        next = await Promise.race([iterator.next(), abortPromise]);
+      } finally {
+        if (onAbort) signal.removeEventListener("abort", onAbort);
+      }
+      if (next.done) return;
+      yield next.value;
+    }
+  } finally {
+    void iterator.return?.();
+  }
 }
 
 const XML_TOOL_STREAM_MARKERS = ["<invoke", "<function="];
@@ -237,7 +296,7 @@ function stripXmlToolStream(text: string): string {
 }
 
 // 在回答生成后异步保存会话、历史和记忆，保证失败不影响已发送内容。
-function scheduleAnswerPersistence(
+export function scheduleAnswerPersistence(
   conversationId: string,
   agentHistoryThreadId: string,
   content: string,
@@ -757,6 +816,17 @@ export class AgentService {
         return reply;
       }
 
+      const fastAnswer = getFastPathAnswer(content);
+      if (fastAnswer && (userId || !/(有什么好吃的|有什么好玩的|美食推荐|游玩推荐|吃喝玩乐)/.test(content))) {
+        scheduleAnswerPersistence(conversationId, conversationId, content, fastAnswer, userId);
+        return {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: fastAnswer,
+          createdAt: new Date().toISOString(),
+        };
+      }
+
       await restoreCommandStateFromConversation(conversationId);
       const promptOverride = getAgentPromptOverride(conversationId, content);
       const agentHistoryThreadId = promptOverride
@@ -895,6 +965,13 @@ export class AgentService {
         return;
       }
 
+      const fastAnswer = getFastPathAnswer(content);
+      if (fastAnswer && (userId || !/(有什么好吃的|有什么好玩的|美食推荐|游玩推荐|吃喝玩乐)/.test(content))) {
+        scheduleAnswerPersistence(conversationId, conversationId, content, fastAnswer, userId);
+        yield { type: "text", text: fastAnswer };
+        return;
+      }
+
       await restoreCommandStateFromConversation(conversationId);
       const promptOverride = getAgentPromptOverride(conversationId, content);
       agentHistoryThreadId = promptOverride
@@ -942,12 +1019,9 @@ export class AgentService {
       } as const;
 
       const deadline = new AgentDeadline(
-        Math.min(config.AGENT_DEADLINE_MS, config.REACT_MAX_TOTAL_TIME_MS),
+        config.AGENT_DEADLINE_MS,
         requestSignal,
-        Math.min(
-          config.AGENT_DEADLINE_WITH_TOOLS_MS,
-          config.REACT_MAX_TOTAL_TIME_MS,
-        ),
+        config.AGENT_DEADLINE_WITH_TOOLS_MS,
       );
       const progress = new ToolProgressChannel();
       let reactSummary: ReActRunSummary | undefined;
@@ -979,7 +1053,10 @@ export class AgentService {
             })
           : null;
         if (eventStream) {
-          for await (const event of eventStream) {
+          for await (const event of iterateWithAbort(
+            eventStream as AsyncIterable<any>,
+            deadline.signal,
+          )) {
             if (event.event === "on_chat_model_stream") {
               const delta = getStreamText(event.data?.chunk);
               if (delta) {
@@ -1015,9 +1092,11 @@ export class AgentService {
                 status: "failed",
                 callId: event.run_id || "",
               };
-            } else if (!fullAnswer && event.event === "on_chain_end") {
-              const output = event.data?.output?.output;
-              if (typeof output === "string") fullAnswer = stripXmlToolStream(output);
+            } else if (
+              !fullAnswer &&
+              (event.event === "on_chain_end" || event.event === "on_chat_model_end")
+            ) {
+              fullAnswer = extractAgentOutputText(event.data?.output);
               const summary = event.data?.output?.react;
               if (summary) reactSummary = summary as ReActRunSummary;
             } else if (event.event === "on_chain_end") {
@@ -1035,7 +1114,7 @@ export class AgentService {
               }),
             ),
           );
-          for await (const chunk of stream as AsyncIterable<any>) {
+          for await (const chunk of iterateWithAbort(stream as AsyncIterable<any>, deadline.signal)) {
             if (chunk?.output) {
               fullAnswer = stripXmlToolStream(String(chunk.output));
               emittedText = true;

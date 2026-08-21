@@ -15,8 +15,10 @@ class Settings(BaseSettings):
     agent_deadline_with_tools_ms: int = 300000
     server_request_timeout_ms: int = 310000
     llm_timeout_ms: int = 30000
-    llm_max_retries: int = 1
-    llm_max_concurrency: int = 2
+    llm_max_retries: int = Field(default=1, ge=0, le=2)
+    llm_max_concurrency: int = Field(default=2, ge=1, le=32)
+    background_task_concurrency: int = Field(default=4, ge=1, le=32)
+    background_task_queue_max: int = Field(default=200, ge=1, le=1000)
     max_agent_iterations: int = 6
     react_max_steps: int = 8
     react_max_tool_calls: int = 6
