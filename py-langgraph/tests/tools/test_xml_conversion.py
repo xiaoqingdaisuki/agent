@@ -8,7 +8,7 @@ os.chdir(os.path.join(os.path.dirname(__file__), ".."))
 
 from langchain_core.messages import AIMessage
 
-from src.agents.base import _convert_xml_tool_calls
+from src.agents.graph_agents import _convert_xml_tool_calls
 
 # Build XML content using string concat to avoid literal XML patterns
 F_OPEN = chr(60) + "function=get_weather>"       # <

@@ -1,6 +1,7 @@
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
-from src.agents.react import (
+from src.agents.graph_agents import observe_node
+from src.agents.react_policy import (
     is_clarification,
     observation_from_tool_message,
     summarize_react_state,
@@ -46,3 +47,20 @@ def test_react_summary_and_clarification_detection():
     )
     assert summary["stop_reason"] == "ANSWER_COMPLETE"
     assert summary["tool_calls"] == 1
+
+
+def test_failed_tool_call_is_tracked_for_retry_limit():
+    state = {
+        "messages": [
+            AIMessage(
+                content="",
+                tool_calls=[{"id": "call-weather", "name": "weather.current", "args": {"city": "上海"}}],
+            ),
+            ToolMessage(content="Error: weather unavailable", tool_call_id="call-weather", name="weather.current"),
+        ],
+    }
+
+    update = observe_node(state)
+
+    signature = tool_call_signature("weather.current", {"city": "上海"})
+    assert update["react_failed_signatures"] == {signature: 1}

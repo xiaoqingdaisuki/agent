@@ -14,11 +14,12 @@
     "@fastify/cors": "^8.4",
     "@fastify/multipart": "^8.0.0",
     "@langchain/anthropic": "^0.1",
-    "@langchain/core": "^0.3",
-    "@langchain/openai": "^0.1",
+    "@langchain/classic": "^1.0.45",
+    "@langchain/core": "^1.2.9",
+    "@langchain/openai": "^1.5.10",
     "dotenv": "^16.3",
     "fastify": "^4.26",
-    "langchain": "^0.3",
+    "langchain": "^1.5.10",
     "zod": "^3.23"
   },
   "devDependencies": {

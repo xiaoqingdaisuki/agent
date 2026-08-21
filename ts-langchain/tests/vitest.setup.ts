@@ -7,6 +7,7 @@
 import { beforeEach, vi } from "vitest";
 
 process.env.AGENT_API_SECRET = "test-agent-secret";
+process.env.MEMORY_ENABLED = "true";
 
 // ============ Fake 数据存储 ============
 

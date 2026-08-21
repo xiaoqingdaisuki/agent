@@ -9,7 +9,7 @@
  * - 超时控制: 默认 10 秒
  */
 
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";

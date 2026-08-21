@@ -5,7 +5,7 @@
  * 拒绝: 任意代码执行、函数调用、属性访问
  */
 
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";

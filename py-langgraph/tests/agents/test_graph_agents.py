@@ -13,7 +13,7 @@ class TestBuildChatAgent:
             mock_llm.invoke.return_value = MagicMock(content="Hello!")
             MockLLM.return_value = mock_llm
 
-            from src.agents.base import build_chat_agent
+            from src.agents.graph_agents import build_chat_agent
             agent = build_chat_agent()
 
             assert agent is not None
@@ -28,7 +28,7 @@ class TestBuildToolAgent:
             mock_llm.invoke.return_value = MagicMock(content="Hello!", tool_calls=[])
             MockLLM.return_value = mock_llm
 
-            from src.agents.base import build_tool_agent
+            from src.agents.graph_agents import build_tool_agent
             agent = build_tool_agent()
 
             assert agent is not None

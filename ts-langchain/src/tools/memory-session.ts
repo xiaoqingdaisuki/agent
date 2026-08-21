@@ -5,7 +5,7 @@
  * 统一通过 Repository 层访问 Cloudflare Service。
  */
 
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";

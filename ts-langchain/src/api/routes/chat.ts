@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createToolAgent } from "../../agents/tool-agent.js";
 import { appendMessage, getHistoryBeforeInput } from "../../memory/conversation.js";
 import { MemoryService, ProfileService } from "../../profile/service.js";
@@ -26,13 +26,17 @@ import {
 import { BusinessError, ConversationService } from "../../services/index.js";
 import { requireAgentUserId } from "../middleware/auth.js";
 import { logRequestError } from "../middleware/error.js";
-import type { ReActRunSummary } from "../../agents/react.js";
+import type { ReActRunSummary } from "../../agents/react-policy.js";
+import { config } from "../../config/index.js";
 
 // 创建或注册 registerChatRoutes 所需的数据
 export async function registerChatRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
     "/chat",
-    async (request, reply) => {
+    async (
+      request: FastifyRequest<{ Body: { message: string; thread_id?: string; user_id?: string } }>,
+      reply: FastifyReply,
+    ) => {
       try {
         const { message, thread_id, user_id } = request.body;
         const trustedUserId = requireAgentUserId(request, user_id);
@@ -116,6 +120,8 @@ export async function registerChatRoutes(app: FastifyInstance) {
                   event.type === "started" && deadline.enableToolBudget(),
               },
             ),
+          undefined,
+          Math.min(config.AGENT_DEADLINE_MS, config.REACT_MAX_TOTAL_TIME_MS),
         );
 
         let replyText =

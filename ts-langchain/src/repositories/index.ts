@@ -45,6 +45,7 @@ const inMemoryMemories = new Map<string, MemoryData[]>();
 // 构建进程内仓储，供关闭 Cloudflare 记忆模式时使用。
 const inMemoryRepositories: Repositories = {
   profile: {
+    // 获取或创建进程内用户画像。
     async getOrCreate(userId, name = "") {
       const existing = inMemoryProfiles.get(userId);
       if (existing) return existing;
@@ -53,9 +54,11 @@ const inMemoryRepositories: Repositories = {
       inMemoryProfiles.set(userId, profile);
       return profile;
     },
+    // 获取进程内用户画像。
     async get(userId) {
       return inMemoryProfiles.get(userId) ?? null;
     },
+    // 更新进程内用户画像。
     async update(userId, name, preferences) {
       const profile = await this.getOrCreate(userId, name ?? "");
       const updated = {
@@ -69,6 +72,7 @@ const inMemoryRepositories: Repositories = {
     },
   },
   conversation: {
+    // 创建进程内会话。
     async create(userId, title, mode = "chat", conversationId = crypto.randomUUID()) {
       const now = new Date().toISOString();
       const conversation: ConversationData = {
@@ -84,16 +88,19 @@ const inMemoryRepositories: Repositories = {
       inMemoryMessages.set(conversationId, inMemoryMessages.get(conversationId) ?? []);
       return conversation;
     },
+    // 获取未被删除的进程内会话。
     async get(conversationId) {
       const conversation = inMemoryConversations.get(conversationId);
       return conversation?.deleted_at ? null : conversation ?? null;
     },
+    // 按用户列出未被删除的进程内会话。
     async list(userId, limit = 20, offset = 0) {
       return Array.from(inMemoryConversations.values())
         .filter((conversation) => conversation.user_id === userId && !conversation.deleted_at)
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .slice(offset, offset + limit);
     },
+    // 软删除进程内会话并清理其消息。
     async delete(conversationId) {
       const conversation = inMemoryConversations.get(conversationId);
       if (!conversation || conversation.deleted_at) return false;
@@ -103,21 +110,25 @@ const inMemoryRepositories: Repositories = {
     },
   },
   message: {
+    // 幂等地批量写入进程内会话消息。
     async createBatch(conversationId, _userId, messages) {
       const existing = inMemoryMessages.get(conversationId) ?? [];
       const byId = new Map(existing.map((message) => [message.id, message]));
       for (const message of messages) byId.set(message.id, message);
       inMemoryMessages.set(conversationId, Array.from(byId.values()).sort((a, b) => a.sequence_no - b.sequence_no));
     },
+    // 分页获取进程内会话消息。
     async getMessages(conversationId, limit = 50, offset = 0) {
       const all = inMemoryMessages.get(conversationId) ?? [];
       return { messages: all.slice(offset, offset + limit), total: all.length };
     },
+    // 清空进程内会话消息。
     async clear(conversationId) {
       inMemoryMessages.set(conversationId, []);
     },
   },
   memory: {
+    // 保存或复用去重后的进程内长期记忆。
     async save(userId, memoryId, content, category = "fact", importance = 3, source = "user_explicit", sourceConversationId) {
       const memories = inMemoryMemories.get(userId) ?? [];
       const normalized = content.trim().toLowerCase();
@@ -147,6 +158,7 @@ const inMemoryRepositories: Repositories = {
       inMemoryMemories.set(userId, memories);
       return memory;
     },
+    // 按关键词和条件检索进程内长期记忆。
     async search(userId, query, options = {}) {
       const words = query.toLowerCase().split(/\s+/).filter(Boolean);
       const items = (inMemoryMemories.get(userId) ?? [])
@@ -166,12 +178,14 @@ const inMemoryRepositories: Repositories = {
         }));
       return { items, degraded: false };
     },
+    // 按条件列出进程内有效长期记忆。
     async list(userId, options = {}) {
       return (inMemoryMemories.get(userId) ?? [])
         .filter((memory) => memory.status === "active" && (!options.category || memory.category === options.category))
         .sort((a, b) => b.importance - a.importance || b.created_at.localeCompare(a.created_at))
         .slice(0, options.limit ?? 50);
     },
+    // 更新进程内有效长期记忆。
     async update(userId, memoryId, changes) {
       const memories = inMemoryMemories.get(userId) ?? [];
       const index = memories.findIndex((memory) => memory.id === memoryId && memory.status === "active");
@@ -189,6 +203,7 @@ const inMemoryRepositories: Repositories = {
       memories[index] = updated;
       return updated;
     },
+    // 软删除进程内长期记忆。
     async delete(userId, memoryId) {
       const memories = inMemoryMemories.get(userId) ?? [];
       const memory = memories.find((item) => item.id === memoryId && item.status === "active");
@@ -197,6 +212,7 @@ const inMemoryRepositories: Repositories = {
       memory.updated_at = new Date().toISOString();
       return true;
     },
+    // 清空指定用户的进程内长期记忆。
     async clearUser(userId) {
       const memories = inMemoryMemories.get(userId) ?? [];
       const active = memories.filter((memory) => memory.status === "active");

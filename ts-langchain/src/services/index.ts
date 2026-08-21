@@ -50,7 +50,8 @@ import {
   isLikelyTruncated,
   maybeAppendContinuationHint,
 } from "../agents/response-handler.js";
-import type { ReActRunSummary } from "../agents/react.js";
+import type { ReActRunSummary } from "../agents/react-policy.js";
+import { config } from "../config/index.js";
 
 // ============ 类型定义 ============
 
@@ -863,7 +864,14 @@ export class AgentService {
         actor_type: "user",
       } as const;
 
-      const deadline = new AgentDeadline(undefined, requestSignal);
+      const deadline = new AgentDeadline(
+        Math.min(config.AGENT_DEADLINE_MS, config.REACT_MAX_TOTAL_TIME_MS),
+        requestSignal,
+        Math.min(
+          config.AGENT_DEADLINE_WITH_TOOLS_MS,
+          config.REACT_MAX_TOTAL_TIME_MS,
+        ),
+      );
       const progress = new ToolProgressChannel();
       let reactSummary: ReActRunSummary | undefined;
       let emittedText = false;

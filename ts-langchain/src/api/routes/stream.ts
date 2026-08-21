@@ -75,7 +75,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
                 tool_name: event.toolName,
                 status: event.status,
                 call_id: event.callId,
-                duration_ms: event.durationMs,
+                duration_ms: event.durationMs ?? null,
               }),
             );
           } else {

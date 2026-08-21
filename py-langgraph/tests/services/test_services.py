@@ -126,7 +126,7 @@ class TestConversationService:
 class TestAgentService:
     @pytest.mark.asyncio
     async def test_chat_returns_explicit_timeout_error(self, monkeypatch):
-        from src.agents import base
+        from src.agents import graph_agents
         from src.config.settings import settings
 
         class SlowAgent:
@@ -134,7 +134,7 @@ class TestAgentService:
                 await asyncio.sleep(1)
 
         conversation = ConversationService.create("deadline")
-        monkeypatch.setattr(base, "build_tool_agent", lambda **_kwargs: SlowAgent())
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: SlowAgent())
         monkeypatch.setattr(settings, "agent_deadline_ms", 5)
 
         with pytest.raises(BusinessError) as error:
@@ -147,7 +147,7 @@ class TestAgentService:
     async def test_streamed_knowledge_conversation_uses_rag(self, monkeypatch):
         """Knowledge streaming must use the same RAG path as non-streaming chat."""
         from langchain_core.messages import AIMessage
-        from src.agents import base
+        from src.agents import graph_agents
         from src.rag import rag_agent
 
         class FakeRagAgent:
@@ -159,7 +159,7 @@ class TestAgentService:
         )
         monkeypatch.setattr(rag_agent, "build_rag_agent", lambda: FakeRagAgent())
         monkeypatch.setattr(
-            base,
+            graph_agents,
             "build_tool_agent",
             lambda **_kwargs: pytest.fail("knowledge stream used the tool agent"),
         )
@@ -176,7 +176,7 @@ class TestAgentService:
     @pytest.mark.asyncio
     async def test_streamed_tool_event_uses_shared_call_id_field(self, monkeypatch):
         """Tool progress events must use the same call_id field as the TS API."""
-        from src.agents import base
+        from src.agents import graph_agents
         from langchain_core.messages import AIMessage
 
         class FakeAgent:
@@ -197,7 +197,7 @@ class TestAgentService:
                 }
 
         conversation = ConversationService.create("tool stream")
-        monkeypatch.setattr(base, "build_tool_agent", lambda **_kwargs: FakeAgent())
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
 
         events = [
             event

@@ -79,16 +79,16 @@ class ToolRegistry:
             (file_search, FILE_SEARCH_DESCRIPTOR),
         ]
         if settings.memory_enabled:
-            default_tools.append((knowledge_search, KNOWLEDGE_DESCRIPTOR))
-        default_tools.extend(
-            [
-                (memory_session_search, SESSION_DESCRIPTOR),
-                (memory_user_search, _USER_SEARCH_DESCRIPTOR),
-                (memory_user_save, _USER_SAVE_DESCRIPTOR),
-                (memory_user_list, _USER_LIST_DESCRIPTOR),
-                (memory_user_delete, _USER_DELETE_DESCRIPTOR),
-            ]
-        )
+            default_tools.extend(
+                [
+                    (knowledge_search, KNOWLEDGE_DESCRIPTOR),
+                    (memory_session_search, SESSION_DESCRIPTOR),
+                    (memory_user_search, _USER_SEARCH_DESCRIPTOR),
+                    (memory_user_save, _USER_SAVE_DESCRIPTOR),
+                    (memory_user_list, _USER_LIST_DESCRIPTOR),
+                    (memory_user_delete, _USER_DELETE_DESCRIPTOR),
+                ]
+            )
 
         for tool_fn, descriptor in default_tools:
             self.register(tool_fn, descriptor)

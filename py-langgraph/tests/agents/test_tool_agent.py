@@ -2,7 +2,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from src.agents import base
+from src.agents import graph_agents
 
 
 class ToolCapableFakeModel(FakeMessagesListChatModel):
@@ -29,9 +29,9 @@ async def test_tool_agent_binds_tools_and_preserves_the_full_message_chain(monke
             AIMessage(content="4"),
         ]
     )
-    monkeypatch.setattr(base, "get_llm", lambda provider="openai": model)
+    monkeypatch.setattr(graph_agents, "get_llm", lambda provider="openai": model)
 
-    agent = base.build_tool_agent(checkpointer=MemorySaver())
+    agent = graph_agents.build_tool_agent(checkpointer=MemorySaver())
     result = await agent.ainvoke(
         {"messages": [HumanMessage(content="2 + 2?")]},
         config={"configurable": {"thread_id": "tool-chain"}},
@@ -49,19 +49,19 @@ async def test_tool_agent_binds_tools_and_preserves_the_full_message_chain(monke
 
 def test_agent_graph_is_cached(monkeypatch):
     model = ToolCapableFakeModel(responses=[AIMessage(content="done")])
-    monkeypatch.setattr(base, "get_llm", lambda provider="openai": model)
-    base.invalidate_tool_agent_cache()
+    monkeypatch.setattr(graph_agents, "get_llm", lambda provider="openai": model)
+    graph_agents.invalidate_tool_agent_cache()
 
-    first = base.build_tool_agent()
-    second = base.build_tool_agent()
+    first = graph_agents.build_tool_agent()
+    second = graph_agents.build_tool_agent()
 
     assert second is first
-    base.invalidate_tool_agent_cache()
+    graph_agents.invalidate_tool_agent_cache()
 
 
 def test_tool_limit_is_counted_once_per_requested_tool():
     messages = [HumanMessage(content="research this")]
-    for index in range(base.MAX_TOOL_CALLS):
+    for index in range(graph_agents.MAX_TOOL_CALLS):
         call_id = f"call_{index}"
         messages.extend(
             [
@@ -81,13 +81,13 @@ def test_tool_limit_is_counted_once_per_requested_tool():
         )
     )
 
-    assert base.should_continue({"messages": messages[:-3] + [messages[-1]]}) == "tools"
-    assert base.should_continue({"messages": messages}) == "limit"
+    assert graph_agents.should_continue({"messages": messages[:-3] + [messages[-1]]}) == "tools"
+    assert graph_agents.should_continue({"messages": messages}) == "limit"
 
 
 def test_history_trimming_keeps_a_human_turn_boundary():
     messages = []
-    for index in range(base.MAX_HISTORY_MESSAGES):
+    for index in range(graph_agents.MAX_HISTORY_MESSAGES):
         messages.extend(
             [
                 HumanMessage(content=f"question {index}", id=f"human-{index}"),
@@ -95,9 +95,9 @@ def test_history_trimming_keeps_a_human_turn_boundary():
             ]
         )
 
-    update = base.trim_history({"messages": messages})
+    update = graph_agents.trim_history({"messages": messages})
     removed_ids = {message.id for message in update["messages"]}
     retained = [message for message in messages if message.id not in removed_ids]
 
-    assert len(retained) <= base.MAX_HISTORY_MESSAGES
+    assert len(retained) <= graph_agents.MAX_HISTORY_MESSAGES
     assert retained[0].type == "human"

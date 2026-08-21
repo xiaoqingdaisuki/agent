@@ -22,7 +22,7 @@ from src.tools.runtime.executor import (
     get_tool_call_context,
     tool_call_scope,
 )
-from src.agents.react import (
+from src.agents.react_policy import (
     is_clarification,
     observation_from_tool_message,
     tool_call_signature,
@@ -302,6 +302,7 @@ def observe_node(state: AgentState) -> dict:
     tool_errors = int(state.get("tool_errors", 0))
     failed_signatures = dict(state.get("react_failed_signatures", {}))
     call_signatures: dict[str, str] = {}
+    tool_messages: list[BaseMessage] = []
     for message in reversed(messages):
         if message.type == "ai":
             for tool_call in getattr(message, "tool_calls", []) or []:
@@ -310,6 +311,8 @@ def observe_node(state: AgentState) -> dict:
             break
         if message.type != "tool":
             continue
+        tool_messages.append(message)
+    for message in tool_messages:
         observation = observation_from_tool_message(message)
         new_observations.append(observation.__dict__)
         if observation.status == "error":
@@ -394,9 +397,13 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
             except Exception:
                 pass
 
-        response = await llm_with_tools.ainvoke(
+        response = None
+        async for chunk in llm_with_tools.astream(
             [SystemMessage(content=system_prompt), *state["messages"]]
-        )
+        ):
+            response = chunk if response is None else response + chunk
+        if response is None:
+            raise RuntimeError("模型未返回任何流式响应")
 
         # Handle XML-format tool calls (e.g. StepFun step-3.7-flash)
         response = _convert_xml_tool_calls(response)
@@ -517,11 +524,16 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
             response.content,
             getattr(response, "response_metadata", {}).get("finish_reason"),
         )
+        stop_reason = state.get("stop_reason", "MAX_STEPS")
+        final_state = {
+            "TIMEOUT": "TIMEOUT",
+            "TOOL_FAILURE": "TOOL_ERROR",
+        }.get(stop_reason, "MAX_STEPS_REACHED")
         pending_message = state["messages"][-1]
         return {
             "messages": [RemoveMessage(id=pending_message.id), response],
-            "react_state": "MAX_STEPS_REACHED",
-            "stop_reason": state.get("stop_reason", "MAX_STEPS"),
+            "react_state": final_state,
+            "stop_reason": stop_reason,
             "total_latency_ms": int(
                 (time.monotonic() - state.get("started_at", time.monotonic())) * 1000
             ),

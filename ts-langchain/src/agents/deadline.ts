@@ -15,6 +15,7 @@ export class AgentDeadline {
   private readonly timeoutPromise: Promise<never>;
   private readonly startedAt = Date.now();
   private readonly parentSignal?: AbortSignal;
+  // 将父请求的取消原因转发给当前截止时间控制器。
   private readonly onParentAbort = () => {
     this.controller.abort(this.parentSignal?.reason);
   };
@@ -23,10 +24,12 @@ export class AgentDeadline {
   constructor(
     private timeoutMs: number = config.AGENT_DEADLINE_MS,
     parentSignal?: AbortSignal,
+    private readonly toolTimeoutMs: number = config.AGENT_DEADLINE_WITH_TOOLS_MS,
   ) {
     this.parentSignal = parentSignal;
     this.signal = this.controller.signal;
     this.timeoutPromise = new Promise((_, reject) => {
+      // 使用当前取消原因拒绝截止时间承诺。
       const rejectAbort = () =>
         reject(
           this.signal.reason instanceof Error
@@ -56,11 +59,11 @@ export class AgentDeadline {
   // 检测到工具调用后延长超时时间，为工具执行留出更多预算
   enableToolBudget(): void {
     if (
-      this.timeoutMs >= config.AGENT_DEADLINE_WITH_TOOLS_MS ||
+      this.timeoutMs >= this.toolTimeoutMs ||
       this.signal.aborted
     )
       return;
-    this.timeoutMs = config.AGENT_DEADLINE_WITH_TOOLS_MS;
+    this.timeoutMs = this.toolTimeoutMs;
     this.scheduleTimeout();
   }
 
@@ -93,8 +96,9 @@ export class AgentDeadline {
 export async function runWithAgentDeadline<T>(
   task: (deadline: AgentDeadline) => Promise<T>,
   parentSignal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<T> {
-  const deadline = new AgentDeadline(undefined, parentSignal);
+  const deadline = new AgentDeadline(timeoutMs, parentSignal, timeoutMs);
   try {
     return await deadline.run(task(deadline));
   } finally {

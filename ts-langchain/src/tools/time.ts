@@ -4,7 +4,7 @@
  * 使用 IANA 时区名称，并通过 Intl API 正确处理夏令时。
  */
 
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";

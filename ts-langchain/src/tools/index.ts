@@ -90,7 +90,7 @@ const directTools = [
   convertTimezoneTool,
 ];
 
-// 关闭记忆模式时仅排除依赖 Cloudflare 向量库的知识库工具。
+// 关闭记忆模式时不向 Agent 暴露任何依赖 Cloudflare Gateway 的记忆和文档工具。
 export const tools = config.MEMORY_ENABLED ? [
   ...directTools,
   knowledgeSearchTool,
@@ -99,14 +99,7 @@ export const tools = config.MEMORY_ENABLED ? [
   memoryUserSaveTool,
   memoryUserListTool,
   memoryUserDeleteTool,
-] : [
-  ...directTools,
-  memorySessionSearchTool,
-  memoryUserSearchTool,
-  memoryUserSaveTool,
-  memoryUserListTool,
-  memoryUserDeleteTool,
-];
+] : directTools;
 
 /**
  * 工具名称 → ToolDescriptor 映射，用于 invokeTool 管线的权限/审计检查。

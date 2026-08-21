@@ -16,7 +16,7 @@
  * - Mutex 保护共享状态（缓存、电路 breaker），对齐 Python threading.Lock
  */
 
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";

@@ -6,7 +6,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from src.agents import base
+from src.agents import graph_agents
 from src.tools import tools
 from src.tools.file_search import file_search
 from src.tools.memory_user import memory_user_delete, memory_user_list, memory_user_save
@@ -92,9 +92,9 @@ async def test_dialogue_routes_current_time_to_the_dedicated_tool(monkeypatch):
             AIMessage(content="现在是北京时间。"),
         ]
     )
-    monkeypatch.setattr(base, "get_llm", lambda provider="openai": model)
-    base.invalidate_tool_agent_cache()
-    agent = base.build_tool_agent(checkpointer=MemorySaver())
+    monkeypatch.setattr(graph_agents, "get_llm", lambda provider="openai": model)
+    graph_agents.invalidate_tool_agent_cache()
+    agent = graph_agents.build_tool_agent(checkpointer=MemorySaver())
     result = await agent.ainvoke(
         {"messages": [HumanMessage(content="北京现在几点？")]},
         config={"configurable": {"thread_id": "time-routing-v2"}},

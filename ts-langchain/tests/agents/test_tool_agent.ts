@@ -54,16 +54,12 @@ describe("tool agent", () => {
     ]);
   });
 
-  it("reuses agents and never exposes LangChain's max-iteration message", async () => {
+  it("reuses declarative createAgent instances", async () => {
     const first = await createToolAgent();
     const second = await createToolAgent();
 
     expect(second).toBe(first);
     expect(first.maxIterations).toBe(MAX_AGENT_ITERATIONS);
-
-    const stopped = await (first.agent as any).returnStoppedResponse("force", [], {});
-    expect(stopped.returnValues.output).not.toContain(
-      "Agent stopped due to max iterations.",
-    );
+    expect(typeof first.agent.streamEvents).toBe("function");
   });
 });

@@ -7,15 +7,15 @@
  * - 文档向量存储在 Cloudflare Service（Vectorize），通过 Memory Gateway 访问
  */
 
-import { createOpenAIToolsAgent } from "langchain/agents";
-import { AgentExecutor } from "langchain/agents";
+import { createOpenAIToolsAgent } from "@langchain/classic/agents";
+import { AgentExecutor } from "@langchain/classic/agents";
 import { ChatOpenAI } from "@langchain/openai";
 import {
   ChatPromptTemplate,
   MessagesPlaceholder,
 } from "@langchain/core/prompts";
 import { Retriever } from "./retriever.js";
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 
 export interface RAGOptions {
   /** 用户 ID（用于文档搜索） */

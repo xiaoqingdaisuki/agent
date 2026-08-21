@@ -4,7 +4,7 @@
  * 通过文档向量索引先定位相关文件片段，并保留文件标识、文件名和位置。
  */
 
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";

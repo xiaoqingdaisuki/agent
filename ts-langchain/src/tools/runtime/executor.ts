@@ -593,7 +593,7 @@ export function createToolCallScope(
 
 // ============ 工具 Runtime 包装 ============
 
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { redactTextContent, redactStructuredData } from "./data-redaction.js";
 
 /**

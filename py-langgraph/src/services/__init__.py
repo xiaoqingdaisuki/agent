@@ -17,6 +17,7 @@ from enum import Enum
 from typing import Optional
 
 from src.tools.runtime.executor import create_tool_call_context, tool_call_scope
+from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -769,7 +770,7 @@ class AgentService:
     # 执行 chat 对应的业务逻辑
     async def chat(conversation_id: str, content: str, user_id: str = None) -> Message:
         try:
-            from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
+            from src.agents.graph_agents import AGENT_RECURSION_LIMIT, build_tool_agent
             from src.agents.deadline import AgentDeadline
             from src.agents.response_handler import (
                 get_finish_reason,
@@ -818,8 +819,19 @@ class AgentService:
                 config["configurable"]["user_id"] = user_id
 
             runtime_context = create_tool_call_context(user_id or "", conversation_id)
+            deadline_args = (
+                (
+                    min(settings.agent_deadline_ms, settings.react_max_total_time_ms),
+                    min(
+                        settings.agent_deadline_with_tools_ms,
+                        settings.react_max_total_time_ms,
+                    ),
+                )
+                if not conversation or conversation.mode != "knowledge"
+                else ()
+            )
             with tool_call_scope(runtime_context):
-                async with AgentDeadline():
+                async with AgentDeadline(*deadline_args):
                     if conversation and conversation.mode == "knowledge":
                         from langchain_core.messages import HumanMessage
                         from src.rag.rag_agent import build_rag_agent
@@ -907,7 +919,7 @@ class AgentService:
         emitted_text = False
         react_summary = None
         try:
-            from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
+            from src.agents.graph_agents import AGENT_RECURSION_LIMIT, build_tool_agent
             from src.agents.deadline import AgentDeadline
             from src.agents.response_handler import maybe_append_continuation_hint
             from src.commands import (
@@ -1006,7 +1018,13 @@ class AgentService:
                 config["configurable"]["user_id"] = user_id
 
             with tool_call_scope(runtime_context):
-                async with AgentDeadline():
+                async with AgentDeadline(
+                    min(settings.agent_deadline_ms, settings.react_max_total_time_ms),
+                    min(
+                        settings.agent_deadline_with_tools_ms,
+                        settings.react_max_total_time_ms,
+                    ),
+                ):
                     if hasattr(agent, "astream_events"):
                         async for event in agent.astream_events(
                             {
@@ -1056,13 +1074,13 @@ class AgentService:
                                     if isinstance(candidate, str):
                                         full_answer = candidate
                                 if isinstance(output, dict) and output.get("stop_reason"):
-                                    from src.agents.react import summarize_react_state
+                                    from src.agents.react_policy import summarize_react_state
 
                                     react_summary = summarize_react_state(output)
                             elif event_name == "on_chain_end":
                                 output = event.get("data", {}).get("output", {})
                                 if isinstance(output, dict) and output.get("stop_reason"):
-                                    from src.agents.react import summarize_react_state
+                                    from src.agents.react_policy import summarize_react_state
 
                                     react_summary = summarize_react_state(output)
                     else:
@@ -1077,7 +1095,7 @@ class AgentService:
                         ):
                             for node_name, state_update in update.items():
                                 if isinstance(state_update, dict) and state_update.get("stop_reason"):
-                                    from src.agents.react import summarize_react_state
+                                    from src.agents.react_policy import summarize_react_state
 
                                     react_summary = summarize_react_state(state_update)
                                 messages = state_update.get("messages", [])

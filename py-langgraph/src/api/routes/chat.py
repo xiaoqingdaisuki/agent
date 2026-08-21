@@ -3,9 +3,10 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from src.agents.base import AGENT_RECURSION_LIMIT, build_tool_agent
-from src.agents.react import summarize_react_state
+from src.agents.graph_agents import AGENT_RECURSION_LIMIT, build_tool_agent
+from src.agents.react_policy import summarize_react_state
 from src.agents.deadline import AgentDeadline
+from src.config.settings import settings
 from src.agents.response_handler import get_finish_reason, is_likely_truncated, maybe_append_continuation_hint
 from src.commands import (
     execute_agent_command,
@@ -94,7 +95,13 @@ async def chat(payload: ChatRequest, request: Request):
 
         runtime_context = create_tool_call_context(trusted_user_id, thread_id)
         with tool_call_scope(runtime_context):
-            async with AgentDeadline():
+            async with AgentDeadline(
+                min(settings.agent_deadline_ms, settings.react_max_total_time_ms),
+                min(
+                    settings.agent_deadline_with_tools_ms,
+                    settings.react_max_total_time_ms,
+                ),
+            ):
                 result = await agent.ainvoke(
                     {
                         "messages": [{"role": "user", "content": payload.message}],

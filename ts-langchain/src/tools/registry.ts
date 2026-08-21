@@ -28,7 +28,7 @@ import {
   userMemoryListDescriptor,
   userMemoryDeleteDescriptor,
 } from "./memory-user.js";
-import type { DynamicStructuredTool } from "langchain/tools";
+import type { DynamicStructuredTool } from "@langchain/core/tools";
 import { config } from "../config/index.js";
 import { currentTimeTool, currentTimeDescriptor, convertTimezoneTool, convertTimezoneDescriptor } from "./time.js";
 import { fileSearchTool, fileSearchDescriptor } from "./file-search.js";

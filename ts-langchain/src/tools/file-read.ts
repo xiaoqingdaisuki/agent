@@ -11,7 +11,7 @@
  * - 敏感内容脱敏
  */
 
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import fs from "node:fs/promises";
 import path from "node:path";

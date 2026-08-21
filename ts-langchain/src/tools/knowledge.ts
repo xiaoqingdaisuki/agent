@@ -5,7 +5,7 @@
  * 通过 Cloudflare Memory Gateway 访问文档向量。
  */
 
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";

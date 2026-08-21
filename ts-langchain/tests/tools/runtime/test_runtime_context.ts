@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
-import type { ToolCallContext, ToolDescriptor } from "../../src/tools/contracts.js";
+import type { ToolCallContext, ToolDescriptor } from "../../../src/tools/contracts.js";
 import {
   budgetGuard,
   createToolCallScope,
   getToolCallContext,
   runWithToolCallContext,
   wrapToolWithRuntime,
-} from "../../src/tools/runtime/executor.js";
+} from "../../../src/tools/runtime/executor.js";
 
 function context(userId: string): ToolCallContext {
   return {

@@ -2,7 +2,7 @@
  * get_weather — 查询指定城市的实时天气 + 未来 N 天预报
  */
 
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";

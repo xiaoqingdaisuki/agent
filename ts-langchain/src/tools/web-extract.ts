@@ -4,7 +4,7 @@
  * 在 web.read 的 SSRF 防护基础上抓取网页，并从重复卡片、表格和字段标签中提取结构化数据。
  */
 
-import { DynamicStructuredTool } from "langchain/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";

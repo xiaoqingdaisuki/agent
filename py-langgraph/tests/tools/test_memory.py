@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
-from src.agents.base import AgentState, _scope_memory_tool_call
+from src.agents.graph_agents import AgentState, _scope_memory_tool_call
 from src.tools.memory_session import (
     memory_session_search,
     _SESSION_DESCRIPTOR,

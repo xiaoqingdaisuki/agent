@@ -12,8 +12,11 @@ from unittest.mock import patch
 import sys
 import os
 
-# Ensure src is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# 保证测试使用 Cloudflare 客户端替身而不是禁用记忆模式的进程内实现。
+os.environ["MEMORY_ENABLED"] = "true"
+
+# Ensure the project root is importable so `src` remains a top-level package.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 class FakeProfileRepository:
@@ -452,7 +455,7 @@ def mock_repositories(monkeypatch):
     monkeypatch.setattr("src.memory._checkpointer", None, raising=False)
     monkeypatch.setattr("src.memory._memory_saver", None, raising=False)
 
-    from src.agents.base import invalidate_tool_agent_cache
+    from src.agents.graph_agents import invalidate_tool_agent_cache
 
     invalidate_tool_agent_cache()
 

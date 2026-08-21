@@ -44,7 +44,7 @@ async def stream(payload: StreamRequest, request: Request):
                 if await request.is_disconnected():
                     return
                 if event["type"] == "text":
-                    response_payload = {"text": event["text"], "partial": event.get("partial")}
+                    response_payload = {"text": event["text"], "partial": event.get("partial", False)}
                     event_name = "text"
                 elif event["type"] == "tool":
                     response_payload = {
@@ -52,6 +52,7 @@ async def stream(payload: StreamRequest, request: Request):
                         "tool_name": event["tool_name"],
                         "status": event["status"],
                         "call_id": event["call_id"],
+                        "duration_ms": event.get("duration_ms"),
                     }
                     event_name = "tool"
                 else:
