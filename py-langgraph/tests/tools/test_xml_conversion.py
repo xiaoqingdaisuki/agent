@@ -18,6 +18,8 @@ P_CLOSE = chr(60) + "/parameter>"                # </
 INVOKE_OPEN = chr(60) + 'invoke name="memory_user_search">'
 INVOKE_CLOSE = chr(60) + "/invoke>"
 NAMED_PARAM_OPEN = chr(60) + 'parameter name="query">'
+DOTS_OPEN = chr(60) + "dots_function_call><search>"
+DOTS_CLOSE = chr(60) + "/search></dots_function_call>"
 
 
 def test_convert_xml_tool_calls():
@@ -106,4 +108,23 @@ def test_invoke_name_xml_normalizes_descriptor_tool_name():
             "id": "call_web_search_1",
             "type": "tool_call",
         }
+    ]
+
+
+def test_dots_function_search_calls_are_converted_and_removed():
+    """dots function call envelopes should become web search tool calls."""
+    xml_content = (
+        DOTS_OPEN
+        + "<query>深圳南山区 2026年8月天气游玩</query>"
+        + "<query>深圳南山区美食推荐</query>"
+        + DOTS_CLOSE
+    )
+
+    result = _convert_xml_tool_calls(AIMessage(content=xml_content))
+
+    assert result.content == ""
+    assert [call["name"] for call in result.tool_calls] == ["web_search", "web_search"]
+    assert [call["args"]["query"] for call in result.tool_calls] == [
+        "深圳南山区 2026年8月天气游玩",
+        "深圳南山区美食推荐",
     ]

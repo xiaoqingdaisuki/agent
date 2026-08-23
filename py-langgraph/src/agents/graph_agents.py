@@ -353,10 +353,37 @@ def _parse_xml_tool_calls(content: str) -> list[dict]:
                     "end": match.end(),
                 }
             )
+    dots_pattern = re.compile(
+        r"<dots_function_call\s*>\s*<([a-z][\w.-]*)\s*>(.*?)</\1\s*>\s*</dots_function_call\s*>",
+        re.DOTALL | re.IGNORECASE,
+    )
+    for match in dots_pattern.finditer(content):
+        tool_name = _normalize_tool_name(match.group(1).strip())
+        queries = re.findall(r"<query\s*>(.*?)</query\s*>", match.group(2), re.DOTALL | re.IGNORECASE)
+        if queries:
+            for query in queries:
+                calls.append(
+                    {
+                        "name": tool_name,
+                        "args": {"query": _decode_xml_text(query)},
+                        "start": match.start(),
+                        "end": match.end(),
+                    }
+                )
+        else:
+            calls.append(
+                {
+                    "name": tool_name,
+                    "args": {},
+                    "start": match.start(),
+                    "end": match.end(),
+                }
+            )
     return sorted(calls, key=lambda call: call["start"])
 
 
 TOOL_NAME_ALIASES = {
+    "search": "web_search",
     "weather.current": "get_weather",
     "web.search": "web_search",
     "web.read": "web_read",
@@ -431,7 +458,12 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
         for index, call in enumerate(parsed_calls, start=1)
     ]
     clean_content = content
+    removed_ranges = set()
     for call in reversed(parsed_calls):
+        call_range = (call["start"], call["end"])
+        if call_range in removed_ranges:
+            continue
+        removed_ranges.add(call_range)
         clean_content = clean_content[: call["start"]] + clean_content[call["end"] :]
     return AIMessage(
         content=clean_content.strip(),

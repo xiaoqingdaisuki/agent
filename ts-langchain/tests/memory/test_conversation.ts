@@ -58,6 +58,24 @@ describe("ConversationService message history", () => {
     expect(visible).toBe("已完成");
   });
 
+  it("does not expose dots function XML while streaming tool calls", () => {
+    let buffer = "";
+    let visible = "";
+    for (const chunk of [
+      "<dots_function_call><search><query>深圳南山区",
+      "美食推荐</query></search></dots_function_call>",
+      "已完成",
+    ]) {
+      buffer += chunk;
+      const drained = drainXmlToolStream(buffer);
+      visible += drained.text;
+      buffer = drained.remainder;
+    }
+    visible += drainXmlToolStream(buffer, true).text;
+
+    expect(visible).toBe("已完成");
+  });
+
   it("stores and clears API messages without duplicating agent history", async () => {
     const conversation = await ConversationService.create("history");
     await ConversationService.appendUserMessage(conversation.id, "hello");

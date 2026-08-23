@@ -173,7 +173,7 @@ def extract_agent_output_text(output) -> str:
     )
 
 
-XML_TOOL_STREAM_MARKERS = ("<invoke", "<function=")
+XML_TOOL_STREAM_MARKERS = ("<invoke", "<function=", "<dots_function_call")
 
 
 # 从模型流中提取安全可展示文本，并丢弃完整的 XML 工具调用块。
@@ -202,7 +202,13 @@ def drain_xml_tool_stream(buffer: str, final: bool = False) -> tuple[str, str]:
             )
         visible += buffer[cursor:marker_index]
         rest = lower[marker_index:]
-        close = "</invoke>" if rest.startswith("<invoke") else "</function>"
+        close = (
+            "</invoke>"
+            if rest.startswith("<invoke")
+            else "</dots_function_call>"
+            if rest.startswith("<dots_function_call")
+            else "</function>"
+        )
         close_index = rest.find(close)
         if close_index == -1:
             return visible, buffer[marker_index:]
@@ -1373,7 +1379,13 @@ class AgentService:
                                 is_tool_run = (
                                     run_id in model_tool_runs
                                     or has_structured_tool_call(output)
-                                    or bool(re.search(r"<invoke\b|<function=", buffered, re.IGNORECASE))
+                                    or bool(
+                                        re.search(
+                                            r"<invoke\b|<function=|<dots_function_call\b",
+                                            buffered,
+                                            re.IGNORECASE,
+                                        )
+                                    )
                                 )
                                 if not direct_chat and not is_tool_run:
                                     candidate = strip_xml_tool_stream(

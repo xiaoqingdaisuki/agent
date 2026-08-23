@@ -292,7 +292,7 @@ async function* iterateWithAbort<T>(
   }
 }
 
-const XML_TOOL_STREAM_MARKERS = ["<invoke", "<function="];
+const XML_TOOL_STREAM_MARKERS = ["<invoke", "<function=", "<dots_function_call"];
 
 // 从模型流中提取安全可展示文本，并丢弃完整的 XML 工具调用块。
 export function drainXmlToolStream(
@@ -324,7 +324,11 @@ export function drainXmlToolStream(
     }
     text += buffer.slice(cursor, markerIndex);
     const rest = lower.slice(markerIndex);
-    const close = rest.startsWith("<invoke") ? "</invoke>" : "</function>";
+    const close = rest.startsWith("<invoke")
+      ? "</invoke>"
+      : rest.startsWith("<dots_function_call")
+        ? "</dots_function_call>"
+        : "</function>";
     const closeIndex = rest.indexOf(close);
     if (closeIndex === -1) return { text, remainder: buffer.slice(markerIndex) };
     cursor = markerIndex + closeIndex + close.length;
@@ -1132,7 +1136,7 @@ export class AgentService {
               const buffered = modelTextBuffers.get(runId) || "";
               const isToolRun = modelToolRuns.has(runId)
                 || hasStructuredToolCall(event.data?.output)
-                || /<invoke\b|<function=/i.test(buffered);
+                || /<invoke\b|<function=|<dots_function_call\b/i.test(buffered);
               if (!directChat && !isToolRun) {
                 const candidate = stripXmlToolStream(buffered)
                   || extractAgentOutputText(event.data?.output);

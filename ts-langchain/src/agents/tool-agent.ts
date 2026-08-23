@@ -38,6 +38,7 @@ type ParsedXmlToolCall = {
 };
 
 const TOOL_NAME_ALIASES: Record<string, string> = {
+  search: "web_search",
   "weather.current": "get_weather",
   "web.search": "web_search",
   "web.read": "web_read",
@@ -125,6 +126,30 @@ function parseXmlToolCalls(content: string): ParsedXmlToolCall[] {
       });
     }
   }
+  const dotsPattern = /<dots_function_call\s*>\s*<([a-z][\w.-]*)\s*>([\s\S]*?)<\/\1\s*>\s*<\/dots_function_call\s*>/gi;
+  let dotsMatch: RegExpExecArray | null;
+  while ((dotsMatch = dotsPattern.exec(content)) !== null) {
+    const toolName = normalizeToolName(dotsMatch[1].trim());
+    const body = dotsMatch[2];
+    const queries = [...body.matchAll(/<query\s*>([\s\S]*?)<\/query\s*>/gi)];
+    if (queries.length > 0) {
+      for (const query of queries) {
+        matches.push({
+          name: toolName,
+          args: { query: decodeXmlText(query[1]) },
+          start: dotsMatch.index,
+          end: dotsMatch.index + dotsMatch[0].length,
+        });
+      }
+    } else {
+      matches.push({
+        name: toolName,
+        args: {},
+        start: dotsMatch.index,
+        end: dotsMatch.index + dotsMatch[0].length,
+      });
+    }
+  }
   return matches.sort((left, right) => left.start - right.start);
 }
 
@@ -154,7 +179,11 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
     args: call.args,
   }));
   let cleanContent = content;
+  const removedRanges = new Set<string>();
   for (const call of [...parsedCalls].sort((left, right) => right.start - left.start)) {
+    const range = `${call.start}:${call.end}`;
+    if (removedRanges.has(range)) continue;
+    removedRanges.add(range);
     cleanContent = cleanContent.slice(0, call.start) + cleanContent.slice(call.end);
   }
   return new AIMessage({

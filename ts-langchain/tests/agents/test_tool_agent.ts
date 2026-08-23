@@ -89,6 +89,33 @@ describe("tool agent", () => {
     ]);
   });
 
+  it("converts dots function search calls and removes the provider envelope", () => {
+    const result = convertXmlToolCalls(
+      new AIMessage(
+        "<dots_function_call><search>" +
+          "<query>深圳南山区 2026年8月天气游玩</query>" +
+          "<query>深圳南山区美食推荐</query>" +
+          "</search></dots_function_call>",
+      ),
+    );
+
+    expect(result.content).toBe("");
+    expect(result.tool_calls).toEqual([
+      {
+        id: "call_web_search_1",
+        type: "tool_call",
+        name: "web_search",
+        args: { query: "深圳南山区 2026年8月天气游玩" },
+      },
+      {
+        id: "call_web_search_2",
+        type: "tool_call",
+        name: "web_search",
+        args: { query: "深圳南山区美食推荐" },
+      },
+    ]);
+  });
+
   it("normalizes plain provider responses before middleware validation", () => {
     const result = convertXmlToolCalls({ content: "你好", type: "ai" });
 
