@@ -598,7 +598,7 @@ export class ConversationService {
     return conversations.get(conversationId)!;
   }
 
-  // 根据 ID 获取会话，内存未命中时从 D1 加载
+  // 根据 ID 获取会话，服务缓存未命中时从当前仓储加载。
   static async get(id: string): Promise<Conversation | undefined> {
     const cached = conversations.get(id);
     if (cached) return cached;
@@ -625,10 +625,10 @@ export class ConversationService {
     }
   }
 
-  // 列出所有会话，内存未命中时从 D1 加载
+  // 列出指定用户的会话，并用当前仓储结果刷新服务缓存。
   static async list(userId?: string): Promise<Conversation[]> {
     const normalizedUserId = userId || DEFAULT_CONVERSATION_USER_ID;
-    // 优先从 D1 加载（D1 为权威数据源）
+    // 以当前仓储为权威数据源，兼容进程内和 Cloudflare 两种实现。
     try {
       const repos = getRepositories();
       const allConversations: Conversation[] = [];
@@ -674,7 +674,7 @@ export class ConversationService {
     }
   }
 
-  // 删除会话及其关联的消息和命令状态，同时从 D1 删除
+  // 删除会话及其关联消息、命令状态，并同步删除当前仓储记录。
   static async delete(id: string): Promise<boolean> {
     await clearHistory(id);
     await clearHistory(getDarkModeHistoryThreadId(id));
@@ -682,7 +682,7 @@ export class ConversationService {
     conversationMessages.delete(id);
     const deletedFromMemory = conversations.delete(id);
 
-    // 从 D1 删除，以持久化结果作为重启后删除的依据
+    // 先删除当前仓储记录，再清理服务缓存和会话命令状态。
     try {
       const repos = getRepositories();
       const deletedFromD1 = await repos.conversation.delete(id);
@@ -765,7 +765,7 @@ export class ConversationService {
   }
 
   // 获取会话的全部消息列表
-  // 获取会话消息列表，内存未命中时从 D1 加载
+  // 获取会话消息列表，服务缓存未命中时从当前仓储加载。
   static async getMessages(conversationId: string): Promise<Message[]> {
     const cached = conversationMessages.get(conversationId);
     if (cached) return [...cached];
@@ -1255,12 +1255,14 @@ export class AgentService {
 
 // ============ Knowledge Service ============
 
+// MEMORY_ENABLED=false 时保存进程内文档、原文、分块及字符倒排索引，进程重启后数据清空。
 const documents = new Map<string, Document>();
 const documentContents = new Map<
   string,
   { content: string; filename: string }
 >();
 const documentChunks = new Map<string, string[]>();
+// 描述单个本地分块的检索元数据，供倒排候选召回与相关度计算复用。
 interface LocalSearchEntry {
   documentId: string;
   chunkIndex: number;
@@ -1427,7 +1429,7 @@ export class KnowledgeService {
   }
 
   /**
-   * 列出所有文档，D1 为权威数据源
+   * 列出所有文档；本地模式读取进程内索引，网关模式以远端仓储为权威
    */
   // 获取 listDocuments 对应的数据
   static async listDocuments(): Promise<Document[]> {
@@ -1437,7 +1439,7 @@ export class KnowledgeService {
           new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
       );
     }
-    // 优先从 D1 加载
+    // 网关模式优先从远端仓储加载并刷新服务缓存。
     try {
       const result = await this.client.listDocuments(KNOWLEDGE_USER_ID, {
         limit: 100,
@@ -1471,7 +1473,7 @@ export class KnowledgeService {
   }
 
   /**
-   * 获取文档详情，内存未命中时从 D1 加载
+   * 获取文档详情；本地模式只读进程内数据，网关模式允许远端回源
    */
   // 获取 getDocument 对应的数据
   static async getDocument(id: string): Promise<Document | undefined> {
@@ -1539,7 +1541,7 @@ export class KnowledgeService {
   }
 
   /**
-   * 重新索引，内存无内容时从 D1 加载
+   * 重新索引；本地模式重切进程内原文，网关模式允许远端回源
    */
   // 执行 reindexDocument 对应的业务逻辑
   static async reindexDocument(id: string): Promise<Document> {

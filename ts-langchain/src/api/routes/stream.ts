@@ -33,7 +33,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
 
       const threadId = thread_id || crypto.randomUUID();
 
-      // 确保会话记录存在于 D1（前端传入的 thread_id 需关联 conversations 表）
+      // 确保会话存在于当前仓储，并校验传入 thread_id 的用户归属。
       await ConversationService.ensure(threadId, trustedUserId);
       await ConversationService.appendUserMessage(threadId, message);
 

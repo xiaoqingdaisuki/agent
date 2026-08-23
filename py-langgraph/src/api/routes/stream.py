@@ -28,7 +28,7 @@ async def stream(payload: StreamRequest, request: Request):
     trusted_user_id = require_agent_user_id(request, payload.user_id)
     thread_id = payload.thread_id or str(uuid4())
 
-    # 确保会话记录存在于 D1（前端传入的 thread_id 需关联 conversations 表）
+    # 确保会话存在于当前仓储，并校验传入 thread_id 的用户归属。
     ConversationService.ensure(thread_id, trusted_user_id)
     ConversationService.append_user_message(
         thread_id, payload.message, trusted_user_id

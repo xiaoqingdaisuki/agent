@@ -1,13 +1,13 @@
 ﻿# ts-langchain-agent
 
-TypeScript + LangChain（纯 LangChain，`createOpenAIToolsAgent` + `AgentExecutor` 声明式配置）实现的 Agent 服务。
+TypeScript + LangChain（`createAgent` 声明式配置）实现的 Agent 服务，对外契约与 `py-langgraph/` 保持一致。明确的普通生成任务走无工具轻量路径；实时信息、计算、文件、知识库、记忆、推荐和未知意图保留完整工具链。
 
 与 `py-langgraph/` 形成框架对比：
 
 | 维度 | TS: LangChain | Python: LangGraph |
 | --- | --- | --- |
 | 编程模型 | 声明式配置 | 显式图编排 |
-| Agent 创建 | `createOpenAIToolsAgent({ llm, tools, prompt })` | `StateGraph().add_node().compile()` |
+| Agent 创建 | `createAgent({ model, tools, middleware })` | `StateGraph().add_node().compile()` |
 | 控制流 | 框架内部隐式处理 | 你自己显式定义每一步 |
 
 ## 目录结构
@@ -44,7 +44,7 @@ src/
 │   ├── index.ts            # 仓储实现
 │   └── types.ts            # 仓储类型
 ├── services/
-│   └── index.ts            # Service Layer（业务编排）
+│   └── index.ts            # Service Layer（业务编排、本地知识检索、流式兼容）
 ├── api/
 │   ├── routes/
 │   │   ├── v1/             # External API（前端 UI 使用）
@@ -63,6 +63,8 @@ src/
 └── tools/
     ├── registry.ts         # 工具注册中心
     ├── contracts.ts        # 工具契约
+    ├── file-search.ts      # 文件内容检索
+    ├── time.ts             # 当前时间与时区换算
     └── runtime/            # 工具安全执行和数据脱敏
 ```
 
@@ -98,8 +100,22 @@ OPENAI_MODEL=gpt-4o-mini
 # 可选：自定义 API 地址（如使用代理或本地模型，如 Ollama）
 OPENAI_BASE_URL=https://api.openai.com/v1
 
+# 模型输出、并发和请求预算
+LLM_MAX_OUTPUT_TOKENS=768
+LLM_MAX_CONCURRENCY=2
+AGENT_DEADLINE_MS=120000
+AGENT_DEADLINE_WITH_TOOLS_MS=300000
+
 # 服务端口
 PORT=6001
+AGENT_API_SECRET=replace-with-a-long-random-secret
+CORS_ORIGIN=http://localhost:3000
+
+# 默认关闭 Cloudflare Memory，使用进程内会话、画像、记忆和知识库
+MEMORY_ENABLED=false
+# MEMORY_ENABLED=true 时再填写以下两项
+CLOUDFLARE_MEMORY_BASE_URL=https://your-worker.workers.dev
+CLOUDFLARE_MEMORY_SECRET=your-secret
 
 # Qdrant 向量数据库（RAG 功能需要）
 QDRANT_URL=http://localhost:6333
@@ -190,6 +206,8 @@ curl http://localhost:6001/api/v1/health
 
 ### External API（前端 UI 使用）
 
+除 `/health` 和 `/api/v1/health` 外，请求必须携带 `Authorization: Bearer <AGENT_API_SECRET>`。涉及用户数据时还必须由可信服务端设置 `X-Agent-User-Id`；请求中的 `user_id` 只能与该身份一致。
+
 ```
 GET  /api/v1/health                    健康检查
 GET  /api/v1/capabilities              可用能力列表
@@ -199,6 +217,7 @@ GET  /api/v1/conversations             列出会话
 GET  /api/v1/conversations/:id         获取会话详情
 DELETE /api/v1/conversations/:id       删除会话
 POST /api/v1/conversations/:id/messages 发送消息
+POST /api/v1/conversations/:id/messages/stream 流式发送消息（SSE）
 GET  /api/v1/conversations/:id/messages 获取历史
 DELETE /api/v1/conversations/:id/messages 清空消息
 
@@ -208,14 +227,18 @@ GET  /api/v1/knowledge/documents/:id   文档详情
 DELETE /api/v1/knowledge/documents/:id 删除文档
 POST /api/v1/knowledge/documents/:id/reindex 重新索引
 POST /api/v1/knowledge/search          知识检索
+
+GET  /api/v1/profile                   用户画像
+PATCH /api/v1/profile                  更新画像
+GET  /api/v1/memory                    记忆列表
+POST /api/v1/memory                    添加记忆
+DELETE /api/v1/memory                  删除记忆
+GET  /api/v1/history                   问答历史
 ```
 
 ### Internal API（QQ Bot 使用）
 
-```text
-POST /api/internal/agent/chat           直接对话
-POST /api/internal/agent/chat/stream    流式对话
-```
+当前版本不再暴露独立的 `/api/internal/agent/*` 路由。可信服务端使用兼容路由 `POST /chat`、`POST /stream`，并携带 Bearer 密钥和 `X-Agent-User-Id`；`GET /tools` 返回当前可用工具，`POST /images/generations` 提供图片生成。
 
 ## 环境变量
 
@@ -224,9 +247,21 @@ POST /api/internal/agent/chat/stream    流式对话
 | `OPENAI_API_KEY` | OpenAI API 密钥 | - | 是 |
 | `OPENAI_MODEL` | 使用的模型 | `gpt-4o-mini` | 否 |
 | `OPENAI_BASE_URL` | API 地址 | `https://api.openai.com/v1` | 否 |
+| `LLM_MAX_OUTPUT_TOKENS` | 单次模型输出上限 | `768` | 否 |
+| `LLM_MAX_CONCURRENCY` | 进程内模型并发上限 | `2` | 否 |
+| `AGENT_DEADLINE_MS` | 普通 Agent 总时限（毫秒） | `120000` | 否 |
+| `AGENT_DEADLINE_WITH_TOOLS_MS` | 工具 Agent 总时限（毫秒） | `300000` | 否 |
 | `ANTHROPIC_API_KEY` | Anthropic API 密钥 | - | 否 |
 | `ANTHROPIC_MODEL` | Anthropic 模型 | `claude-3-5-haiku-20241022` | 否 |
 | `PORT` | 服务端口 | `6001` | 否 |
+| `AGENT_API_SECRET` | 外部 API Bearer 密钥 | 空 | 生产环境是 |
+| `CORS_ORIGIN` | 允许的浏览器来源，逗号分隔 | 空 | 否 |
+| `MEMORY_ENABLED` | 是否启用 Cloudflare Memory Gateway | `true` | 否 |
+| `CLOUDFLARE_MEMORY_BASE_URL` | Memory Gateway 地址 | `http://localhost:8787` | 网关开启时 |
+| `CLOUDFLARE_MEMORY_SECRET` | Memory Gateway Bearer 密钥 | 空 | 网关开启时 |
+| `IMAGE_API_KEY` | Cloudflare Workers AI 图片密钥 | - | 图片功能是 |
+| `IMAGE_BASE_URL` | Workers AI API 根地址 | Cloudflare API | 否 |
+| `IMAGE_MODEL` | 图片生成模型 | `@cf/black-forest-labs/flux-2-klein-9b` | 否 |
 | `QDRANT_URL` | Qdrant 地址 | `http://localhost:6333` | 否 |
 | `TAVILY_API_KEY` | Tavily API 密钥 | - | 是（搜索功能） |
 | `TAVILY_SEARCH_DEPTH` | 搜索深度：`basic` 或 `advanced` | `basic` | 否 |
@@ -236,6 +271,8 @@ POST /api/internal/agent/chat/stream    流式对话
 | `SEARCH_STALE_TTL_SECONDS` | 全部实时源失败时可用的旧缓存窗口 | `600` | 否 |
 
 搜索底层只调用 Tavily。服务会对临时网络错误和限流进行一次重试，连续失败时短暂熔断，并在实时调用失败时返回标记清楚的旧缓存；不会回退到其他搜索网站或把模型训练数据伪装成实时结果。
+
+`MEMORY_ENABLED=false` 时不会调用 Gateway、D1 或 Vectorize；会话、画像、记忆和文档保存在进程内，知识检索使用有界 Top-K 字符倒排索引，重启后数据清空。设置为 `true` 后才使用 Cloudflare Service 持久化。
 
 ## 故障排查
 
@@ -259,6 +296,7 @@ taskkill /PID <PID> /F
 
 ### Qdrant 连接失败
 
+- 当前公开知识库在 `MEMORY_ENABLED=false` 时不依赖 Qdrant
 - 确保 Qdrant 服务已启动：`docker-compose up qdrant`
 - Docker 环境中使用 `QDRANT_URL=http://qdrant:6333`
 - 检查 Qdrant 端口映射：`docker-compose ps qdrant`

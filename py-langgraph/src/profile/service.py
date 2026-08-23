@@ -1,7 +1,7 @@
 """
 Profile Service — 用户画像 + 长期记忆 + 问答历史
 
-统一通过 Repository 层访问 Cloudflare Service。
+统一通过 Repository 层访问进程内或 Cloudflare 存储后端。
 """
 
 from __future__ import annotations
@@ -23,9 +23,9 @@ from src.repositories import get_repositories
 _repositories = None
 
 
-# 执行 get repositories 对应的业务逻辑
+# 延迟获取当前配置的仓储单例，避免模块导入阶段创建远端客户端。
 def _get_repositories():
-    """获取 Cloudflare 仓储实例"""
+    """获取当前配置对应的仓储实例"""
     global _repositories
     if _repositories is None:
         _repositories = get_repositories()

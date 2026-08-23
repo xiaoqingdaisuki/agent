@@ -47,12 +47,12 @@ class ChatResponse(BaseModel):
 
 
 @router.post("", response_model=ChatResponse)
-# 旧版对话接口 — 强制走 tool agent，保证工具调用能力
+# 旧版非流式对话接口按消息意图选择本地快答、轻量对话或完整工具 Agent。
 async def chat(payload: ChatRequest, request: Request):
-    """旧版对话接口 — 强制走 tool agent，保证工具调用能力
+    """旧版非流式对话接口，复用与 v1 相同的安全路由策略。
 
-    与 /stream 和 /api/v1 一致，所有旧接口统一使用 build_tool_agent，
-    避免出现无工具绑定的"哑巴" agent。
+    明确普通生成任务使用无工具轻量图；实时、计算、文件、记忆和未知意图
+    使用完整工具图，避免为了降低延迟而丢失工具能力。
     """
     trusted_user_id = require_agent_user_id(request, payload.user_id)
     try:

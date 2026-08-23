@@ -8,7 +8,7 @@
  * 4. recordQA: 记录问答
  * 5. buildMemoryContext: 将记忆注入 System Prompt
  *
- * 统一通过 Repository 层访问 Cloudflare Service。
+ * 统一通过 Repository 层访问进程内或 Cloudflare 存储后端。
  */
 
 import {

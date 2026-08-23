@@ -560,6 +560,7 @@ def _record_audit(
 
 # 将 LangChain 工具包装为统一权限、预算、超时、脱敏和审计管线
 def wrap_tool_with_runtime(tool: BaseTool, descriptor: ToolDescriptor) -> StructuredTool:
+    # 将单次工具调用接入当前运行时作用域并执行统一的前后置管线。
     async def wrapped_tool(**raw_input: Any) -> str:
         scope = _runtime_scope.get()
         if scope is None:

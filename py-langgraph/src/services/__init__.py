@@ -182,6 +182,7 @@ def schedule_answer_persistence(
     answer: str,
     user_id: str = "",
 ) -> None:
+    # 在后台任务中顺序落库回答、问答历史、抽取记忆并刷新画像。
     def persist() -> None:
         ConversationService.append_assistant_message(
             conversation_id,
@@ -391,7 +392,7 @@ class ConversationService:
         return conv
 
     @staticmethod
-    # 确保会话存在于 D1，不存在则创建；同时注册到内存
+    # 确保会话存在于当前仓储，不存在则创建，并同步服务缓存。
     def ensure(
         conv_id: str,
         user_id: str = DEFAULT_CONVERSATION_USER_ID,
@@ -409,7 +410,7 @@ class ConversationService:
         if cached:
             return cached
 
-        # 先检查 D1
+        # 先检查当前仓储，兼容进程内和 Cloudflare 两种实现。
         existing = None
         try:
             from src.repositories import get_repositories
@@ -452,7 +453,7 @@ class ConversationService:
         return _conversations[conv_id]
 
     @staticmethod
-    # 根据 ID 获取会话详情，内存未命中时从 D1 加载
+    # 根据 ID 获取会话详情，服务缓存未命中时从当前仓储加载。
     def get(conv_id: str) -> Conversation | None:
         cached = _conversations.get(conv_id)
         if cached:
@@ -478,7 +479,7 @@ class ConversationService:
             return None
 
     @staticmethod
-    # 列出所有会话，D1 为权威数据源
+    # 列出指定用户的会话，并以当前仓储结果刷新服务缓存。
     def list(user_id: str | None = None) -> list[dict]:
         normalized_user_id = user_id or DEFAULT_CONVERSATION_USER_ID
         try:
@@ -643,6 +644,7 @@ class ConversationService:
 
 # ============ Knowledge Service ============
 
+# memory_enabled=false 时保存进程内文档、原文、分块及字符倒排索引，进程重启后数据清空。
 _documents: dict[str, Document] = {}
 _document_contents: dict[str, tuple[bytes, str]] = {}
 _document_chunks: dict[str, list[str]] = {}
@@ -745,7 +747,7 @@ def _search_local_documents(query: str, top_k: int) -> list[dict]:
 
 
 class KnowledgeService:
-    """文档知识库服务 — 通过 Cloudflare Service Gateway"""
+    """文档知识库服务 — 支持进程内倒排检索与 Cloudflare Gateway"""
 
     @staticmethod
     # 创建或注册 upload document 所需的数据
@@ -805,7 +807,7 @@ class KnowledgeService:
     @staticmethod
     # 获取 list documents 对应的数据
     async def list_documents() -> list[dict]:
-        """列出所有已索引文档，D1 为权威数据源"""
+        """列出文档；本地模式读取进程内索引，网关模式以远端仓储为权威"""
         if not settings.memory_enabled:
             return sorted(
                 [document.to_dict() for document in _documents.values()],
@@ -861,14 +863,14 @@ class KnowledgeService:
     @staticmethod
     # 获取 get document 对应的数据
     async def get_document(doc_id: str) -> Document | None:
-        """获取指定文档详情，内存未命中时从 D1 加载"""
+        """获取文档详情；本地模式只读进程内数据，网关模式允许远端回源"""
         cached = _documents.get(doc_id)
         if cached:
             return cached
         if not settings.memory_enabled:
             return None
 
-        # D1 回退
+        # 从当前仓储回源并刷新服务缓存。
         try:
             from src.clients.memory_gateway import CloudflareMemoryClient
             client = CloudflareMemoryClient()
@@ -933,7 +935,7 @@ class KnowledgeService:
     @staticmethod
     # 执行 reindex document 对应的业务逻辑
     async def reindex_document(doc_id: str) -> Document:
-        """重新索引指定文档，内存无内容时从 D1 加载"""
+        """重新索引；本地模式重切进程内原文，网关模式允许远端回源"""
         if not settings.memory_enabled:
             document = _documents.get(doc_id)
             stored = _document_contents.get(doc_id)

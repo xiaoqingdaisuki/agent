@@ -4,13 +4,13 @@ Memory / Checkpoint 存储
 LangGraph 的 checkpointer 机制：
 - 每次 invoke 自动保存状态到 checkpoint
 - 支持对话暂停/恢复、回滚、多线程隔离
-- 当前使用 D1Checkpointer：同步写入 MemorySaver + 异步持久化到 Gateway (D1)
-- 重启后从 D1 恢复图状态，确保对话连续性
+- memory_enabled=false 时使用 MemorySaver，状态仅在当前进程有效
+- memory_enabled=true 时使用 D1Checkpointer，异步持久化并支持重启恢复
 """
 
 from src.memory.d1_checkpointer import D1Checkpointer
 
-# 默认使用 D1 checkpointer（持久化到 Gateway/D1）
+# 按配置复用 D1Checkpointer 或纯内存 MemorySaver。
 _checkpointer: D1Checkpointer | None = None
 _memory_saver = None
 

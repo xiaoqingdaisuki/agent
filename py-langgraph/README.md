@@ -1,13 +1,13 @@
 # py-langgraph-agent
 
-Python + LangGraph（显式 StateGraph 图编排）实现的 Agent 服务。
+Python + LangGraph（显式 `StateGraph` 图编排）实现的 Agent 服务，对外契约与 `ts-langchain/` 保持一致。明确的普通生成任务走无工具轻量图；实时信息、计算、文件、知识库、记忆、推荐和未知意图保留完整工具图。
 
 与 `ts-langchain/` 形成框架对比：
 
 | 维度 | TS: LangChain | Python: LangGraph |
 | --- | --- | --- |
 | 编程模型 | 声明式配置 | 显式图编排 |
-| Agent 创建 | `createOpenAIToolsAgent({ llm, tools, prompt })` | `StateGraph().add_node().add_conditional_edges().compile()` |
+| Agent 创建 | `createAgent({ model, tools, middleware })` | `StateGraph().add_node().add_conditional_edges().compile()` |
 | 控制流 | 框架内部隐式处理 | 你自己显式定义每一步 |
 | 条件路由 | middleware 层面 | `add_conditional_edges()` 一等公民 |
 | 持久化 | 无内置 | `checkpointer` 内置（对话可暂停/恢复） |
@@ -30,7 +30,7 @@ src/
 │   ├── retriever.py       # 检索器
 │   └── rag_agent.py       # RAG Agent
 ├── services/
-│   └── __init__.py        # Service Layer（业务编排）
+│   └── __init__.py        # Service Layer（业务编排、本地知识检索、流式兼容）
 ├── clients/
 │   ├── memory_gateway.py  # Cloudflare Service HTTP 客户端
 │   └── schemas.py         # 客户端数据模型
@@ -62,6 +62,8 @@ src/
 └── tools/
     ├── registry.py        # 工具注册中心
     ├── contracts.py       # 工具契约
+    ├── file_search.py     # 文件内容检索
+    ├── time.py            # 当前时间与时区换算
     └── runtime/           # 工具安全执行和数据脱敏
 ```
 
@@ -70,8 +72,7 @@ src/
 - Python >= 3.11
 - pip >= 24.x
 - OpenAI API Key（或兼容 OpenAI 格式的 LLM 提供商）
-- PostgreSQL（可选，用于 LangGraph checkpoint 持久化）
-- Qdrant（可选，用于 RAG 向量存储）
+- Qdrant（可选，仅用于独立 RAG 向量存储模块）
 
 ## 本地运行
 
@@ -99,12 +100,23 @@ OPENAI_MODEL=gpt-4o-mini
 # 可选：自定义 API 地址
 OPENAI_BASE_URL=https://api.openai.com/v1
 
+# 模型输出、并发和请求预算
+LLM_MAX_OUTPUT_TOKENS=768
+LLM_MAX_CONCURRENCY=2
+AGENT_DEADLINE_MS=120000
+AGENT_DEADLINE_WITH_TOOLS_MS=300000
+
 # API 服务
 HOST=0.0.0.0
 PORT=6002
+AGENT_API_SECRET=replace-with-a-long-random-secret
+CORS_ORIGIN=http://localhost:3000
 
-# 数据库（checkpoint 持久化，可选）
-POSTGRES_URI=postgresql://agent:agent@localhost:5432/agent
+# 默认关闭 Cloudflare Memory，使用进程内会话、画像、记忆和知识库
+MEMORY_ENABLED=false
+# MEMORY_ENABLED=true 时再填写以下两项
+CLOUDFLARE_MEMORY_BASE_URL=https://your-worker.workers.dev
+CLOUDFLARE_MEMORY_SECRET=your-secret
 
 # Qdrant 向量数据库（RAG 功能需要）
 QDRANT_URL=http://localhost:6333
@@ -160,11 +172,10 @@ OPENAI_API_KEY=sk-your-api-key
 OPENAI_MODEL=gpt-4o-mini
 HOST=0.0.0.0
 PORT=6002
-POSTGRES_URI=postgresql://agent:agent@postgres:5432/agent
 QDRANT_URL=http://qdrant:6333
 ```
 
-注意：Docker 环境中 `POSTGRES_URI` 和 `QDRANT_URL` 应使用 Docker Compose 服务名（`postgres`、`qdrant`）而非 `localhost`。
+注意：当前 `docker-compose.yml` 只编排 Agent 服务；如额外启用独立 RAG 向量模块，需要自行提供 Qdrant，并将 `QDRANT_URL` 设置为容器可访问地址。
 
 **3. 构建并启动**
 
@@ -196,6 +207,8 @@ curl http://localhost:6002/api/v1/health
 
 ### External API（前端 UI 使用）
 
+除 `/health` 和 `/api/v1/health` 外，请求必须携带 `Authorization: Bearer <AGENT_API_SECRET>`。涉及用户数据时还必须由可信服务端设置 `X-Agent-User-Id`；请求中的 `user_id` 只能与该身份一致。
+
 ```
 GET  /api/v1/health                    健康检查
 GET  /api/v1/capabilities              可用能力列表
@@ -205,6 +218,7 @@ GET  /api/v1/conversations             列出会话
 GET  /api/v1/conversations/{conv_id}   获取会话详情
 DELETE /api/v1/conversations/{conv_id} 删除会话
 POST /api/v1/conversations/{conv_id}/messages 发送消息
+POST /api/v1/conversations/{conv_id}/messages/stream 流式发送消息（SSE）
 GET  /api/v1/conversations/{conv_id}/messages 获取历史
 DELETE /api/v1/conversations/{conv_id}/messages 清空消息
 
@@ -214,14 +228,18 @@ GET  /api/v1/knowledge/documents/{doc_id} 文档详情
 DELETE /api/v1/knowledge/documents/{doc_id} 删除文档
 POST /api/v1/knowledge/documents/{doc_id}/reindex 重新索引
 POST /api/v1/knowledge/search          知识检索
+
+GET  /api/v1/profile                   用户画像
+PATCH /api/v1/profile                  更新画像
+GET  /api/v1/memory                    记忆列表
+POST /api/v1/memory                    添加记忆
+DELETE /api/v1/memory                  删除记忆
+GET  /api/v1/history                   问答历史
 ```
 
 ### Internal API（QQ Bot 使用）
 
-```
-POST /api/internal/agent/chat           直接对话
-POST /api/internal/agent/chat/stream    流式对话
-```
+当前版本不再暴露独立的 `/api/internal/agent/*` 路由。可信服务端使用兼容路由 `POST /chat`、`POST /stream`，并携带 Bearer 密钥和 `X-Agent-User-Id`；`GET /tools` 返回当前可用工具，`POST /images/generations` 提供图片生成。
 
 ## 环境变量
 
@@ -230,11 +248,22 @@ POST /api/internal/agent/chat/stream    流式对话
 | `OPENAI_API_KEY` | OpenAI API 密钥 | - | 是 |
 | `OPENAI_MODEL` | 使用的模型 | `gpt-4o-mini` | 否 |
 | `OPENAI_BASE_URL` | API 地址 | `https://api.openai.com/v1` | 否 |
+| `LLM_MAX_OUTPUT_TOKENS` | 单次模型输出上限 | `768` | 否 |
+| `LLM_MAX_CONCURRENCY` | 进程内模型并发上限 | `2` | 否 |
+| `AGENT_DEADLINE_MS` | 普通 Agent 总时限（毫秒） | `120000` | 否 |
+| `AGENT_DEADLINE_WITH_TOOLS_MS` | 工具 Agent 总时限（毫秒） | `300000` | 否 |
 | `ANTHROPIC_API_KEY` | Anthropic API 密钥 | - | 否 |
 | `ANTHROPIC_MODEL` | Anthropic 模型 | `claude-3-5-haiku-20241022` | 否 |
 | `HOST` | 服务监听地址 | `0.0.0.0` | 否 |
 | `PORT` | 服务端口 | `6002` | 否 |
-| `POSTGRES_URI` | PostgreSQL 连接字符串 | `postgresql://agent:agent@localhost:5432/agent` | 否 |
+| `AGENT_API_SECRET` | 外部 API Bearer 密钥 | 空 | 生产环境是 |
+| `CORS_ORIGIN` | 允许的浏览器来源，逗号分隔 | 空 | 否 |
+| `MEMORY_ENABLED` | 是否启用 Cloudflare Memory Gateway | `true` | 否 |
+| `CLOUDFLARE_MEMORY_BASE_URL` | Memory Gateway 地址 | `http://localhost:8787` | 网关开启时 |
+| `CLOUDFLARE_MEMORY_SECRET` | Memory Gateway Bearer 密钥 | 空 | 网关开启时 |
+| `IMAGE_API_KEY` | Cloudflare Workers AI 图片密钥 | - | 图片功能是 |
+| `IMAGE_BASE_URL` | Workers AI API 根地址 | Cloudflare API | 否 |
+| `IMAGE_MODEL` | 图片生成模型 | `@cf/black-forest-labs/flux-2-klein-9b` | 否 |
 | `QDRANT_URL` | Qdrant 地址 | `http://localhost:6333` | 否 |
 | `TAVILY_API_KEY` | Tavily API 密钥 | - | 是（搜索功能） |
 | `TAVILY_SEARCH_DEPTH` | 搜索深度：`basic` 或 `advanced` | `basic` | 否 |
@@ -244,6 +273,8 @@ POST /api/internal/agent/chat/stream    流式对话
 | `SEARCH_STALE_TTL_SECONDS` | 全部实时源失败时可用的旧缓存窗口 | `600` | 否 |
 
 搜索底层只调用 Tavily。服务会对临时网络错误和限流进行一次重试，连续失败时短暂熔断，并在实时调用失败时返回标记清楚的旧缓存；不会回退到其他搜索网站或把模型训练数据伪装成实时结果。
+
+`MEMORY_ENABLED=false` 时不会调用 Gateway、D1 或 Vectorize；会话、画像、记忆和文档保存在进程内，知识检索使用有界 Top-K 字符倒排索引，LangGraph checkpoint 使用 `MemorySaver`，重启后数据清空。设置为 `true` 后才使用 Cloudflare Service 和 D1 checkpointer。
 
 ## 故障排查
 
@@ -267,14 +298,14 @@ taskkill /PID <PID> /F
 
 ### Qdrant 连接失败
 
+- 当前公开知识库在 `MEMORY_ENABLED=false` 时不依赖 Qdrant
 - 确保 Qdrant 服务已启动：`docker-compose up qdrant`
 - Docker 环境中使用 `QDRANT_URL=http://qdrant:6333`
 
 ### PostgreSQL 连接失败
 
-- 确保 PostgreSQL 已启动：`docker-compose up postgres`
-- 检查 `POSTGRES_URI` 格式是否正确
-- 确认数据库用户权限
+- 当前实现不读取 `POSTGRES_URI`，checkpoint 根据 `MEMORY_ENABLED` 使用 `MemorySaver` 或 Cloudflare D1 checkpointer。
+- 若旧部署仍注入 PostgreSQL 变量，可以安全移除；它不会影响当前 Agent 服务。
 
 ## 项目脚本
 
@@ -307,8 +338,10 @@ class AgentState(TypedDict):
     messages: Annotated[list, operator.add]
 
 def build_agent():
+    # 构建最小显式状态图，真实项目实现见 src/agents/graph_agents.py。
     llm = ChatOpenAI(model="gpt-4o-mini")
 
+    # 调用模型并把 AI 消息追加回图状态。
     def agent_node(state: AgentState):
         response = llm.invoke(state["messages"])
         return {"messages": [response]}
@@ -325,47 +358,38 @@ def build_agent():
 
 ### 前置要求
 
-- LLOneBot（QQ 协议层）
-- 一个可用的 QQ 号（建议使用专用小号）
+- LLOneBot（QQ 协议层）或其他 OneBot 客户端
+- 一个负责转发 Bearer 密钥与可信用户标识的独立 Bot 适配服务
 
 ### 步骤
 
 **1. 部署 LLOneBot**
 
-参考 [LLOneBot 官方文档](https://llonebot.cn/) 部署协议层。
-
-确保 LLOneBot 的 HTTP API 地址可访问，默认 `http://localhost:8080`。
+参考 [LLOneBot 官方文档](https://llonebot.cn/) 部署协议层。当前仓库不包含 `src/adapters/qq` 或 Bot 常驻进程；QQ 接入方应作为独立服务调用本 Agent API。
 
 **2. 配置环境变量**
 
-在 `.env` 中添加：
+Agent 服务与 Bot 适配服务至少需要共享以下配置：
 
 ```env
-ONE_BOT_API_URL=http://localhost:8080
+AGENT_API_BASE_URL=http://localhost:6002
+AGENT_API_SECRET=replace-with-a-long-random-secret
 ```
 
 **3. 启动 Bot**
 
-```python
-# 在项目根目录运行
-python -c "
-from src.adapters.qq import QQAdapter
-from src.adapters.bot import BotService
-import asyncio
-
-async def main():
-    adapter = QQAdapter(base_url='http://localhost:8080')
-    bot = BotService(adapter)
-    await bot.start()
-
-asyncio.run(main())
-"
+```bash
+curl -X POST http://localhost:6002/chat \
+  -H "Authorization: Bearer replace-with-a-long-random-secret" \
+  -H "X-Agent-User-Id: qq-user-123" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"你好","user_id":"qq-user-123"}'
 ```
 
 ### 可用指令
 
 | 指令 | 功能 |
 |------|------|
-| `/help` | 列出所有可用指令 |
-| `/status` | 查看机器人运行状态 |
-| `/clear` | 清除当前会话记忆 |
+| `切换大公鸡模式` | 按会话切换内建对话风格；再次发送可关闭 |
+| 普通文本 | 交给轻量对话或完整工具 Agent 处理 |
+| 清空上下文 | 由 Bot 适配服务调用会话消息清空接口实现 |

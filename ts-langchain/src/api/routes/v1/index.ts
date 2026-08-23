@@ -193,7 +193,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       const convId = request.params.id;
       const trustedUserId = requireAgentUserId(request, user_id);
 
-      // 确保会话存在于 D1
+      // 确保会话存在于当前仓储并校验用户归属。
       await ConversationService.ensure(convId, trustedUserId);
 
       const conv = await ConversationService.get(convId);
@@ -241,7 +241,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     const convId = request.params.id;
     const trustedUserId = requireAgentUserId(request, user_id);
 
-    // 确保会话记录存在于 D1（前端可能直接请求已有的 thread_id）
+    // 确保会话存在于当前仓储并校验已有 thread_id 的用户归属。
     await ConversationService.ensure(convId, trustedUserId);
 
     const conversation = await ConversationService.get(convId);

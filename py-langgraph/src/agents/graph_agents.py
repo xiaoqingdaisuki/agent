@@ -65,6 +65,7 @@ async def _load_memory_context(user_id: str) -> str:
         return ""
 
 
+# 集中定义必须保留完整工具链的意图，避免实时、文件或记忆请求被误送到轻量模型路径。
 TOOL_INTENT_PATTERNS = (
     re.compile(r"(?:天气|气温|下雨|下雪|空气质量|weather)", re.IGNORECASE),
     re.compile(
@@ -116,6 +117,7 @@ TOOL_INTENT_PATTERNS = (
     ),
 )
 
+# 仅白名单明确的普通生成任务进入无工具路径，未识别请求继续走保守路由。
 DIRECT_CHAT_PATTERNS = (
     re.compile(
         r"^(?:你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好|"

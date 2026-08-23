@@ -34,7 +34,7 @@ import { logRequestError } from "../middleware/error.js";
 import type { ReActRunSummary } from "../../agents/react-policy.js";
 import { config } from "../../config/index.js";
 
-// 创建或注册 registerChatRoutes 所需的数据
+// 注册旧版非流式对话接口，并按消息意图选择本地快答、轻量对话或完整工具 Agent。
 export async function registerChatRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
     "/chat",

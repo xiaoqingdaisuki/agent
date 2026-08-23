@@ -163,7 +163,7 @@ async def get_messages(conv_id: str, request: Request):
 async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
     trusted_user_id = require_agent_user_id(request, req.user_id)
     try:
-        # 确保会话存在于 D1
+        # 确保会话存在于当前仓储并校验用户归属。
         ConversationService.ensure(conv_id, trusted_user_id)
 
         conv = ConversationService.get(conv_id)
@@ -173,7 +173,7 @@ async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
                 detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
             )
 
-        # 从 Gateway 恢复 checkpoint（重启后恢复图状态）
+        # 启用记忆网关时尝试恢复 checkpoint；本地模式会安全跳过。
         try:
             from src.memory import get_default_checkpointer
             await get_default_checkpointer().restore_from_gateway(conv_id)
@@ -199,7 +199,7 @@ async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
 # 向会话发送消息并流式返回 AI 回复
 async def stream_message(conv_id: str, req: SendMessageRequest, request: Request):
     trusted_user_id = require_agent_user_id(request, req.user_id)
-    # 确保会话记录存在于 D1（前端可能直接请求已有的 thread_id）
+    # 确保会话存在于当前仓储并校验已有 thread_id 的用户归属。
     ConversationService.ensure(conv_id, trusted_user_id)
 
     conversation = ConversationService.get(conv_id)
@@ -209,7 +209,7 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
 
-    # 从 Gateway 恢复 checkpoint（重启后恢复图状态）
+    # 启用记忆网关时尝试恢复 checkpoint；本地模式会安全跳过。
     try:
         from src.memory import get_default_checkpointer
         await get_default_checkpointer().restore_from_gateway(conv_id)

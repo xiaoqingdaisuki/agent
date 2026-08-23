@@ -1,16 +1,16 @@
 # Agent 双版本项目
 
-使用 **TypeScript + LangChain** 和 **Python + LangGraph** 实现同一个 Agent 需求，作为框架对比学习项目。
+使用 **TypeScript + LangChain** 和 **Python + LangGraph** 实现同一套 Agent API。TS 版通过 `createAgent` 做声明式编排，Python 版通过 `StateGraph` 显式控制节点与边；两版独立维护工具、Prompt、配置和运行状态，便于验证后按相同契约对照实现。
 
 ## 核心对比
 
 | 维度 | TS: LangChain | Python: LangGraph |
 | --- | --- | --- |
-| 编程模型 | 声明式配置：`createOpenAIToolsAgent({ llm, tools, prompt })` | 显式图编排：`StateGraph().add_node().add_conditional_edges().compile()` |
+| 编程模型 | 声明式配置：`createAgent({ model, tools, middleware })` | 显式图编排：`StateGraph().add_node().add_conditional_edges().compile()` |
 | 控制流 | 隐式（框架内部处理循环） | 显式（自己定义每个节点和边） |
 | 条件路由 | middleware 层面 | `add_conditional_edges()` 一等公民 |
 | 状态管理 | 隐式消息列表 | 显式 TypedDict State |
-| 持久化 | 通过 Cloudflare Service（D1 + Vectorize） | 通过 Cloudflare Service（D1 + Vectorize） |
+| 持久化 | `MEMORY_ENABLED=true` 使用 Cloudflare Service；关闭时使用进程内仓储 | `MEMORY_ENABLED=true` 使用 Cloudflare Service；关闭时使用进程内仓储 |
 | 人机协同 | 需自行实现 | `interrupt_before` 原生支持（工具调用前可插入人工确认） |
 | 多 Agent | 需自行编排 | supervisor + `Command` 路由 |
 
@@ -25,6 +25,10 @@
 - 统一 Bearer Secret 认证
 
 ts-langchain 和 py-langgraph 均通过 HTTP 调用此服务，不直接持有数据库凭证。
+
+Cloudflare Service 是可选能力。`MEMORY_ENABLED=false` 时，两版都不会访问 Gateway、D1 或 Vectorize；会话、画像、记忆和知识文档保存在当前进程内，知识检索使用有界 Top-K 字符倒排索引，服务重启后本地数据会清空。`MEMORY_ENABLED=true` 时才需要配置 `CLOUDFLARE_MEMORY_BASE_URL` 和 `CLOUDFLARE_MEMORY_SECRET`。
+
+普通解释、翻译、写作、计划、比较和代码请求会走不携带工具 schema 的轻量模型路径；实时信息、计算、文件、知识库、记忆、推荐及未知意图保守保留完整工具链。高频固定问答可直接本地返回，默认模型输出预算由 `LLM_MAX_OUTPUT_TOKENS` 控制。
 
 ## 项目结构
 
@@ -66,7 +70,7 @@ agent/
 │   │   │   ├── response-handler.ts # 响应格式化处理
 │   │   │   └── index.ts            # Agent 导出
 │   │   ├── services/
-│   │   │   └── index.ts            # Service Layer（业务编排）
+│   │   │   └── index.ts            # Service Layer（业务编排 + 本地知识检索）
 │   │   ├── commands/
 │   │   │   └── index.ts            # CLI 命令入口
 │   │   ├── rag/
@@ -89,7 +93,9 @@ agent/
 │   │   │   ├── web-read.ts         # 网页读取
 │   │   │   ├── web-extract.ts      # 网页正文提取
 │   │   │   ├── file-read.ts        # 文件读取
+│   │   │   ├── file-search.ts      # 文件内容检索
 │   │   │   ├── calculator.ts       # 安全计算
+│   │   │   ├── time.ts             # 当前时间与时区换算
 │   │   │   ├── knowledge.ts        # 知识库检索
 │   │   │   ├── memory-session.ts   # 会话记忆检索
 │   │   │   ├── memory-user.ts      # 用户长期记忆（读写）
@@ -132,7 +138,7 @@ agent/
 │   │   │   ├── deadline.py        # Agent 执行超时控制
 │   │   │   └── response_handler.py # 响应格式化处理
 │   │   ├── services/
-│   │   │   └── __init__.py        # Service Layer（业务编排）
+│   │   │   └── __init__.py        # Service Layer（业务编排 + 本地知识检索）
 │   │   ├── commands/
 │   │   │   └── __init__.py        # CLI 命令入口
 │   │   ├── rag/
@@ -151,7 +157,9 @@ agent/
 │   │   │   ├── web_read.py        # 网页读取
 │   │   │   ├── web_extract.py     # 网页正文提取
 │   │   │   ├── file_read.py       # 文件读取
+│   │   │   ├── file_search.py     # 文件内容检索
 │   │   │   ├── calculator.py      # 安全计算
+│   │   │   ├── time.py            # 当前时间与时区换算
 │   │   │   ├── knowledge.py       # 知识库检索
 │   │   │   ├── memory_session.py  # 会话记忆检索
 │   │   │   ├── memory_user.py     # 用户长期记忆（读写）
@@ -224,7 +232,7 @@ npx wrangler deploy                                  # 部署到线上
 cd ts-langchain
 npm install
 cp .env.example .env
-# 编辑 .env，填入 OPENAI_API_KEY、IMAGE_API_KEY、CLOUDFLARE_MEMORY_SECRET 和 AGENT_API_SECRET
+# 编辑 .env；至少配置模型凭证和 AGENT_API_SECRET，图片与 Cloudflare Memory 按启用情况配置
 npm run dev
 ```
 
@@ -236,7 +244,7 @@ npm run dev
 cd py-langgraph
 pip install -r requirements.txt
 cp .env.example .env
-# 编辑 .env，填入 OPENAI_API_KEY、IMAGE_API_KEY、CLOUDFLARE_MEMORY_SECRET 和 AGENT_API_SECRET
+# 编辑 .env；至少配置模型凭证和 AGENT_API_SECRET，图片与 Cloudflare Memory 按启用情况配置
 uvicorn src.api.main:app --reload
 ```
 
@@ -296,6 +304,8 @@ POST /images/generations                图片生成
 
 ts-langchain 和 py-langgraph 通过以下内部 API 与 Cloudflare Service 通信（Bearer Secret 认证）：
 
+这些内部接口仅在 `MEMORY_ENABLED=true` 时由 Agent 服务调用；关闭记忆网关时无需启动 `cloudflare-service/`。
+
 ```
 PUT   /internal/v1/users/{user_id}/profile          创建/更新画像
 GET   /internal/v1/users/{user_id}/profile          获取画像
@@ -338,10 +348,10 @@ GET   /internal/v1/openapi.json                     OpenAPI 规范
 ### TypeScript 版
 
 - **运行时**：Node.js 20+
-- **Agent 框架**：LangChain (`createOpenAIToolsAgent` + `AgentExecutor`)
+- **Agent 框架**：LangChain (`createAgent` 声明式配置)
 - **工具定义**：Zod
 - **API 框架**：Fastify
-- **持久化**：Cloudflare Service (D1 + Vectorize)
+- **持久化**：进程内仓储或 Cloudflare Service (D1 + Vectorize)
 - **测试**：Vitest
 
 ### Python 版
@@ -349,9 +359,9 @@ GET   /internal/v1/openapi.json                     OpenAPI 规范
 - **运行时**：Python 3.11+
 - **Agent 框架**：LangGraph (`StateGraph` + `ToolNode`)
 - **工具定义**：Pydantic
-- **Checkpoint**：LangGraph 内置（PostgresSaver / SqliteSaver）
+- **Checkpoint**：`MemorySaver` 或 Cloudflare D1 checkpointer
 - **API 框架**：FastAPI
-- **持久化**：Cloudflare Service (D1 + Vectorize)
+- **持久化**：进程内仓储或 Cloudflare Service (D1 + Vectorize)
 - **测试**：pytest + pytest-asyncio
 - **追踪**：LangSmith
 

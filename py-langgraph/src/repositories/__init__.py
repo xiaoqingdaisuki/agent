@@ -1,8 +1,8 @@
 """
 Repositories — 数据仓储层
 
-统一使用 Cloudflare Service 作为存储后端。
-通过 CloudflareMemoryClient 与 Service 通信，所有数据持久化到 D1 数据库。
+根据 memory_enabled 选择进程内仓储或 Cloudflare Service。
+业务层只依赖统一仓储接口，关闭记忆网关时不会创建远端客户端。
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ def _get_or_create_event_loop() -> asyncio.AbstractEventLoop:
     return _sync_loop
 
 
-# 执行 run sync 对应的业务逻辑
+# 在同步业务层中安全执行仓储协程，并复用专用事件循环。
 def _run_sync(coro) -> Any:
     """在同步上下文中运行异步协程"""
     loop = _get_or_create_event_loop()
@@ -63,7 +63,7 @@ def _run_sync(coro) -> Any:
     return future.result()
 
 
-# 获取 get repositories 对应的数据
+# 返回当前配置对应的仓储单例，确保同一进程共享会话与记忆状态。
 def get_repositories():
     """按配置创建 Cloudflare 或进程内仓储实例。"""
     global _repositories

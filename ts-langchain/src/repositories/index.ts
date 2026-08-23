@@ -1,7 +1,7 @@
 /**
  * Repositories — 数据仓储层
  *
- * 统一使用 Cloudflare Service 作为存储后端。
+ * 根据 MEMORY_ENABLED 选择进程内仓储或 Cloudflare Service。
  * 所有业务层（Service、Tool、API Route）只能通过 Repository 访问数据。
  */
 
@@ -24,9 +24,9 @@ import { config } from "../config/index.js";
 // ============ 工厂函数 ============
 
 /**
- * 创建 Cloudflare 仓储实例
+ * 根据配置创建进程内或 Cloudflare 仓储实例
  */
-// 获取 getRepositories 对应的数据
+// 返回当前配置对应的仓储集合，关闭记忆网关时不创建远端客户端。
 export function getRepositories(): Repositories {
   if (!config.MEMORY_ENABLED) return inMemoryRepositories;
   const client = new CloudflareMemoryClient({

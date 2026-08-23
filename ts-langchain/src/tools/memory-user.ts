@@ -2,7 +2,7 @@
  * memory.user — 用户长期记忆管理
  *
  * 提供用户记忆的搜索和保存能力。
- * 统一通过 Repository 层访问 Cloudflare Service。
+ * 统一通过 Repository 层访问当前配置的存储后端。
  */
 
 import { DynamicStructuredTool } from "@langchain/core/tools";

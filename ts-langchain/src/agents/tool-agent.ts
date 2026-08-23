@@ -217,6 +217,7 @@ async function runWithModelCapacity<T>(
   }
 }
 
+// 集中定义必须保留完整工具链的意图，避免实时、文件或记忆请求被误送到轻量模型路径。
 const TOOL_INTENT_PATTERNS = [
   /(?:天气|气温|下雨|下雪|空气质量|weather)/i,
   /(?:(?:现在|当前|此刻).{0,10}(?:几点|时间|日期|星期)|北京时间|时区|timezone)/i,
@@ -231,6 +232,7 @@ const TOOL_INTENT_PATTERNS = [
   /(?:get_weather|get_current_time|convert_timezone|calculator|knowledge_search|file_read|file_search)/i,
 ];
 
+// 仅白名单明确的普通生成任务进入无工具路径，未识别请求继续走保守路由。
 const DIRECT_CHAT_PATTERNS = [
   /^(?:你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好|你是谁|你叫什么|介绍一下你自己|你能做什么|你会做什么|你的能力是什么)[！!。.?？]?$/i,
   /(?:解释|说明|什么是|为什么|如何理解|科普|讲讲|介绍|\bexplain\b|\bwhat\s+is\b|\bwhy\b)/i,
