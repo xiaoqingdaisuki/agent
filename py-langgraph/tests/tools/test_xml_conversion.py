@@ -43,6 +43,37 @@ def test_non_xml_unchanged():
     assert not result.tool_calls
 
 
+def test_native_tool_calls_take_priority_over_dots_xml():
+    """Native calls must not be replaced or duplicated by XML fallback calls."""
+    msg = AIMessage(
+        content=(
+            "已准备查询。"
+            + DOTS_OPEN
+            + "<query>不应重复执行</query>"
+            + DOTS_CLOSE
+        ),
+        tool_calls=[
+            {
+                "name": "web_search",
+                "args": {"query": "原生调用"},
+                "id": "native-call-1",
+            }
+        ],
+    )
+
+    result = _convert_xml_tool_calls(msg)
+
+    assert result.content == "已准备查询。"
+    assert result.tool_calls == [
+        {
+            "name": "web_search",
+            "args": {"query": "原生调用"},
+            "id": "native-call-1",
+            "type": "tool_call",
+        }
+    ]
+
+
 def test_already_standard_tool_calls():
     """Messages with standard tool_calls should pass through"""
     msg = AIMessage(

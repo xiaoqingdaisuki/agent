@@ -123,6 +123,35 @@ describe("tool agent", () => {
     expect(result.content).toBe("你好");
   });
 
+  it("prefers native tool calls when a provider also includes dots XML", () => {
+    const result = convertXmlToolCalls(
+      new AIMessage({
+        content:
+          "已准备查询。<dots_function_call><search>" +
+          "<query>不应重复执行</query>" +
+          "</search></dots_function_call>",
+        tool_calls: [
+          {
+            id: "native-call-1",
+            type: "tool_call",
+            name: "web_search",
+            args: { query: "原生调用" },
+          },
+        ],
+      }),
+    );
+
+    expect(result.content).toBe("已准备查询。");
+    expect(result.tool_calls).toEqual([
+      {
+        id: "native-call-1",
+        type: "tool_call",
+        name: "web_search",
+        args: { query: "原生调用" },
+      },
+    ]);
+  });
+
   it("routes ordinary answer styles directly while preserving tool intents", () => {
     expect(isDirectChatMessage("你好")).toBe(true);
     expect(isDirectChatMessage("你是谁？")).toBe(true);

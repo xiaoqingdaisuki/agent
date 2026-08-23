@@ -432,6 +432,20 @@ def _normalize_standard_tool_calls(message: BaseMessage) -> BaseMessage:
     return message.model_copy(update={"tool_calls": normalized_calls})
 
 
+# 从回答中移除兼容协议文本，但不改变模型已经返回的原生工具调用。
+def _remove_xml_tool_call_text(content: str, calls: list[dict]) -> str:
+    """Remove XML fallback spans while preserving surrounding answer text."""
+    clean_content = content
+    removed_ranges: set[tuple[int, int]] = set()
+    for call in sorted(calls, key=lambda item: item["start"], reverse=True):
+        call_range = (call["start"], call["end"])
+        if call_range in removed_ranges:
+            continue
+        removed_ranges.add(call_range)
+        clean_content = clean_content[: call["start"]] + clean_content[call["end"] :]
+    return clean_content.strip()
+
+
 # 判断消息是否仍包含未转换的 XML 工具调用。
 def _contains_xml_tool_calls(content: object) -> bool:
     """Return whether content contains either supported XML call syntax."""
@@ -446,6 +460,17 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
         return message
 
     parsed_calls = _parse_xml_tool_calls(content)
+    native_tool_calls = getattr(message, "tool_calls", None) or []
+    if native_tool_calls:
+        if not parsed_calls:
+            return _normalize_standard_tool_calls(message)
+        return AIMessage(
+            # 原生 tool_calls 是模型与当前 Agent 协商出的正式结果，兼容 XML 只允许被隐藏，不能覆盖或追加执行。
+            content=_remove_xml_tool_call_text(content, parsed_calls),
+            tool_calls=_normalize_standard_tool_calls(message).tool_calls,
+            id=message.id,
+            response_metadata=message.response_metadata,
+        )
     if not parsed_calls:
         return _normalize_standard_tool_calls(message)
 
@@ -457,16 +482,8 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
         }
         for index, call in enumerate(parsed_calls, start=1)
     ]
-    clean_content = content
-    removed_ranges = set()
-    for call in reversed(parsed_calls):
-        call_range = (call["start"], call["end"])
-        if call_range in removed_ranges:
-            continue
-        removed_ranges.add(call_range)
-        clean_content = clean_content[: call["start"]] + clean_content[call["end"] :]
     return AIMessage(
-        content=clean_content.strip(),
+        content=_remove_xml_tool_call_text(content, parsed_calls),
         tool_calls=tool_calls,
         id=message.id,
         response_metadata=message.response_metadata,

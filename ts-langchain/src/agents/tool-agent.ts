@@ -153,6 +153,19 @@ function parseXmlToolCalls(content: string): ParsedXmlToolCall[] {
   return matches.sort((left, right) => left.start - right.start);
 }
 
+// 从回答中移除兼容协议文本，但不改变模型已经返回的原生工具调用。
+function removeXmlToolCallText(content: string, calls: ParsedXmlToolCall[]): string {
+  let cleanContent = content;
+  const removedRanges = new Set<string>();
+  for (const call of [...calls].sort((left, right) => right.start - left.start)) {
+    const range = `${call.start}:${call.end}`;
+    if (removedRanges.has(range)) continue;
+    removedRanges.add(range);
+    cleanContent = cleanContent.slice(0, call.start) + cleanContent.slice(call.end);
+  }
+  return cleanContent.trim();
+}
+
 // 将任意模型响应规范化为当前 LangChain 运行时可识别的 AIMessage，并兼容 XML 工具调用。
 export function convertXmlToolCalls(message: unknown): AIMessage {
   const candidate = message as Partial<BaseMessage> | null;
@@ -162,6 +175,16 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
     ? (candidate as any).tool_calls
     : [];
   const parsedCalls = parseXmlToolCalls(content);
+  if (originalToolCalls.length > 0) {
+    return new AIMessage({
+      // 原生 tool_calls 是模型与当前 Agent 协商出的正式结果，兼容 XML 只允许被隐藏，不能覆盖或追加执行。
+      content: parsedCalls.length > 0 ? removeXmlToolCallText(content, parsedCalls) : rawContent as any,
+      tool_calls: normalizeToolCalls(originalToolCalls) as any,
+      id: candidate?.id,
+      response_metadata: candidate?.response_metadata,
+      additional_kwargs: (candidate as any)?.additional_kwargs,
+    });
+  }
   if (parsedCalls.length === 0) {
     return new AIMessage({
       content: rawContent as any,
@@ -178,16 +201,8 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
     name: normalizeToolName(call.name),
     args: call.args,
   }));
-  let cleanContent = content;
-  const removedRanges = new Set<string>();
-  for (const call of [...parsedCalls].sort((left, right) => right.start - left.start)) {
-    const range = `${call.start}:${call.end}`;
-    if (removedRanges.has(range)) continue;
-    removedRanges.add(range);
-    cleanContent = cleanContent.slice(0, call.start) + cleanContent.slice(call.end);
-  }
   return new AIMessage({
-    content: cleanContent.trim(),
+    content: removeXmlToolCallText(content, parsedCalls),
     tool_calls: toolCalls,
     id: candidate?.id,
     response_metadata: candidate?.response_metadata,
