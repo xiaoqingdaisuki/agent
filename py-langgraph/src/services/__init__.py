@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Optional
@@ -92,6 +93,29 @@ def get_stream_text(chunk) -> str:
     )
 
 
+# 判断事件是否属于本次 Agent 调用的根运行，避免读取嵌套节点的历史状态快照。
+def is_root_lifecycle_event(event: dict) -> bool:
+    parent_ids = event.get("parent_ids")
+    return not isinstance(parent_ids, list) or len(parent_ids) == 0
+
+
+# 检测模型消息是否包含结构化工具调用，避免把工具规划文本当作最终回答。
+def has_structured_tool_call(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        tool_calls = value.get("tool_calls") or []
+        tool_call_chunks = value.get("tool_call_chunks") or []
+        additional_tool_calls = (value.get("additional_kwargs") or {}).get("tool_calls") or []
+    else:
+        tool_calls = getattr(value, "tool_calls", None) or []
+        tool_call_chunks = getattr(value, "tool_call_chunks", None) or []
+        additional_tool_calls = (
+            getattr(value, "additional_kwargs", None) or {}
+        ).get("tool_calls") or []
+    return bool(tool_calls or tool_call_chunks or additional_tool_calls)
+
+
 # 过滤 LangGraph/LangChain 事件中的结束哨兵和 XML 工具调用文本。
 def normalize_agent_output_text(text: str) -> str:
     normalized = strip_xml_tool_stream(text)
@@ -103,7 +127,13 @@ def extract_agent_output_text(output) -> str:
     if isinstance(output, str):
         return normalize_agent_output_text(output)
     if not isinstance(output, dict):
-        return ""
+        get_type = getattr(output, "_get_type", None)
+        output_type = get_type() if callable(get_type) else getattr(output, "type", "")
+        return (
+            normalize_agent_output_text(get_stream_text(output))
+            if output_type in {"ai", "assistant"}
+            else ""
+        )
     nested = output.get("output")
     if isinstance(nested, str):
         return normalize_agent_output_text(nested)
@@ -113,7 +143,18 @@ def extract_agent_output_text(output) -> str:
             return text
     messages = output.get("messages")
     if isinstance(messages, list):
-        for message in reversed(messages):
+        current_turn_start = 0
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if isinstance(message, dict):
+                message_type = message.get("type") or message.get("role", "")
+            else:
+                get_type = getattr(message, "_get_type", None)
+                message_type = get_type() if callable(get_type) else getattr(message, "type", "")
+            if message_type in {"human", "user"}:
+                current_turn_start = index + 1
+                break
+        for message in reversed(messages[current_turn_start:]):
             if isinstance(message, dict):
                 message_type = message.get("type") or message.get("role", "")
             else:
@@ -1165,6 +1206,7 @@ class AgentService:
         emitted_text = False
         observed_tool_event = False
         react_summary = None
+        root_answer = ""
         try:
             from src.agents.graph_agents import (
                 AGENT_RECURSION_LIMIT,
@@ -1236,6 +1278,7 @@ class AgentService:
                                 elif (
                                     event.get("event") in {"on_chain_end", "on_chat_model_end"}
                                     and not full_answer.strip()
+                                    and is_root_lifecycle_event(event)
                                 ):
                                     output = event.get("data", {}).get("output", {})
                                     full_answer = extract_agent_output_text(output)
@@ -1260,9 +1303,10 @@ class AgentService:
                 )
                 return
 
+            direct_chat = is_direct_chat_message(content)
             agent = (
                 build_chat_agent()
-                if is_direct_chat_message(content)
+                if direct_chat
                 else build_tool_agent(system_prompt_override=prompt_override)
             )
             config = {
@@ -1277,6 +1321,9 @@ class AgentService:
                     settings.agent_deadline_ms,
                     settings.agent_deadline_with_tools_ms,
                 ):
+                    completed_model_answer = ""
+                    model_text_buffers: dict[str, str] = {}
+                    model_tool_runs: set[str] = set()
                     if hasattr(agent, "astream_events"):
                         async for event in agent.astream_events(
                             {
@@ -1290,12 +1337,45 @@ class AgentService:
                             if event_name == "on_chat_model_stream":
                                 delta = get_stream_text(event.get("data", {}).get("chunk"))
                                 if delta:
-                                    stream_text_buffer += delta
-                                    visible, stream_text_buffer = drain_xml_tool_stream(stream_text_buffer)
-                                    if visible.strip() or emitted_text:
-                                        full_answer += visible
-                                        emitted_text = True
-                                        yield {"type": "text", "text": visible}
+                                    if direct_chat:
+                                        stream_text_buffer += delta
+                                        visible, stream_text_buffer = drain_xml_tool_stream(
+                                            stream_text_buffer
+                                        )
+                                        if visible.strip() or emitted_text:
+                                            full_answer += visible
+                                            emitted_text = True
+                                            yield {"type": "text", "text": visible}
+                                    else:
+                                        run_id = str(event.get("run_id") or "model")
+                                        model_text_buffers[run_id] = (
+                                            model_text_buffers.get(run_id, "") + delta
+                                        )
+                                        if has_structured_tool_call(
+                                            event.get("data", {}).get("chunk")
+                                        ):
+                                            model_tool_runs.add(run_id)
+                            elif event_name == "on_chat_model_end":
+                                run_id = str(event.get("run_id") or "model")
+                                buffered = model_text_buffers.get(run_id, "")
+                                output = event.get("data", {}).get("output")
+                                is_tool_run = (
+                                    run_id in model_tool_runs
+                                    or has_structured_tool_call(output)
+                                    or bool(re.search(r"<invoke\b|<function=", buffered, re.IGNORECASE))
+                                )
+                                if not direct_chat and not is_tool_run:
+                                    candidate = strip_xml_tool_stream(
+                                        buffered
+                                    ) or extract_agent_output_text(output)
+                                    if candidate.strip():
+                                        completed_model_answer = candidate
+                                model_text_buffers.pop(run_id, None)
+                                model_tool_runs.discard(run_id)
+                                if is_root_lifecycle_event(event):
+                                    candidate = extract_agent_output_text(output)
+                                    if candidate.strip():
+                                        root_answer = candidate
                             elif event_name == "on_tool_start":
                                 observed_tool_event = True
                                 yield {
@@ -1320,18 +1400,12 @@ class AgentService:
                                     "status": "failed",
                                     "call_id": event.get("run_id", ""),
                                 }
-                            elif (
-                                event_name in {"on_chain_end", "on_chat_model_end"}
-                                and not full_answer.strip()
-                            ):
-                                output = event.get("data", {}).get("output", {})
-                                full_answer = extract_agent_output_text(output)
-                                if isinstance(output, dict) and output.get("stop_reason"):
-                                    from src.agents.react_policy import summarize_react_state
-
-                                    react_summary = summarize_react_state(output)
                             elif event_name == "on_chain_end":
                                 output = event.get("data", {}).get("output", {})
+                                if is_root_lifecycle_event(event):
+                                    candidate = extract_agent_output_text(output)
+                                    if candidate.strip():
+                                        root_answer = candidate
                                 if isinstance(output, dict) and output.get("stop_reason"):
                                     from src.agents.react_policy import summarize_react_state
 
@@ -1378,14 +1452,20 @@ class AgentService:
                                         "call_id": call_id,
                                     }
 
-                    visible_tail, stream_text_buffer = drain_xml_tool_stream(
-                        stream_text_buffer, final=True
-                    )
-                    if visible_tail.strip():
-                        full_answer += visible_tail
-                        emitted_text = True
-                        yield {"type": "text", "text": visible_tail}
+                    if direct_chat:
+                        visible_tail, stream_text_buffer = drain_xml_tool_stream(
+                            stream_text_buffer, final=True
+                        )
+                        if visible_tail.strip():
+                            full_answer += visible_tail
+                            emitted_text = True
+                            yield {"type": "text", "text": visible_tail}
                     full_answer = strip_xml_tool_stream(full_answer)
+                    authoritative_answer = strip_xml_tool_stream(
+                        root_answer or completed_model_answer
+                    )
+                    if not full_answer.strip() and authoritative_answer.strip():
+                        full_answer = authoritative_answer
 
                     # 部分 OpenAI 兼容网关只在非流式工具调用中返回结构化 tool_calls。
                     if (
@@ -1409,9 +1489,13 @@ class AgentService:
                             react_summary = summarize_react_state(fallback_result)
 
             if full_answer.strip() and not emitted_text:
-                async for text in stream_text_chunks(full_answer):
+                if direct_chat:
+                    async for text in stream_text_chunks(full_answer):
+                        emitted_text = True
+                        yield {"type": "text", "text": text}
+                else:
                     emitted_text = True
-                    yield {"type": "text", "text": text}
+                    yield {"type": "text", "text": full_answer}
 
             # 工具调用或模型空响应不能让 SSE 以无文本事件结束，否则前端会误判接口失败。
             if not full_answer.strip():

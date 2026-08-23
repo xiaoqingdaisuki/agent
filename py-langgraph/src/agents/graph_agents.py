@@ -33,6 +33,7 @@ from src.agents.react_policy import (
 MAX_REACT_STEPS = settings.react_max_steps
 MAX_TOOL_CALLS = settings.react_max_tool_calls
 MAX_SAME_TOOL_CALLS = settings.react_max_same_tool_calls
+MAX_WEB_SEARCH_CALLS = 2
 MAX_TOTAL_TIME_MS = settings.react_max_total_time_ms
 AGENT_RECURSION_LIMIT = MAX_REACT_STEPS * 3 + 4
 MAX_HISTORY_MESSAGES = 50
@@ -569,6 +570,14 @@ def should_continue(state: AgentState) -> Literal["tools", "limit", END]:
             state["stop_reason"] = "MAX_STEPS"
             state["reason_code"] = "MAX_TOOL_CALLS"
             return "limit"
+        web_search_calls = sum(
+            name in {"web_search", "web.search"}
+            for name in state.get("react_tool_names", [])
+        )
+        if web_search_calls > MAX_WEB_SEARCH_CALLS:
+            state["stop_reason"] = "MAX_STEPS"
+            state["reason_code"] = "MAX_WEB_SEARCH_CALLS"
+            return "limit"
         if repeated:
             state["stop_reason"] = "TOOL_FAILURE"
             state["reason_code"] = "REPEATED_TOOL_CALL"
@@ -688,6 +697,13 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
             elif react_update["react_tool_calls"] > MAX_TOOL_CALLS:
                 react_update.update(
                     {"stop_reason": "MAX_STEPS", "reason_code": "MAX_TOOL_CALLS"}
+                )
+            elif sum(
+                name in {"web_search", "web.search"}
+                for name in react_update["react_tool_names"]
+            ) > MAX_WEB_SEARCH_CALLS:
+                react_update.update(
+                    {"stop_reason": "MAX_STEPS", "reason_code": "MAX_WEB_SEARCH_CALLS"}
                 )
             elif int((time.monotonic() - started_at) * 1000) >= MAX_TOTAL_TIME_MS:
                 react_update.update(

@@ -72,6 +72,7 @@ export class ReActRunTracker {
   private readonly observations: ReActObservation[] = [];
   private readonly signatures = new Map<string, number>();
   private readonly failures = new Map<string, number>();
+  private readonly toolCounts = new Map<string, number>();
 
   // 初始化请求级追踪器，状态必须随请求隔离而不是存入缓存 Agent。
   constructor(private readonly limits: ReActLimits) {}
@@ -101,6 +102,11 @@ export class ReActRunTracker {
   beforeTool(tool: string, args: unknown): { allowed: boolean; signature: string } {
     const signature = toolCallSignature(tool, args);
     if (this.isTimedOut() || this.stopReason) return { allowed: false, signature };
+    const toolCount = this.toolCounts.get(tool) || 0;
+    if ((tool === "web_search" || tool === "web.search") && toolCount >= 2) {
+      this.stop("MAX_STEPS_REACHED", "MAX_STEPS", "MAX_WEB_SEARCH_CALLS");
+      return { allowed: false, signature };
+    }
     if (this.calls >= this.limits.maxToolCalls) {
       this.stop("MAX_STEPS_REACHED", "MAX_STEPS", "MAX_TOOL_CALLS");
       return { allowed: false, signature };
@@ -115,6 +121,7 @@ export class ReActRunTracker {
       return { allowed: false, signature };
     }
     this.signatures.set(signature, sameCalls);
+    this.toolCounts.set(tool, toolCount + 1);
     this.calls += 1;
     this.names.push(tool);
     this.state = "TOOL_CALLING";

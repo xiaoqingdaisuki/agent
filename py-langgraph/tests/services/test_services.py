@@ -301,6 +301,119 @@ class TestAgentService:
         assert "".join(event["text"] for event in events) == "可以安排南山公园和海上世界两天行程。"
 
     @pytest.mark.asyncio
+    async def test_stream_does_not_prepend_nested_history_snapshot(self, monkeypatch):
+        """Nested chain snapshots must never become part of the current answer."""
+        from langchain_core.messages import AIMessage, HumanMessage
+        from src.agents import graph_agents
+        from src.services import flush_background_tasks
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {
+                    "event": "on_chain_end",
+                    "run_id": "nested-history",
+                    "parent_ids": ["root-agent"],
+                    "data": {"output": {"messages": [AIMessage(content="上一轮完整回答")]}},
+                }
+                yield {
+                    "event": "on_chat_model_stream",
+                    "run_id": "current-model",
+                    "parent_ids": ["root-agent"],
+                    "data": {"chunk": AIMessage(content="当前轮回答")},
+                }
+                yield {
+                    "event": "on_chat_model_end",
+                    "run_id": "current-model",
+                    "parent_ids": ["root-agent"],
+                    "data": {"output": AIMessage(content="当前轮回答")},
+                }
+                yield {
+                    "event": "on_chain_end",
+                    "run_id": "root-agent",
+                    "parent_ids": [],
+                    "data": {
+                        "output": {
+                            "messages": [
+                                AIMessage(content="上一轮完整回答"),
+                                HumanMessage(content="当前问题"),
+                                AIMessage(content="当前轮回答"),
+                            ]
+                        }
+                    },
+                }
+
+        conversation = ConversationService.create("history snapshot regression")
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(conversation.id, "当前问题")
+        ]
+        await flush_background_tasks()
+
+        assert "".join(
+            event["text"] for event in events if event["type"] == "text"
+        ) == "当前轮回答"
+        assert ConversationService.get_messages(conversation.id)[-1]["content"] == "当前轮回答"
+
+    @pytest.mark.asyncio
+    async def test_stream_uses_root_tool_answer_after_nested_history(self, monkeypatch):
+        """A tool answer must come from the root graph result, not an inner history snapshot."""
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+        from src.agents import graph_agents
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {
+                    "event": "on_chain_end",
+                    "run_id": "nested-history",
+                    "parent_ids": ["root-agent"],
+                    "data": {"output": {"messages": [AIMessage(content="上一轮完整回答")]}},
+                }
+                yield {
+                    "event": "on_tool_start",
+                    "name": "web_search",
+                    "run_id": "call-shenzhen",
+                    "parent_ids": ["root-agent"],
+                }
+                yield {
+                    "event": "on_tool_end",
+                    "name": "web_search",
+                    "run_id": "call-shenzhen",
+                    "parent_ids": ["root-agent"],
+                }
+                yield {
+                    "event": "on_chain_end",
+                    "run_id": "root-agent",
+                    "parent_ids": [],
+                    "data": {
+                        "output": {
+                            "messages": [
+                                AIMessage(content="上一轮完整回答"),
+                                HumanMessage(content="查深圳活动"),
+                                ToolMessage(
+                                    content="活动搜索结果",
+                                    tool_call_id="call-shenzhen",
+                                ),
+                                AIMessage(content="深圳免费活动回答"),
+                            ]
+                        }
+                    },
+                }
+
+        conversation = ConversationService.create("tool history regression")
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(conversation.id, "查深圳活动")
+        ]
+
+        assert "".join(
+            event["text"] for event in events if event["type"] == "text"
+        ) == "深圳免费活动回答"
+
+    @pytest.mark.asyncio
     async def test_stream_replaces_whitespace_with_final_graph_answer(self, monkeypatch):
         """Whitespace model chunks must not hide the graph's final assistant answer."""
         from langchain_core.messages import AIMessage, ToolMessage

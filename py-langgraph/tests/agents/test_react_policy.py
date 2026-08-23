@@ -1,6 +1,6 @@
 from langchain_core.messages import AIMessage, ToolMessage
 
-from src.agents.graph_agents import observe_node
+from src.agents.graph_agents import _track_react_tool_calls, observe_node, should_continue
 from src.agents.react_policy import (
     is_clarification,
     observation_from_tool_message,
@@ -64,3 +64,29 @@ def test_failed_tool_call_is_tracked_for_retry_limit():
 
     signature = tool_call_signature("weather.current", {"city": "上海"})
     assert update["react_failed_signatures"] == {signature: 1}
+
+
+def test_third_web_search_is_routed_to_the_limit_node():
+    state = {
+        "messages": [],
+        "react_steps": 3,
+        "react_tool_calls": 2,
+        "react_tool_names": ["web_search", "web_search"],
+        "react_call_signatures": {},
+        "started_at": 0,
+    }
+    response = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "call-search-3",
+                "name": "web_search",
+                "args": {"query": "深圳免费展览"},
+            }
+        ],
+    )
+    update = _track_react_tool_calls(state, response)
+    limited_state = {**state, **update, "messages": [response]}
+
+    assert should_continue(limited_state) == "limit"
+    assert limited_state["reason_code"] == "MAX_WEB_SEARCH_CALLS"

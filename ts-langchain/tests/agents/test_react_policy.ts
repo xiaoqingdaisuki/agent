@@ -38,4 +38,18 @@ describe("declarative ReAct policy", () => {
       tool_errors: 2,
     });
   });
+
+  it("stops a third web search even when the model changes the query", () => {
+    const tracker = new ReActRunTracker(createDefaultReActLimits());
+
+    expect(tracker.beforeTool("web_search", { query: "深圳9月免费活动" }).allowed).toBe(true);
+    expect(tracker.beforeTool("web_search", { query: "深圳九月大型活动" }).allowed).toBe(true);
+    expect(tracker.beforeTool("web_search", { query: "深圳免费展览" }).allowed).toBe(false);
+    expect(tracker.summary()).toMatchObject({
+      state: "MAX_STEPS_REACHED",
+      stop_reason: "MAX_STEPS",
+      reason_code: "MAX_WEB_SEARCH_CALLS",
+      tool_calls: 2,
+    });
+  });
 });

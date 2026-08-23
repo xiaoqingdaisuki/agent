@@ -194,6 +194,21 @@ function getStreamText(chunk: any): string {
     .join("");
 }
 
+// 判断事件是否属于本次 Agent 调用的根运行，避免读取嵌套节点的历史状态快照。
+function isRootLifecycleEvent(event: any): boolean {
+  const parentIds = event?.parent_ids;
+  return !Array.isArray(parentIds) || parentIds.length === 0;
+}
+
+// 检测模型消息是否包含结构化工具调用，避免把工具规划文本当作最终回答。
+function hasStructuredToolCall(value: any): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value.tool_calls) && value.tool_calls.length > 0) return true;
+  if (Array.isArray(value.tool_call_chunks) && value.tool_call_chunks.length > 0) return true;
+  const additionalToolCalls = value.additional_kwargs?.tool_calls;
+  return Array.isArray(additionalToolCalls) && additionalToolCalls.length > 0;
+}
+
 // 过滤 LangGraph/LangChain 事件中的结束哨兵和 XML 工具调用文本。
 function normalizeAgentOutputText(text: string): string {
   const normalized = stripXmlToolStream(text);
@@ -213,7 +228,19 @@ export function extractAgentOutputText(output: unknown): string {
     if (nested) return nested;
   }
   if (Array.isArray(candidate.messages)) {
-    for (const message of [...candidate.messages].reverse()) {
+    let currentTurnStart = 0;
+    for (let index = candidate.messages.length - 1; index >= 0; index--) {
+      const message = candidate.messages[index];
+      const messageType = typeof message?._getType === "function"
+        ? message._getType()
+        : message?.type || message?.role;
+      if (messageType === "human" || messageType === "user") {
+        currentTurnStart = index + 1;
+        break;
+      }
+    }
+    for (let index = candidate.messages.length - 1; index >= currentTurnStart; index--) {
+      const message = candidate.messages[index];
       const messageType = typeof message?._getType === "function"
         ? message._getType()
         : message?.type || message?.role;
@@ -1017,7 +1044,8 @@ export class AgentService {
         return;
       }
 
-      const agent = await (isDirectChatMessage(content)
+      const directChat = isDirectChatMessage(content);
+      const agent = await (directChat
         ? createDirectChatAgent(promptOverride)
         : createToolAgent(promptOverride));
 
@@ -1041,6 +1069,10 @@ export class AgentService {
       let reactSummary: ReActRunSummary | undefined;
       let emittedText = false;
       let observedToolEvent = false;
+      let rootAnswer = "";
+      let completedModelAnswer = "";
+      const modelTextBuffers = new Map<string, string>();
+      const modelToolRuns = new Set<string>();
       const scope = createToolCallScope(toolContext, {
         onToolProgress: (event) => {
           if (event.type === "started") deadline.enableToolBudget();
@@ -1075,14 +1107,37 @@ export class AgentService {
             if (event.event === "on_chat_model_stream") {
               const delta = getStreamText(event.data?.chunk);
               if (delta) {
-                streamTextBuffer += delta;
-                const visible = drainXmlToolStream(streamTextBuffer);
-                streamTextBuffer = visible.remainder;
-                if (visible.text.trim() || emittedText) {
-                  fullAnswer += visible.text;
-                  emittedText = true;
-                  yield { type: "text", text: visible.text };
+                if (directChat) {
+                  streamTextBuffer += delta;
+                  const visible = drainXmlToolStream(streamTextBuffer);
+                  streamTextBuffer = visible.remainder;
+                  if (visible.text.trim() || emittedText) {
+                    fullAnswer += visible.text;
+                    emittedText = true;
+                    yield { type: "text", text: visible.text };
+                  }
+                } else {
+                  const runId = String(event.run_id || "model");
+                  modelTextBuffers.set(runId, (modelTextBuffers.get(runId) || "") + delta);
+                  if (hasStructuredToolCall(event.data?.chunk)) modelToolRuns.add(runId);
                 }
+              }
+            } else if (event.event === "on_chat_model_end") {
+              const runId = String(event.run_id || "model");
+              const buffered = modelTextBuffers.get(runId) || "";
+              const isToolRun = modelToolRuns.has(runId)
+                || hasStructuredToolCall(event.data?.output)
+                || /<invoke\b|<function=/i.test(buffered);
+              if (!directChat && !isToolRun) {
+                const candidate = stripXmlToolStream(buffered)
+                  || extractAgentOutputText(event.data?.output);
+                if (candidate.trim()) completedModelAnswer = candidate;
+              }
+              modelTextBuffers.delete(runId);
+              modelToolRuns.delete(runId);
+              if (isRootLifecycleEvent(event)) {
+                const candidate = extractAgentOutputText(event.data?.output);
+                if (candidate.trim()) rootAnswer = candidate;
               }
             } else if (event.event === "on_tool_start") {
               observedToolEvent = true;
@@ -1108,14 +1163,11 @@ export class AgentService {
                 status: "failed",
                 callId: event.run_id || "",
               };
-            } else if (
-              !fullAnswer.trim() &&
-              (event.event === "on_chain_end" || event.event === "on_chat_model_end")
-            ) {
-              fullAnswer = extractAgentOutputText(event.data?.output);
-              const summary = event.data?.output?.react;
-              if (summary) reactSummary = summary as ReActRunSummary;
             } else if (event.event === "on_chain_end") {
+              if (isRootLifecycleEvent(event)) {
+                const candidate = extractAgentOutputText(event.data?.output);
+                if (candidate.trim()) rootAnswer = candidate;
+              }
               const summary = event.data?.output?.react;
               if (summary) reactSummary = summary as ReActRunSummary;
             }
@@ -1141,13 +1193,17 @@ export class AgentService {
             for (const event of progress.drain()) yield event;
           }
         }
-        const visibleTail = drainXmlToolStream(streamTextBuffer, true).text;
-        if (visibleTail.trim()) {
-          fullAnswer += visibleTail;
-          emittedText = true;
-          yield { type: "text", text: visibleTail };
+        if (directChat) {
+          const visibleTail = drainXmlToolStream(streamTextBuffer, true).text;
+          if (visibleTail.trim()) {
+            fullAnswer += visibleTail;
+            emittedText = true;
+            yield { type: "text", text: visibleTail };
+          }
         }
         fullAnswer = stripXmlToolStream(fullAnswer);
+        const authoritativeAnswer = stripXmlToolStream(rootAnswer || completedModelAnswer);
+        if (!fullAnswer.trim() && authoritativeAnswer.trim()) fullAnswer = authoritativeAnswer;
 
         // 部分 OpenAI 兼容网关只在非流式工具调用中返回结构化 tool_calls。
         if (
@@ -1170,7 +1226,8 @@ export class AgentService {
 
       // 不支持 token 事件的模型仍返回完整答案，按兼容路径输出而不是空流。
       if (fullAnswer.trim() && !emittedText) {
-        for await (const delta of splitTextForStreaming(fullAnswer)) {
+        const deltas = directChat ? splitTextForStreaming(fullAnswer) : [fullAnswer];
+        for await (const delta of deltas) {
           emittedText = true;
           yield { type: "text", text: delta };
         }

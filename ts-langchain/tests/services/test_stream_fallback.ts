@@ -17,6 +17,7 @@ import {
   AgentService,
   ConversationService,
   extractAgentOutputText,
+  flushBackgroundTasks,
 } from "../../src/services/index.js";
 import { AgentDeadlineError } from "../../src/agents/deadline.js";
 import { MemoryService, ProfileService } from "../../src/profile/service.js";
@@ -34,6 +35,140 @@ describe("AgentService empty streams", () => {
         messages: [{ role: "user", content: "calculate 12345 * 12" }],
       }),
     ).toBe("");
+  });
+
+  it("only extracts an assistant answer from the current user turn", () => {
+    expect(
+      extractAgentOutputText({
+        messages: [
+          { type: "ai", content: "上一轮回答" },
+          { type: "human", content: "当前问题" },
+          { type: "ai", content: "当前回答" },
+        ],
+      }),
+    ).toBe("当前回答");
+    expect(
+      extractAgentOutputText({
+        messages: [
+          { type: "ai", content: "上一轮回答" },
+          { type: "human", content: "当前问题" },
+          { type: "ai", content: "" },
+        ],
+      }),
+    ).toBe("");
+  });
+
+  it("does not prepend a nested chain history snapshot to the current answer", async () => {
+    createToolAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        yield {
+          event: "on_chain_end",
+          run_id: "nested-history",
+          parent_ids: ["root-agent"],
+          data: {
+            output: { messages: [{ type: "ai", content: "上一轮完整回答" }] },
+          },
+        };
+        yield {
+          event: "on_chat_model_stream",
+          run_id: "current-model",
+          parent_ids: ["root-agent"],
+          data: { chunk: { content: "当前轮回答" } },
+        };
+        yield {
+          event: "on_chat_model_end",
+          run_id: "current-model",
+          parent_ids: ["root-agent"],
+          data: { output: { type: "ai", content: "当前轮回答" } },
+        };
+        yield {
+          event: "on_chain_end",
+          run_id: "root-agent",
+          parent_ids: [],
+          data: {
+            output: {
+              messages: [
+                { type: "ai", content: "上一轮完整回答" },
+                { type: "human", content: "当前问题" },
+                { type: "ai", content: "当前轮回答" },
+              ],
+            },
+          },
+        };
+      },
+    });
+
+    const conversation = await ConversationService.create("history snapshot regression");
+    const events = [];
+    for await (const event of AgentService.chatStream(conversation.id, "当前问题")) {
+      events.push(event);
+    }
+    await flushBackgroundTasks();
+
+    expect(
+      events
+        .filter((event) => event.type === "text")
+        .map((event) => event.text)
+        .join(""),
+    ).toBe("当前轮回答");
+    expect((await ConversationService.getMessages(conversation.id)).at(-1)?.content).toBe(
+      "当前轮回答",
+    );
+  });
+
+  it("uses the root graph answer after tools instead of an inner history snapshot", async () => {
+    createToolAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        yield {
+          event: "on_chain_end",
+          run_id: "nested-history",
+          parent_ids: ["root-agent"],
+          data: {
+            output: { messages: [{ type: "ai", content: "上一轮完整回答" }] },
+          },
+        };
+        yield {
+          event: "on_tool_start",
+          name: "web_search",
+          run_id: "call-shenzhen",
+          parent_ids: ["root-agent"],
+        };
+        yield {
+          event: "on_tool_end",
+          name: "web_search",
+          run_id: "call-shenzhen",
+          parent_ids: ["root-agent"],
+        };
+        yield {
+          event: "on_chain_end",
+          run_id: "root-agent",
+          parent_ids: [],
+          data: {
+            output: {
+              messages: [
+                { type: "ai", content: "上一轮完整回答" },
+                { type: "human", content: "查深圳活动" },
+                { type: "tool", content: "活动搜索结果" },
+                { type: "ai", content: "深圳免费活动回答" },
+              ],
+            },
+          },
+        };
+      },
+    });
+
+    const conversation = await ConversationService.create("tool history regression");
+    const events = [];
+    for await (const event of AgentService.chatStream(conversation.id, "查深圳活动")) {
+      events.push(event);
+    }
+
+    expect(
+      events
+        .filter((event) => event.type === "text")
+        .map((event) => event.text)
+        .join(""),
+    ).toBe("深圳免费活动回答");
   });
 
   it("emits visible fallback text after a tool-only stream", async () => {
