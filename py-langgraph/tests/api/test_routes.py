@@ -93,6 +93,13 @@ class TestChatEndpoint:
         clear_agent_command_state(response.json()["thread_id"])
 
     @pytest.mark.asyncio
+    async def test_chat_uses_local_fast_answer_for_greeting(self, client: AsyncClient):
+        response = await client.post("/chat", json={"message": "你好"})
+
+        assert response.status_code == 200
+        assert response.json()["reply"] == "你好！我是 AI 老情，很高兴为你服务。"
+
+    @pytest.mark.asyncio
     async def test_stream_text_includes_text_and_delta_fields(self, client: AsyncClient):
         """流式文本同时提供新旧字段，避免客户端因协议差异误判空回复。"""
         conversation = await client.post(

@@ -217,12 +217,41 @@ async function runWithModelCapacity<T>(
   }
 }
 
-// 判断消息是否可安全走无工具的快速对话路径，避免普通闲聊携带完整工具定义。
+const TOOL_INTENT_PATTERNS = [
+  /(?:天气|气温|下雨|下雪|空气质量|weather)/i,
+  /(?:(?:现在|当前|此刻).{0,10}(?:几点|时间|日期|星期)|北京时间|时区|timezone)/i,
+  /(?:(?:请|帮我|麻烦)?(?:计算(?!机)|算一下|算出)|\d\s*(?:[+\-*/×÷%^]|\*\*)\s*\d|\b(?:calculate|compute|evaluate)\b)/i,
+  /(?:搜索|查一下|联网|浏览网页|打开网页|访问网址|web_search|web_read|https?:\/\/|\b(?:search|browse|look\s+up)\b)/i,
+  /(?:(?:最新|实时|今天).{0,12}(?:新闻|消息|数据|价格|股价|汇率|比分|排名|航班)|(?:股价|汇率|比分|航班).{0,8}(?:多少|查询|今天|最新))/i,
+  /(?:(?:换算|转换|换成|convert).{0,20}(?:时间|时区)|(?:时间|时区).{0,20}(?:换算|转换|换成)|\btimezone\b)/i,
+  /(?:(?:读取|打开|搜索|查找|总结).{0,8}(?:文件|文档|附件)|(?:文件|文档|附件)中|file_id|知识库|资料库|(?:上传|附件|uploaded|attachment).{0,12}(?:pdf|docx?|txt|csv|xlsx?|pptx?))/i,
+  /(?:记住|你记得|我的记忆|我的偏好|忘记我|删除.{0,8}记忆|保存.{0,8}(?:偏好|记忆)|memory_user|\bwho\s+am\s+i\b|\bwhat\s+do\s+you\s+remember)/i,
+  /(?:(?:推荐|有什么).{0,12}(?:好吃|好玩|餐厅|酒店|景点|路线|行程)|(?:美食|游玩|餐厅|酒店|景点).{0,8}(?:推荐|攻略)|\brecommend.{0,20}(?:restaurant|hotel|attraction|trip))/i,
+  /(?:谁是|何时|哪年|哪一年|哪位|多少人口|成立于|发布于|\bwho\s+is\b|\bwhen\s+did\b|\bwhat\s+year\b)/i,
+  /(?:get_weather|get_current_time|convert_timezone|calculator|knowledge_search|file_read|file_search)/i,
+];
+
+const DIRECT_CHAT_PATTERNS = [
+  /^(?:你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好|你是谁|你叫什么|介绍一下你自己|你能做什么|你会做什么|你的能力是什么)[！!。.?？]?$/i,
+  /(?:解释|说明|什么是|为什么|如何理解|科普|讲讲|介绍|\bexplain\b|\bwhat\s+is\b|\bwhy\b)/i,
+  /(?:翻译|译成|\btranslate\b)/i,
+  /(?:(?:写|撰写|改写|润色|创作|生成).{0,24}(?:文案|欢迎语|故事|邮件|摘要|代码|函数|脚本|sql|正则)|(?:代码|函数|脚本|sql|正则).{0,20}(?:写|实现|示例)|\b(?:write|implement).{0,24}(?:code|function|script|regex|sql))/i,
+  /(?:(?:制定|安排|设计).{0,24}(?:计划|方案|步骤)|(?:比较|对比)|\b(?:compare|plan|draft|rewrite|summarize)\b)/i,
+  /(?:只输出|用(?:一|两|三|四|\d+)句话|列出|归纳|(?:简要|深入)分析)/i,
+];
+
+// 判断消息是否明确需要工具，保守保留实时数据、计算、文件和记忆能力。
+export function requiresToolMessage(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  return TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+// 判断消息是否可安全走无工具的快速对话路径，避免普通回答携带完整工具定义。
 export function isDirectChatMessage(content: string): boolean {
   const normalized = content.trim().toLowerCase();
-  if (!normalized || normalized.length > 120) return false;
-  if (/^(你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好)[！!。.?？]?$/.test(normalized)) return true;
-  return /^(你是谁|你叫什么|介绍一下你自己|你能做什么|你会做什么|你的能力是什么)[？?。!！]?$/.test(normalized);
+  return Boolean(normalized)
+    && !requiresToolMessage(normalized)
+    && DIRECT_CHAT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 // 返回无需模型调用的高频短问答，避免简单问题受外部模型抖动影响。
@@ -240,9 +269,6 @@ export function getFastPathAnswer(content: string): string | undefined {
   if (/^1\+1(等于几|等于多少)?[?？。]?$/.test(normalized)) return "1 + 1 = 2。";
   if (normalized.includes("解释递归") || normalized.startsWith("什么是递归")) {
     return "递归是函数直接或间接调用自身，并在满足终止条件时停止。";
-  }
-  if (/(有什么好吃的|有什么好玩的|美食推荐|游玩推荐|吃喝玩乐)/.test(normalized)) {
-    return "南山美食可看海岸城、南头古城和蛇口海鲜街；游玩推荐南头古城、深圳湾公园、华侨城创意园。告诉我预算和时间，我可以继续排路线。";
   }
   return undefined;
 }
@@ -461,6 +487,7 @@ export function invalidateToolAgentCache(): void {
 async function buildDirectChatAgent(systemPrompt: string): Promise<DeclarativeToolAgent> {
   const rawModel = new ChatOpenAI({
     model: process.env.OPENAI_MODEL,
+    maxTokens: config.LLM_MAX_OUTPUT_TOKENS,
     timeout: config.LLM_TIMEOUT_MS,
     maxRetries: config.LLM_MAX_RETRIES,
     configuration: {
@@ -479,6 +506,7 @@ async function buildDirectChatAgent(systemPrompt: string): Promise<DeclarativeTo
 async function buildToolAgent(systemPrompt: string): Promise<DeclarativeToolAgent> {
   const rawModel = new ChatOpenAI({
     model: process.env.OPENAI_MODEL,
+    maxTokens: config.LLM_MAX_OUTPUT_TOKENS,
     timeout: config.LLM_TIMEOUT_MS,
     maxRetries: config.LLM_MAX_RETRIES,
     configuration: {

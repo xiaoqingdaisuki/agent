@@ -194,13 +194,19 @@ function getStreamText(chunk: any): string {
     .join("");
 }
 
+// 过滤 LangGraph/LangChain 事件中的结束哨兵和 XML 工具调用文本。
+function normalizeAgentOutputText(text: string): string {
+  const normalized = stripXmlToolStream(text);
+  return normalized.trim() === "__end__" ? "" : normalized;
+}
+
 // 从 LangChain 链路结束事件中提取最终 AI 消息，兼容 output/output.messages 两种结构。
 export function extractAgentOutputText(output: unknown): string {
-  if (typeof output === "string") return stripXmlToolStream(output);
+  if (typeof output === "string") return normalizeAgentOutputText(output);
   if (!output || typeof output !== "object") return "";
   const candidate = output as Record<string, any>;
   if (typeof candidate.output === "string") {
-    return stripXmlToolStream(candidate.output);
+    return normalizeAgentOutputText(candidate.output);
   }
   if (candidate.output && candidate.output !== output) {
     const nested = extractAgentOutputText(candidate.output);
@@ -208,12 +214,20 @@ export function extractAgentOutputText(output: unknown): string {
   }
   if (Array.isArray(candidate.messages)) {
     for (const message of [...candidate.messages].reverse()) {
-      if (message?.type === "human" || message?.type === "tool") continue;
+      const messageType = typeof message?._getType === "function"
+        ? message._getType()
+        : message?.type || message?.role;
+      if (messageType !== "ai" && messageType !== "assistant") continue;
       const text = getStreamText(message);
-      if (text.trim()) return stripXmlToolStream(text);
+      if (text.trim()) return normalizeAgentOutputText(text);
     }
   }
-  return stripXmlToolStream(getStreamText(candidate));
+  const candidateType = typeof candidate._getType === "function"
+    ? candidate._getType()
+    : candidate.type || candidate.role;
+  return candidateType === "ai" || candidateType === "assistant"
+    ? normalizeAgentOutputText(getStreamText(candidate))
+    : "";
 }
 
 // 逐项读取异步流并绑定请求截止信号，避免上游不响应取消时连接无限悬挂。
@@ -817,7 +831,7 @@ export class AgentService {
       }
 
       const fastAnswer = getFastPathAnswer(content);
-      if (fastAnswer && (userId || !/(有什么好吃的|有什么好玩的|美食推荐|游玩推荐|吃喝玩乐)/.test(content))) {
+      if (fastAnswer) {
         scheduleAnswerPersistence(conversationId, conversationId, content, fastAnswer, userId);
         return {
           id: crypto.randomUUID(),
@@ -966,7 +980,7 @@ export class AgentService {
       }
 
       const fastAnswer = getFastPathAnswer(content);
-      if (fastAnswer && (userId || !/(有什么好吃的|有什么好玩的|美食推荐|游玩推荐|吃喝玩乐)/.test(content))) {
+      if (fastAnswer) {
         scheduleAnswerPersistence(conversationId, conversationId, content, fastAnswer, userId);
         yield { type: "text", text: fastAnswer };
         return;
@@ -1026,6 +1040,7 @@ export class AgentService {
       const progress = new ToolProgressChannel();
       let reactSummary: ReActRunSummary | undefined;
       let emittedText = false;
+      let observedToolEvent = false;
       const scope = createToolCallScope(toolContext, {
         onToolProgress: (event) => {
           if (event.type === "started") deadline.enableToolBudget();
@@ -1063,15 +1078,14 @@ export class AgentService {
                 streamTextBuffer += delta;
                 const visible = drainXmlToolStream(streamTextBuffer);
                 streamTextBuffer = visible.remainder;
-                if (visible.text) {
+                if (visible.text.trim() || emittedText) {
                   fullAnswer += visible.text;
-                  if (fullAnswer.trim()) {
-                    emittedText = true;
-                    yield { type: "text", text: visible.text };
-                  }
+                  emittedText = true;
+                  yield { type: "text", text: visible.text };
                 }
               }
             } else if (event.event === "on_tool_start") {
+              observedToolEvent = true;
               yield {
                 type: "tool",
                 toolName: event.name || "tool",
@@ -1079,6 +1093,7 @@ export class AgentService {
                 callId: event.run_id || "",
               };
             } else if (event.event === "on_tool_end") {
+              observedToolEvent = true;
               yield {
                 type: "tool",
                 toolName: event.name || "tool",
@@ -1086,6 +1101,7 @@ export class AgentService {
                 callId: event.run_id || "",
               };
             } else if (event.event === "on_tool_error") {
+              observedToolEvent = true;
               yield {
                 type: "tool",
                 toolName: event.name || "tool",
@@ -1093,7 +1109,7 @@ export class AgentService {
                 callId: event.run_id || "",
               };
             } else if (
-              !fullAnswer &&
+              !fullAnswer.trim() &&
               (event.event === "on_chain_end" || event.event === "on_chat_model_end")
             ) {
               fullAnswer = extractAgentOutputText(event.data?.output);
@@ -1125,17 +1141,31 @@ export class AgentService {
             for (const event of progress.drain()) yield event;
           }
         }
-      } finally {
-        deadline.dispose();
-      }
-
-      const visibleTail = drainXmlToolStream(streamTextBuffer, true).text;
-      if (visibleTail) {
-        fullAnswer += visibleTail;
-        if (fullAnswer.trim()) {
+        const visibleTail = drainXmlToolStream(streamTextBuffer, true).text;
+        if (visibleTail.trim()) {
+          fullAnswer += visibleTail;
           emittedText = true;
           yield { type: "text", text: visibleTail };
         }
+        fullAnswer = stripXmlToolStream(fullAnswer);
+
+        // 部分 OpenAI 兼容网关只在非流式工具调用中返回结构化 tool_calls。
+        if (
+          !fullAnswer.trim() &&
+          !observedToolEvent &&
+          typeof (agent as any).invoke === "function"
+        ) {
+          const fallbackResult = await deadline.run<any>(
+            scope.run(() =>
+              (agent as any).invoke(input, { signal: deadline.signal }),
+            ),
+          );
+          fullAnswer = stripXmlToolStream(extractAgentOutputText(fallbackResult));
+          reactSummary = fallbackResult.react || reactSummary;
+          for (const event of progress.drain()) yield event;
+        }
+      } finally {
+        deadline.dispose();
       }
 
       // 不支持 token 事件的模型仍返回完整答案，按兼容路径输出而不是空流。
@@ -1230,9 +1260,103 @@ const documentContents = new Map<
   string,
   { content: string; filename: string }
 >();
+const documentChunks = new Map<string, string[]>();
+interface LocalSearchEntry {
+  documentId: string;
+  chunkIndex: number;
+  content: string;
+  normalizedContent: string;
+  characters: Set<string>;
+}
+const localSearchEntries = new Map<string, LocalSearchEntry>();
+const localSearchPostings = new Map<string, Set<string>>();
+const localDocumentSearchKeys = new Map<string, Set<string>>();
 
 // 共享知识库用户 ID（服务间共享文档）
 const KNOWLEDGE_USER_ID = "default";
+
+// 移除单个本地文档的倒排检索项，避免删除或重建后残留。
+function removeLocalDocumentSearchIndex(documentId: string): void {
+  const keys = localDocumentSearchKeys.get(documentId);
+  if (!keys) return;
+  for (const key of keys) {
+    const entry = localSearchEntries.get(key);
+    if (!entry) continue;
+    for (const character of entry.characters) {
+      const postings = localSearchPostings.get(character);
+      postings?.delete(key);
+      if (postings?.size === 0) localSearchPostings.delete(character);
+    }
+    localSearchEntries.delete(key);
+  }
+  localDocumentSearchKeys.delete(documentId);
+}
+
+// 用最新文档块重建字符倒排索引，减少检索时的无关块扫描。
+function replaceLocalDocumentSearchIndex(documentId: string, chunks: string[]): void {
+  removeLocalDocumentSearchIndex(documentId);
+  const keys = new Set<string>();
+  chunks.forEach((content, chunkIndex) => {
+    const normalizedContent = content.toLowerCase();
+    const characters = new Set([...normalizedContent].filter((character) => !/\s/.test(character)));
+    const key = `${documentId}:${chunkIndex}`;
+    localSearchEntries.set(key, {
+      documentId,
+      chunkIndex,
+      content,
+      normalizedContent,
+      characters,
+    });
+    keys.add(key);
+    for (const character of characters) {
+      const postings = localSearchPostings.get(character) || new Set<string>();
+      postings.add(key);
+      localSearchPostings.set(character, postings);
+    }
+  });
+  localDocumentSearchKeys.set(documentId, keys);
+}
+
+// 在关闭 Cloudflare Memory 时通过倒排索引执行有界 Top-K 词法检索。
+function searchLocalDocuments(query: string, topK: number): SearchResult[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  const queryCharacters = new Set([...normalizedQuery].filter((character) => !/\s/.test(character)));
+  if (!normalizedQuery || queryCharacters.size === 0) return [];
+
+  const candidateKeys = new Set<string>();
+  for (const character of queryCharacters) {
+    for (const key of localSearchPostings.get(character) || []) candidateKeys.add(key);
+  }
+  const results: SearchResult[] = [];
+  for (const key of candidateKeys) {
+    const entry = localSearchEntries.get(key);
+    const document = entry ? documents.get(entry.documentId) : undefined;
+    if (!entry || !document) continue;
+    const exactMatch = entry.normalizedContent.includes(normalizedQuery);
+    const matchedCharacters = exactMatch
+      ? queryCharacters.size
+      : [...queryCharacters].filter((character) => entry.characters.has(character)).length;
+    const score = exactMatch ? 1 : matchedCharacters / queryCharacters.size;
+    if (score <= 0) continue;
+    const result = {
+      document_id: document.id,
+      document_name: document.name,
+      content: entry.content.slice(0, 2_000),
+      score,
+      chunk_index: entry.chunkIndex,
+    };
+    if (results.length < topK) {
+      results.push(result);
+      continue;
+    }
+    let lowestIndex = 0;
+    for (let index = 1; index < results.length; index++) {
+      if (results[index].score < results[lowestIndex].score) lowestIndex = index;
+    }
+    if (score > results[lowestIndex].score) results[lowestIndex] = result;
+  }
+  return results.sort((left, right) => right.score - left.score);
+}
 
 /**
  * 将 base64 内容解码为字符串（Cloudflare Workers 兼容）
@@ -1266,17 +1390,17 @@ export class KnowledgeService {
     category?: string,
   ): Promise<Document> {
     try {
-      const base64 = buffer.toString("base64");
-      const result = await this.client.uploadDocument(
-        KNOWLEDGE_USER_ID,
-        filename,
-        base64,
-        undefined,
-        category || "general",
-      );
-
       const doc = await DocumentLoader.loadFromBuffer(buffer, filename);
       const chunks = this.splitter.split(doc);
+      const result = config.MEMORY_ENABLED
+        ? await this.client.uploadDocument(
+            KNOWLEDGE_USER_ID,
+            filename,
+            buffer.toString("base64"),
+            undefined,
+            category || "general",
+          )
+        : { id: doc.id, status: "indexed" };
 
       const document: Document = {
         id: result.id,
@@ -1290,6 +1414,8 @@ export class KnowledgeService {
 
       documents.set(document.id, document);
       documentContents.set(document.id, { content: doc.content, filename });
+      documentChunks.set(document.id, chunks.map((chunk) => chunk.text));
+      replaceLocalDocumentSearchIndex(document.id, chunks.map((chunk) => chunk.text));
       return document;
     } catch (error: any) {
       throw new BusinessError(
@@ -1305,6 +1431,12 @@ export class KnowledgeService {
    */
   // 获取 listDocuments 对应的数据
   static async listDocuments(): Promise<Document[]> {
+    if (!config.MEMORY_ENABLED) {
+      return Array.from(documents.values()).sort(
+        (left, right) =>
+          new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+      );
+    }
     // 优先从 D1 加载
     try {
       const result = await this.client.listDocuments(KNOWLEDGE_USER_ID, {
@@ -1345,6 +1477,7 @@ export class KnowledgeService {
   static async getDocument(id: string): Promise<Document | undefined> {
     const cached = documents.get(id);
     if (cached) return cached;
+    if (!config.MEMORY_ENABLED) return undefined;
 
     // D1 回退
     try {
@@ -1381,6 +1514,13 @@ export class KnowledgeService {
    */
   // 删除或清理 deleteDocument 对应的数据
   static async deleteDocument(id: string): Promise<boolean> {
+    if (!config.MEMORY_ENABLED) {
+      removeLocalDocumentSearchIndex(id);
+      const deleted = documents.delete(id);
+      documentContents.delete(id);
+      documentChunks.delete(id);
+      return deleted;
+    }
     try {
       const deleted = await this.client.deleteDocument(id);
       if (!deleted) return false;
@@ -1392,6 +1532,8 @@ export class KnowledgeService {
       );
     }
     documentContents.delete(id);
+    documentChunks.delete(id);
+    removeLocalDocumentSearchIndex(id);
     documents.delete(id);
     return true;
   }
@@ -1401,6 +1543,26 @@ export class KnowledgeService {
    */
   // 执行 reindexDocument 对应的业务逻辑
   static async reindexDocument(id: string): Promise<Document> {
+    if (!config.MEMORY_ENABLED) {
+      const document = documents.get(id);
+      const stored = documentContents.get(id);
+      if (!document || !stored) {
+        throw new BusinessError(
+          BusinessErrorCode.NOT_FOUND,
+          "Document not found",
+          404,
+        );
+      }
+      const chunks = this.splitter.split({
+        content: stored.content,
+        metadata: { source: `upload://${stored.filename}`, filename: stored.filename },
+      });
+      document.chunks = chunks.length;
+      document.status = "indexed";
+      documentChunks.set(id, chunks.map((chunk) => chunk.text));
+      replaceLocalDocumentSearchIndex(id, chunks.map((chunk) => chunk.text));
+      return document;
+    }
     try {
       await this.client.reindexDocument(id);
       documents.delete(id);
@@ -1459,6 +1621,7 @@ export class KnowledgeService {
     query: string,
     topK: number = 5,
   ): Promise<SearchResult[]> {
+    if (!config.MEMORY_ENABLED) return searchLocalDocuments(query, topK);
     try {
       const result = await this.client.searchDocuments(
         KNOWLEDGE_USER_ID,

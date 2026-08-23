@@ -13,7 +13,11 @@ vi.mock("../../src/agents/tool-agent.js", () => ({
   isDirectChatMessage: (content: string) => content === "你好",
 }));
 
-import { AgentService, ConversationService } from "../../src/services/index.js";
+import {
+  AgentService,
+  ConversationService,
+  extractAgentOutputText,
+} from "../../src/services/index.js";
 import { AgentDeadlineError } from "../../src/agents/deadline.js";
 import { MemoryService, ProfileService } from "../../src/profile/service.js";
 
@@ -21,6 +25,15 @@ describe("AgentService empty streams", () => {
   beforeEach(() => {
     createToolAgentMock.mockReset();
     createDirectChatAgentMock.mockReset();
+  });
+
+  it("does not expose a user message as the final agent answer", () => {
+    expect(
+      extractAgentOutputText({
+        output: "__end__",
+        messages: [{ role: "user", content: "calculate 12345 * 12" }],
+      }),
+    ).toBe("");
   });
 
   it("emits visible fallback text after a tool-only stream", async () => {
@@ -110,6 +123,78 @@ describe("AgentService empty streams", () => {
       type: "text",
       text: "抱歉，我没有理解您的问题。",
     });
+  });
+
+  it("replaces streamed whitespace with the final graph answer", async () => {
+    createToolAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        yield {
+          event: "on_chain_end",
+          data: {
+            output: {
+              messages: [
+                { type: "tool", content: "计算结果：148140" },
+                { type: "ai", content: "12345 × 12 = 148140" },
+              ],
+            },
+          },
+        };
+        yield {
+          event: "on_chat_model_stream",
+          data: { chunk: { content: "\n\n\n" } },
+        };
+      },
+    });
+
+    const conversation = await ConversationService.create("whitespace before final answer");
+    const events = [];
+    for await (const event of AgentService.chatStream(conversation.id, "calculate")) {
+      events.push(event);
+    }
+
+    expect(
+      events
+        .filter((event) => event.type === "text")
+        .map((event) => event.text)
+        .join(""),
+    ).toBe("12345 × 12 = 148140");
+  });
+
+  it("falls back to invoke when a compatible gateway streams only whitespace", async () => {
+    createToolAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        yield {
+          event: "on_chain_end",
+          data: {
+            output: {
+              output:
+                "\n<function=calculator><parameter=expression>12345*12</parameter></function>\n",
+            },
+          },
+        };
+        yield {
+          event: "on_chat_model_stream",
+          data: { chunk: { content: "\n\n\n" } },
+        };
+      },
+      invoke: vi.fn().mockResolvedValue({
+        output: "12345 × 12 = 148140",
+        react: { state: "COMPLETED", stop_reason: "ANSWER_COMPLETE" },
+      }),
+    });
+
+    const conversation = await ConversationService.create("gateway stream fallback");
+    const events = [];
+    for await (const event of AgentService.chatStream(conversation.id, "calculate")) {
+      events.push(event);
+    }
+
+    expect(
+      events
+        .filter((event) => event.type === "text")
+        .map((event) => event.text)
+        .join(""),
+    ).toBe("12345 × 12 = 148140");
   });
 
   it("treats whitespace left around an XML tool call as an empty answer", async () => {

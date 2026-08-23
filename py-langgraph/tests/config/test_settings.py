@@ -46,6 +46,13 @@ def test_background_task_limits_have_safe_defaults():
     assert settings.background_task_queue_max == 200
 
 
+def test_model_output_has_a_bounded_default():
+    """模型单次输出应有明确上限，避免普通请求无限扩写。"""
+    settings = Settings(_env_file=None)
+
+    assert settings.llm_max_output_tokens == 768
+
+
 def test_memory_disabled_uses_singleton_in_memory_storage(monkeypatch):
     from langgraph.checkpoint.memory import MemorySaver
     import src.memory as memory_module

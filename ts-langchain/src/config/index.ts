@@ -53,6 +53,7 @@ const envSchema = z.object({
     .max(120_000)
     .default(30_000),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(2).default(1),
+  LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_192).default(768),
   LLM_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
   MAX_AGENT_ITERATIONS: z.coerce.number().int().min(1).max(8).default(6),
   REACT_MAX_STEPS: z.coerce.number().int().min(1).max(8).default(8),

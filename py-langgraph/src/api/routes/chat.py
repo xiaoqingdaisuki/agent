@@ -7,6 +7,7 @@ from src.agents.graph_agents import (
     AGENT_RECURSION_LIMIT,
     build_chat_agent,
     build_tool_agent,
+    get_fast_path_answer,
     is_direct_chat_message,
 )
 from src.agents.react_policy import summarize_react_state
@@ -70,6 +71,16 @@ async def chat(payload: ChatRequest, request: Request):
                 trusted_user_id,
             )
             return ChatResponse(reply=command.reply, thread_id=thread_id)
+
+        fast_answer = get_fast_path_answer(payload.message)
+        if fast_answer:
+            schedule_answer_persistence(
+                thread_id,
+                payload.message,
+                fast_answer,
+                trusted_user_id,
+            )
+            return ChatResponse(reply=fast_answer, thread_id=thread_id)
 
         user_messages = [
             str(message["content"])

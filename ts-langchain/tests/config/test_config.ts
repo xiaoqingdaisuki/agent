@@ -32,4 +32,13 @@ describe("配置契约", () => {
 
     expect(config.MEMORY_ENABLED).toBe(false);
   });
+
+  it("默认限制单次模型输出 token，避免普通请求无限扩写", async () => {
+    vi.stubEnv("LLM_MAX_OUTPUT_TOKENS", "768");
+    vi.resetModules();
+
+    const { config } = await import("../../src/config/index.js");
+
+    expect(config.LLM_MAX_OUTPUT_TOKENS).toBe(768);
+  });
 });

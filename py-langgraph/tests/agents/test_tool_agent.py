@@ -95,12 +95,34 @@ async def test_concurrent_memory_timeouts_cancel_all_gateway_requests(monkeypatc
     assert cancelled == 20
 
 
-def test_direct_chat_routing_skips_tools_only_for_clear_casual_messages():
-    """简单闲聊应走快速路径，实时与工具类请求仍需完整 Agent。"""
+def test_direct_chat_routing_skips_tools_for_ordinary_answer_styles():
+    """普通回答走快速路径，实时与工具类请求仍需完整 Agent。"""
     assert graph_agents.is_direct_chat_message("你好") is True
     assert graph_agents.is_direct_chat_message("你是谁？") is True
+    assert graph_agents.is_direct_chat_message("请用三句话解释递归") is True
+    assert graph_agents.is_direct_chat_message("写两句温和的欢迎语") is True
+    assert graph_agents.is_direct_chat_message("写一个 Python 去重函数") is True
+    assert graph_agents.is_direct_chat_message("请比较批处理响应和流式响应") is True
     assert graph_agents.is_direct_chat_message("上海今天的天气") is False
     assert graph_agents.is_direct_chat_message("搜索今天的新闻") is False
+    assert graph_agents.is_direct_chat_message("请计算 12345 × 12") is False
+    assert graph_agents.is_direct_chat_message("请告诉我现在的北京时间") is False
+    assert graph_agents.is_direct_chat_message("读取这份文件中的第二段") is False
+    assert graph_agents.is_direct_chat_message("你记得我的偏好吗") is False
+    assert graph_agents.is_direct_chat_message("深圳南山有什么好吃的和好玩的") is False
+    assert graph_agents.is_direct_chat_message("calculate 12345 * 12") is False
+    assert graph_agents.is_direct_chat_message("who am I?") is False
+    assert graph_agents.is_direct_chat_message("谁是图灵？") is False
+    assert graph_agents.is_direct_chat_message("把巴黎时间 15:00 换成东京时间") is False
+    assert graph_agents.is_direct_chat_message("总结我刚上传的 PDF") is False
+    assert graph_agents.is_direct_chat_message("明天呢？") is False
+    assert graph_agents.is_direct_chat_message("随便聊点什么") is False
+
+
+def test_static_fast_path_never_returns_a_location_specific_recommendation():
+    """地点推荐不得被静态回答劫持，必须保留完整 Agent 路由。"""
+    assert graph_agents.get_fast_path_answer("北京有什么好吃的") is None
+    assert graph_agents.get_fast_path_answer("深圳南山有什么好玩的") is None
 
 
 async def test_tool_agent_executes_invoke_name_xml_calls(monkeypatch):

@@ -10,6 +10,7 @@ from src.services import (
     ConversationService,
     Conversation,
     KnowledgeService,
+    extract_agent_output_text,
 )
 
 
@@ -32,6 +33,19 @@ class TestBusinessError:
         """Should be catchable as Exception"""
         with pytest.raises(BusinessError):
             raise BusinessError(BusinessErrorCode.INTERNAL_ERROR, "Test error")
+
+
+class TestAgentOutputExtraction:
+    def test_does_not_expose_user_message_as_agent_answer(self):
+        assert (
+            extract_agent_output_text(
+                {
+                    "output": "__end__",
+                    "messages": [{"role": "user", "content": "calculate 12345 * 12"}],
+                }
+            )
+            == ""
+        )
 
 
 class TestConversationService:
@@ -287,6 +301,89 @@ class TestAgentService:
         assert "".join(event["text"] for event in events) == "可以安排南山公园和海上世界两天行程。"
 
     @pytest.mark.asyncio
+    async def test_stream_replaces_whitespace_with_final_graph_answer(self, monkeypatch):
+        """Whitespace model chunks must not hide the graph's final assistant answer."""
+        from langchain_core.messages import AIMessage, ToolMessage
+        from src.agents import graph_agents
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {
+                    "event": "on_chain_end",
+                    "data": {
+                        "output": {
+                            "messages": [
+                                ToolMessage(
+                                    content="计算结果：148140",
+                                    tool_call_id="call-calculator",
+                                ),
+                                AIMessage(content="12345 × 12 = 148140"),
+                            ]
+                        }
+                    },
+                }
+                yield {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": AIMessage(content="\n\n\n")},
+                }
+
+        conversation = ConversationService.create("whitespace before final answer")
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(conversation.id, "calculate")
+        ]
+
+        assert "".join(
+            event["text"] for event in events if event["type"] == "text"
+        ) == "12345 × 12 = 148140"
+
+    @pytest.mark.asyncio
+    async def test_stream_falls_back_to_invoke_for_whitespace_gateway(self, monkeypatch):
+        """A gateway with broken tool streaming must use its working invoke path."""
+        from langchain_core.messages import AIMessage
+        from src.agents import graph_agents
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {
+                    "event": "on_chain_end",
+                    "data": {
+                        "output": {
+                            "messages": [
+                                AIMessage(
+                                    content=(
+                                        "\n<function=calculator>"
+                                        "<parameter=expression>12345*12</parameter>"
+                                        "</function>\n"
+                                    )
+                                )
+                            ]
+                        }
+                    },
+                }
+                yield {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": AIMessage(content="\n\n\n")},
+                }
+
+            async def ainvoke(self, *_args, **_kwargs):
+                return {"messages": [AIMessage(content="12345 × 12 = 148140")]}
+
+        conversation = ConversationService.create("gateway stream fallback")
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(conversation.id, "calculate")
+        ]
+
+        assert "".join(
+            event["text"] for event in events if event["type"] == "text"
+        ) == "12345 × 12 = 148140"
+
+    @pytest.mark.asyncio
     async def test_stream_treats_whitespace_around_xml_as_empty(self, monkeypatch):
         """Whitespace left after filtering an XML tool call must not count as an answer."""
         from langchain_core.messages import AIMessage
@@ -345,3 +442,21 @@ class TestKnowledgeService:
         assert document.name == "note.txt"
         assert document.chunks == 3
         assert document.id.startswith("doc_")
+
+    @pytest.mark.asyncio
+    async def test_local_document_lifecycle_when_memory_is_disabled(self, monkeypatch):
+        from src.config.settings import settings
+
+        monkeypatch.setattr(settings, "memory_enabled", False)
+        document = await KnowledgeService.upload_document(
+            "本地知识库包含缓存和流式响应。".encode(),
+            "local-note.txt",
+            "tech",
+        )
+
+        assert document.id in {item["id"] for item in await KnowledgeService.list_documents()}
+        assert await KnowledgeService.get_document(document.id) is document
+        assert (await KnowledgeService.search("缓存", 3))[0]["document_id"] == document.id
+        assert (await KnowledgeService.reindex_document(document.id)).chunks == 1
+        assert await KnowledgeService.delete_document(document.id) is True
+        assert await KnowledgeService.get_document(document.id) is None

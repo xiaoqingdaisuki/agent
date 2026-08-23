@@ -53,6 +53,14 @@ describe("完整 API 契约", () => {
       expect(legacyChat.statusCode).toBe(200);
       expect(legacyChat.json().reply).toBe(DARK_MODE_ENABLED_REPLY);
 
+      const fastLegacyChat = await app.inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "你好", user_id: userId },
+      });
+      expect(fastLegacyChat.statusCode).toBe(200);
+      expect(fastLegacyChat.json().reply).toBe("你好！我是 AI 老情，很高兴为你服务。");
+
       const legacyStream = await app.inject({
         method: "POST",
         url: "/stream",

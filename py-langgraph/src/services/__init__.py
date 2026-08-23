@@ -92,15 +92,21 @@ def get_stream_text(chunk) -> str:
     )
 
 
+# 过滤 LangGraph/LangChain 事件中的结束哨兵和 XML 工具调用文本。
+def normalize_agent_output_text(text: str) -> str:
+    normalized = strip_xml_tool_stream(text)
+    return "" if normalized.strip() == "__end__" else normalized
+
+
 # 从 LangChain 链路结束事件中提取最终 AI 消息，兼容 output/output.messages 两种结构。
 def extract_agent_output_text(output) -> str:
     if isinstance(output, str):
-        return strip_xml_tool_stream(output)
+        return normalize_agent_output_text(output)
     if not isinstance(output, dict):
         return ""
     nested = output.get("output")
     if isinstance(nested, str):
-        return strip_xml_tool_stream(nested)
+        return normalize_agent_output_text(nested)
     if isinstance(nested, dict):
         text = extract_agent_output_text(nested)
         if text:
@@ -108,17 +114,22 @@ def extract_agent_output_text(output) -> str:
     messages = output.get("messages")
     if isinstance(messages, list):
         for message in reversed(messages):
-            message_type = (
-                message.get("type", "")
-                if isinstance(message, dict)
-                else getattr(message, "type", "")
-            )
-            if message_type in {"human", "tool"}:
+            if isinstance(message, dict):
+                message_type = message.get("type") or message.get("role", "")
+            else:
+                get_type = getattr(message, "_get_type", None)
+                message_type = get_type() if callable(get_type) else getattr(message, "type", "")
+            if message_type not in {"ai", "assistant"}:
                 continue
             text = get_stream_text(message)
             if text.strip():
-                return strip_xml_tool_stream(text)
-    return strip_xml_tool_stream(get_stream_text(output))
+                return normalize_agent_output_text(text)
+    output_type = output.get("type") or output.get("role", "")
+    return (
+        normalize_agent_output_text(get_stream_text(output))
+        if output_type in {"ai", "assistant"}
+        else ""
+    )
 
 
 XML_TOOL_STREAM_MARKERS = ("<invoke", "<function=")
@@ -634,6 +645,103 @@ class ConversationService:
 
 _documents: dict[str, Document] = {}
 _document_contents: dict[str, tuple[bytes, str]] = {}
+_document_chunks: dict[str, list[str]] = {}
+_local_search_entries: dict[str, dict] = {}
+_local_search_postings: dict[str, set[str]] = {}
+_local_document_search_keys: dict[str, set[str]] = {}
+
+
+# 将本地文档切块并返回可供检索的纯文本块。
+def _split_local_document(buffer: bytes, filename: str) -> list[str]:
+    from src.rag.loader import Document as RagDocument
+    from src.rag.splitter import TextSplitter
+
+    loaded = RagDocument.from_bytes(buffer, filename)
+    chunks = TextSplitter().split(
+        loaded.content,
+        filename,
+        str(loaded.metadata.get("source", f"upload://{filename}")),
+    )
+    return [chunk.text for chunk in chunks]
+
+
+# 移除单个本地文档的倒排检索项，避免删除或重建后残留。
+def _remove_local_document_search_index(document_id: str) -> None:
+    keys = _local_document_search_keys.pop(document_id, set())
+    for key in keys:
+        entry = _local_search_entries.pop(key, None)
+        if not entry:
+            continue
+        for character in entry["characters"]:
+            postings = _local_search_postings.get(character)
+            if postings is None:
+                continue
+            postings.discard(key)
+            if not postings:
+                _local_search_postings.pop(character, None)
+
+
+# 用最新文档块重建字符倒排索引，减少检索时的无关块扫描。
+def _replace_local_document_search_index(document_id: str, chunks: list[str]) -> None:
+    _remove_local_document_search_index(document_id)
+    keys: set[str] = set()
+    for chunk_index, content in enumerate(chunks):
+        normalized_content = content.lower()
+        characters = {character for character in normalized_content if not character.isspace()}
+        key = f"{document_id}:{chunk_index}"
+        _local_search_entries[key] = {
+            "document_id": document_id,
+            "chunk_index": chunk_index,
+            "content": content,
+            "normalized_content": normalized_content,
+            "characters": characters,
+        }
+        keys.add(key)
+        for character in characters:
+            _local_search_postings.setdefault(character, set()).add(key)
+    _local_document_search_keys[document_id] = keys
+
+
+# 在关闭 Cloudflare Memory 时通过倒排索引执行有界 Top-K 词法检索。
+def _search_local_documents(query: str, top_k: int) -> list[dict]:
+    normalized_query = query.strip().lower()
+    query_characters = {character for character in normalized_query if not character.isspace()}
+    if not normalized_query or not query_characters:
+        return []
+
+    candidate_keys: set[str] = set()
+    for character in query_characters:
+        candidate_keys.update(_local_search_postings.get(character, set()))
+
+    results: list[dict] = []
+    for key in candidate_keys:
+        entry = _local_search_entries.get(key)
+        document = _documents.get(entry["document_id"]) if entry else None
+        if not entry or not document:
+            continue
+        exact_match = normalized_query in entry["normalized_content"]
+        matched_characters = (
+            len(query_characters)
+            if exact_match
+            else sum(character in entry["characters"] for character in query_characters)
+        )
+        score = 1 if exact_match else matched_characters / len(query_characters)
+        if score <= 0:
+            continue
+        result = {
+            "document_id": document.id,
+            "document_name": document.name,
+            "content": entry["content"][:2000],
+            "score": score,
+            "chunk_index": entry["chunk_index"],
+        }
+        if len(results) < top_k:
+            results.append(result)
+            continue
+        lowest_index = min(range(len(results)), key=lambda index: results[index]["score"])
+        if score > results[lowest_index]["score"]:
+            results[lowest_index] = result
+    return sorted(results, key=lambda item: item["score"], reverse=True)
 
 
 class KnowledgeService:
@@ -644,6 +752,20 @@ class KnowledgeService:
     async def upload_document(buffer: bytes, filename: str, category: str = None) -> Document:
         """上传并索引文档"""
         try:
+            chunks = _split_local_document(buffer, filename)
+            if not settings.memory_enabled:
+                document = Document(
+                    name=filename,
+                    size=len(buffer),
+                    chunks=len(chunks),
+                    category=category,
+                )
+                _documents[document.id] = document
+                _document_contents[document.id] = (buffer, filename)
+                _document_chunks[document.id] = chunks
+                _replace_local_document_search_index(document.id, chunks)
+                return document
+
             import base64
 
             from src.clients.memory_gateway import CloudflareMemoryClient
@@ -669,6 +791,8 @@ class KnowledgeService:
 
             _documents[document.id] = document
             _document_contents[document.id] = (buffer, filename)
+            _document_chunks[document.id] = chunks
+            _replace_local_document_search_index(document.id, chunks)
             return document
 
         except Exception as e:
@@ -682,6 +806,12 @@ class KnowledgeService:
     # 获取 list documents 对应的数据
     async def list_documents() -> list[dict]:
         """列出所有已索引文档，D1 为权威数据源"""
+        if not settings.memory_enabled:
+            return sorted(
+                [document.to_dict() for document in _documents.values()],
+                key=lambda document: document["created_at"],
+                reverse=True,
+            )
         try:
             from src.clients.memory_gateway import CloudflareMemoryClient
             client = CloudflareMemoryClient()
@@ -735,6 +865,8 @@ class KnowledgeService:
         cached = _documents.get(doc_id)
         if cached:
             return cached
+        if not settings.memory_enabled:
+            return None
 
         # D1 回退
         try:
@@ -772,6 +904,12 @@ class KnowledgeService:
     # 删除或清理 delete document 对应的数据
     async def delete_document(doc_id: str) -> bool:
         """删除指定文档及其向量索引"""
+        if not settings.memory_enabled:
+            _remove_local_document_search_index(doc_id)
+            deleted = _documents.pop(doc_id, None) is not None
+            _document_contents.pop(doc_id, None)
+            _document_chunks.pop(doc_id, None)
+            return deleted
         try:
             from src.clients.memory_gateway import CloudflareMemoryClient
 
@@ -788,12 +926,25 @@ class KnowledgeService:
 
         _documents.pop(doc_id, None)
         _document_contents.pop(doc_id, None)
+        _document_chunks.pop(doc_id, None)
+        _remove_local_document_search_index(doc_id)
         return True
 
     @staticmethod
     # 执行 reindex document 对应的业务逻辑
     async def reindex_document(doc_id: str) -> Document:
         """重新索引指定文档，内存无内容时从 D1 加载"""
+        if not settings.memory_enabled:
+            document = _documents.get(doc_id)
+            stored = _document_contents.get(doc_id)
+            if not document or not stored:
+                raise BusinessError(BusinessErrorCode.NOT_FOUND, "Document not found", 404)
+            chunks = _split_local_document(*stored)
+            document.chunks = len(chunks)
+            document.status = "indexed"
+            _document_chunks[doc_id] = chunks
+            _replace_local_document_search_index(doc_id, chunks)
+            return document
         try:
             from src.clients.memory_gateway import CloudflareMemoryClient, MemoryGatewayError
 
@@ -823,6 +974,8 @@ class KnowledgeService:
     # 查询 search 对应的结果
     async def search(query: str, top_k: int = 5) -> list[dict]:
         """知识检索"""
+        if not settings.memory_enabled:
+            return _search_local_documents(query, top_k)
         try:
             from src.clients.memory_gateway import CloudflareMemoryClient
 
@@ -887,7 +1040,7 @@ class AgentService:
                 return reply
 
             fast_answer = get_fast_path_answer(content)
-            if fast_answer and (user_id or not any(token in content for token in ("有什么好吃的", "有什么好玩的", "美食推荐", "游玩推荐", "吃喝玩乐"))):
+            if fast_answer:
                 schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
                 return Message("assistant", fast_answer)
 
@@ -1008,6 +1161,7 @@ class AgentService:
         full_answer = ""
         stream_text_buffer = ""
         emitted_text = False
+        observed_tool_event = False
         react_summary = None
         try:
             from src.agents.graph_agents import (
@@ -1037,7 +1191,7 @@ class AgentService:
                 return
 
             fast_answer = get_fast_path_answer(content)
-            if fast_answer and (user_id or not any(token in content for token in ("有什么好吃的", "有什么好玩的", "美食推荐", "游玩推荐", "吃喝玩乐"))):
+            if fast_answer:
                 schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
                 yield {"type": "text", "text": fast_answer}
                 return
@@ -1079,14 +1233,14 @@ class AgentService:
                                         yield {"type": "text", "text": delta}
                                 elif (
                                     event.get("event") in {"on_chain_end", "on_chat_model_end"}
-                                    and not full_answer
+                                    and not full_answer.strip()
                                 ):
                                     output = event.get("data", {}).get("output", {})
                                     full_answer = extract_agent_output_text(output)
                         else:
                             result = await rag_agent.ainvoke(rag_input)
                             full_answer = result["messages"][-1].content
-                if not full_answer:
+                if not full_answer.strip():
                     full_answer = "抱歉，我没有理解您的问题。"
                 raw_answer = full_answer
                 if not emitted_text:
@@ -1136,12 +1290,12 @@ class AgentService:
                                 if delta:
                                     stream_text_buffer += delta
                                     visible, stream_text_buffer = drain_xml_tool_stream(stream_text_buffer)
-                                    if visible:
+                                    if visible.strip() or emitted_text:
                                         full_answer += visible
-                                        if full_answer.strip():
-                                            emitted_text = True
-                                            yield {"type": "text", "text": visible}
+                                        emitted_text = True
+                                        yield {"type": "text", "text": visible}
                             elif event_name == "on_tool_start":
+                                observed_tool_event = True
                                 yield {
                                     "type": "tool",
                                     "tool_name": event.get("name") or "tool",
@@ -1149,6 +1303,7 @@ class AgentService:
                                     "call_id": event.get("run_id", ""),
                                 }
                             elif event_name == "on_tool_end":
+                                observed_tool_event = True
                                 yield {
                                     "type": "tool",
                                     "tool_name": event.get("name") or "tool",
@@ -1156,6 +1311,7 @@ class AgentService:
                                     "call_id": event.get("run_id", ""),
                                 }
                             elif event_name == "on_tool_error":
+                                observed_tool_event = True
                                 yield {
                                     "type": "tool",
                                     "tool_name": event.get("name") or "tool",
@@ -1164,7 +1320,7 @@ class AgentService:
                                 }
                             elif (
                                 event_name in {"on_chain_end", "on_chat_model_end"}
-                                and not full_answer
+                                and not full_answer.strip()
                             ):
                                 output = event.get("data", {}).get("output", {})
                                 full_answer = extract_agent_output_text(output)
@@ -1200,6 +1356,7 @@ class AgentService:
                                 if node_name == "agent":
                                     tool_calls = getattr(latest_message, "tool_calls", [])
                                     for tool_call in tool_calls:
+                                        observed_tool_event = True
                                         yield {
                                             "type": "tool",
                                             "tool_name": tool_call.get("name", "tool"),
@@ -1209,6 +1366,7 @@ class AgentService:
                                     if not tool_calls and isinstance(latest_message.content, str):
                                         full_answer = strip_xml_tool_stream(latest_message.content)
                                 elif node_name == "tools":
+                                    observed_tool_event = True
                                     call_id = getattr(latest_message, "tool_call_id", "")
                                     yield {
                                         # 工具节点本身也是有效的流事件，不能被空答案兜底覆盖。
@@ -1218,12 +1376,35 @@ class AgentService:
                                         "call_id": call_id,
                                     }
 
-            visible_tail, stream_text_buffer = drain_xml_tool_stream(stream_text_buffer, final=True)
-            if visible_tail:
-                full_answer += visible_tail
-                if full_answer.strip():
-                    emitted_text = True
-                    yield {"type": "text", "text": visible_tail}
+                    visible_tail, stream_text_buffer = drain_xml_tool_stream(
+                        stream_text_buffer, final=True
+                    )
+                    if visible_tail.strip():
+                        full_answer += visible_tail
+                        emitted_text = True
+                        yield {"type": "text", "text": visible_tail}
+                    full_answer = strip_xml_tool_stream(full_answer)
+
+                    # 部分 OpenAI 兼容网关只在非流式工具调用中返回结构化 tool_calls。
+                    if (
+                        not full_answer.strip()
+                        and not observed_tool_event
+                        and hasattr(agent, "ainvoke")
+                    ):
+                        fallback_result = await agent.ainvoke(
+                            {
+                                "messages": [{"role": "user", "content": content}],
+                                "user_id": user_id,
+                            },
+                            config=config,
+                        )
+                        full_answer = strip_xml_tool_stream(
+                            extract_agent_output_text(fallback_result)
+                        )
+                        if isinstance(fallback_result, dict):
+                            from src.agents.react_policy import summarize_react_state
+
+                            react_summary = summarize_react_state(fallback_result)
 
             if full_answer.strip() and not emitted_text:
                 async for text in stream_text_chunks(full_answer):

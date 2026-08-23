@@ -8,6 +8,7 @@ import { z } from "zod";
 import {
   MAX_AGENT_ITERATIONS,
   convertXmlToolCalls,
+  getFastPathAnswer,
   isDirectChatMessage,
   createToolAgent,
   invalidateToolAgentCache,
@@ -95,11 +96,32 @@ describe("tool agent", () => {
     expect(result.content).toBe("你好");
   });
 
-  it("routes only clear casual messages through the no-tool fast path", () => {
+  it("routes ordinary answer styles directly while preserving tool intents", () => {
     expect(isDirectChatMessage("你好")).toBe(true);
     expect(isDirectChatMessage("你是谁？")).toBe(true);
+    expect(isDirectChatMessage("请用三句话解释递归")).toBe(true);
+    expect(isDirectChatMessage("写两句温和的欢迎语")).toBe(true);
+    expect(isDirectChatMessage("写一个 Python 去重函数")).toBe(true);
+    expect(isDirectChatMessage("请比较批处理响应和流式响应")).toBe(true);
     expect(isDirectChatMessage("上海今天的天气")).toBe(false);
     expect(isDirectChatMessage("搜索今天的新闻")).toBe(false);
+    expect(isDirectChatMessage("请计算 12345 × 12")).toBe(false);
+    expect(isDirectChatMessage("请告诉我现在的北京时间")).toBe(false);
+    expect(isDirectChatMessage("读取这份文件中的第二段")).toBe(false);
+    expect(isDirectChatMessage("你记得我的偏好吗")).toBe(false);
+    expect(isDirectChatMessage("深圳南山有什么好吃的和好玩的")).toBe(false);
+    expect(isDirectChatMessage("calculate 12345 * 12")).toBe(false);
+    expect(isDirectChatMessage("who am I?")).toBe(false);
+    expect(isDirectChatMessage("谁是图灵？")).toBe(false);
+    expect(isDirectChatMessage("把巴黎时间 15:00 换成东京时间")).toBe(false);
+    expect(isDirectChatMessage("总结我刚上传的 PDF")).toBe(false);
+    expect(isDirectChatMessage("明天呢？")).toBe(false);
+    expect(isDirectChatMessage("随便聊点什么")).toBe(false);
+  });
+
+  it("never returns a location-specific recommendation from the static fast path", () => {
+    expect(getFastPathAnswer("北京有什么好吃的")).toBeUndefined();
+    expect(getFastPathAnswer("深圳南山有什么好玩的")).toBeUndefined();
   });
 
   it("creates unique IDs for multiple XML tool calls", () => {

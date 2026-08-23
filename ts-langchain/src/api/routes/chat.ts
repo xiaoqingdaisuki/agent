@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   createDirectChatAgent,
   createToolAgent,
+  getFastPathAnswer,
   isDirectChatMessage,
 } from "../../agents/tool-agent.js";
 import { getHistoryBeforeInput } from "../../memory/conversation.js";
@@ -61,6 +62,18 @@ export async function registerChatRoutes(app: FastifyInstance) {
             createdAt: new Date().toISOString(),
           });
           return { reply: command.reply, thread_id: threadId };
+        }
+
+        const fastAnswer = getFastPathAnswer(message);
+        if (fastAnswer) {
+          scheduleAnswerPersistence(
+            threadId,
+            threadId,
+            message,
+            fastAnswer,
+            trustedUserId,
+          );
+          return { reply: fastAnswer, thread_id: threadId };
         }
 
         // 注入缓存记忆并异步刷新，避免旧接口被记忆网关阻塞。

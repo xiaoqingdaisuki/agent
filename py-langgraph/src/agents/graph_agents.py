@@ -65,18 +65,98 @@ async def _load_memory_context(user_id: str) -> str:
         return ""
 
 
-# 判断消息是否可跳过完整工具 schema，避免普通闲聊触发 ReAct 编排开销。
+TOOL_INTENT_PATTERNS = (
+    re.compile(r"(?:天气|气温|下雨|下雪|空气质量|weather)", re.IGNORECASE),
+    re.compile(
+        r"(?:(?:现在|当前|此刻).{0,10}(?:几点|时间|日期|星期)|北京时间|时区|timezone)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:(?:请|帮我|麻烦)?(?:计算(?!机)|算一下|算出)|\d\s*(?:[+\-*/×÷%^]|\*\*)\s*\d|\b(?:calculate|compute|evaluate)\b)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:搜索|查一下|联网|浏览网页|打开网页|访问网址|web_search|web_read|https?://|\b(?:search|browse|look\s+up)\b)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:(?:最新|实时|今天).{0,12}(?:新闻|消息|数据|价格|股价|汇率|比分|排名|航班)|"
+        r"(?:股价|汇率|比分|航班).{0,8}(?:多少|查询|今天|最新))",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:(?:换算|转换|换成|convert).{0,20}(?:时间|时区)|"
+        r"(?:时间|时区).{0,20}(?:换算|转换|换成)|\btimezone\b)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:(?:读取|打开|搜索|查找|总结).{0,8}(?:文件|文档|附件)|"
+        r"(?:文件|文档|附件)中|file_id|知识库|资料库|"
+        r"(?:上传|附件|uploaded|attachment).{0,12}(?:pdf|docx?|txt|csv|xlsx?|pptx?))",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:记住|你记得|我的记忆|我的偏好|忘记我|删除.{0,8}记忆|保存.{0,8}(?:偏好|记忆)|memory_user|\bwho\s+am\s+i\b|\bwhat\s+do\s+you\s+remember)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:(?:推荐|有什么).{0,12}(?:好吃|好玩|餐厅|酒店|景点|路线|行程)|"
+        r"(?:美食|游玩|餐厅|酒店|景点).{0,8}(?:推荐|攻略)|"
+        r"\brecommend.{0,20}(?:restaurant|hotel|attraction|trip))",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:谁是|何时|哪年|哪一年|哪位|多少人口|成立于|发布于|"
+        r"\bwho\s+is\b|\bwhen\s+did\b|\bwhat\s+year\b)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:get_weather|get_current_time|convert_timezone|calculator|knowledge_search|file_read|file_search)",
+        re.IGNORECASE,
+    ),
+)
+
+DIRECT_CHAT_PATTERNS = (
+    re.compile(
+        r"^(?:你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好|"
+        r"你是谁|你叫什么|介绍一下你自己|你能做什么|你会做什么|你的能力是什么)[！!。.?？]?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:解释|说明|什么是|为什么|如何理解|科普|讲讲|介绍|"
+        r"\bexplain\b|\bwhat\s+is\b|\bwhy\b)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:翻译|译成|\btranslate\b)", re.IGNORECASE),
+    re.compile(
+        r"(?:(?:写|撰写|改写|润色|创作|生成).{0,24}(?:文案|欢迎语|故事|邮件|摘要|代码|函数|脚本|sql|正则)|"
+        r"(?:代码|函数|脚本|sql|正则).{0,20}(?:写|实现|示例)|"
+        r"\b(?:write|implement).{0,24}(?:code|function|script|regex|sql))",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:(?:制定|安排|设计).{0,24}(?:计划|方案|步骤)|"
+        r"(?:比较|对比)|"
+        r"\b(?:compare|plan|draft|rewrite|summarize)\b)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:只输出|用(?:一|两|三|四|\d+)句话|列出|归纳|(?:简要|深入)分析)", re.IGNORECASE),
+)
+
+
+# 判断消息是否明确需要工具，保守保留实时数据、计算、文件和记忆能力。
+def requires_tool_message(content: str) -> bool:
+    normalized = content.strip().lower()
+    return any(pattern.search(normalized) for pattern in TOOL_INTENT_PATTERNS)
+
+
+# 判断消息是否可跳过完整工具 schema，避免普通回答触发 ReAct 编排开销。
 def is_direct_chat_message(content: str) -> bool:
     normalized = content.strip().lower()
-    if not normalized or len(normalized) > 120:
-        return False
-    if re.fullmatch(r"(你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好)[！!。.?？]?", normalized):
-        return True
-    return bool(
-        re.fullmatch(
-            r"(你是谁|你叫什么|介绍一下你自己|你能做什么|你会做什么|你的能力是什么)[？?。!]?",
-            normalized,
-        )
+    return (
+        bool(normalized)
+        and not requires_tool_message(normalized)
+        and any(pattern.search(normalized) for pattern in DIRECT_CHAT_PATTERNS)
     )
 
 
@@ -93,8 +173,6 @@ def get_fast_path_answer(content: str) -> str | None:
         return "1 + 1 = 2。"
     if "解释递归" in normalized or normalized.startswith("什么是递归"):
         return "递归是函数直接或间接调用自身，并在满足终止条件时停止。"
-    if re.search(r"(有什么好吃的|有什么好玩的|美食推荐|游玩推荐|吃喝玩乐)", normalized):
-        return "南山美食可看海岸城、南头古城和蛇口海鲜街；游玩推荐南头古城、深圳湾公园、华侨城创意园。告诉我预算和时间，我可以继续排路线。"
     return None
 
 
@@ -157,6 +235,7 @@ def get_llm(provider: str = "openai"):
             model=settings.anthropic_model,
             timeout=settings.llm_timeout_ms / 1000,
             max_retries=settings.llm_max_retries,
+            max_tokens=settings.llm_max_output_tokens,
         )
     return ChatOpenAI(
         model=settings.openai_model,
@@ -164,6 +243,7 @@ def get_llm(provider: str = "openai"):
         base_url=settings.openai_base_url,
         timeout=settings.llm_timeout_ms / 1000,
         max_retries=settings.llm_max_retries,
+        max_tokens=settings.llm_max_output_tokens,
     )
 
 
