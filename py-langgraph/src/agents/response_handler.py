@@ -92,6 +92,37 @@ def get_finish_reason(message) -> str | None:
     return None
 
 
+# 从 Agent 输出或消息列表中提取最后一个 AI 消息的结束原因。
+def get_finish_reason_from_output(output) -> str | None:
+    direct = get_finish_reason(output)
+    if direct:
+        return direct
+    if not isinstance(output, dict):
+        return None
+
+    nested = output.get("output")
+    if nested is not None and nested is not output:
+        nested_reason = get_finish_reason_from_output(nested)
+        if nested_reason:
+            return nested_reason
+
+    messages = output.get("messages")
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if isinstance(message, dict):
+            message_type = message.get("type") or message.get("role", "")
+        else:
+            get_type = getattr(message, "_get_type", None)
+            message_type = get_type() if callable(get_type) else getattr(message, "type", "")
+        if message_type not in {"ai", "assistant"}:
+            continue
+        reason = get_finish_reason(message)
+        if reason:
+            return reason
+    return None
+
+
 # ============ 继续提示 ============
 
 _CONTINUATION_PROMPT = "\n\n---\n⚠️ 以上回答尚未完成。如需继续，请回复「继续」。"

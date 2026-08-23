@@ -51,7 +51,8 @@ import {
   runWithAgentDeadline,
 } from "../agents/deadline.js";
 import {
-  getFinishReason,
+  appendContinuationHint,
+  getFinishReasonFromOutput,
   isLikelyTruncated,
   maybeAppendContinuationHint,
 } from "../agents/response-handler.js";
@@ -926,7 +927,7 @@ export class AgentService {
       };
 
       // 检测 LLM 输出截断（finish_reason=length 或文本 abrupt ending）
-      const finishReason = getFinishReason(result as any);
+      const finishReason = getFinishReasonFromOutput(result);
       if (isLikelyTruncated(reply.content, finishReason)) {
         reply.content = maybeAppendContinuationHint(reply.content, finishReason);
       }
@@ -1032,6 +1033,7 @@ export class AgentService {
         );
         fullAnswer = maybeAppendContinuationHint(
           String(result.output || "抱歉，我没有理解您的问题。"),
+          getFinishReasonFromOutput(result),
         );
         scheduleAnswerPersistence(
           conversationId,
@@ -1071,6 +1073,7 @@ export class AgentService {
       let observedToolEvent = false;
       let rootAnswer = "";
       let completedModelAnswer = "";
+      let streamFinishReason: string | undefined;
       const modelTextBuffers = new Map<string, string>();
       const modelToolRuns = new Set<string>();
       const scope = createToolCallScope(toolContext, {
@@ -1123,6 +1126,8 @@ export class AgentService {
                 }
               }
             } else if (event.event === "on_chat_model_end") {
+              const finishReason = getFinishReasonFromOutput(event.data?.output);
+              if (finishReason) streamFinishReason = finishReason;
               const runId = String(event.run_id || "model");
               const buffered = modelTextBuffers.get(runId) || "";
               const isToolRun = modelToolRuns.has(runId)
@@ -1217,6 +1222,7 @@ export class AgentService {
             ),
           );
           fullAnswer = stripXmlToolStream(extractAgentOutputText(fallbackResult));
+          streamFinishReason = getFinishReasonFromOutput(fallbackResult);
           reactSummary = fallbackResult.react || reactSummary;
           for (const event of progress.drain()) yield event;
         }
@@ -1238,7 +1244,7 @@ export class AgentService {
         emittedText = true;
         yield { type: "text", text: fullAnswer };
       }
-      const finalAnswer = maybeAppendContinuationHint(fullAnswer);
+      const finalAnswer = maybeAppendContinuationHint(fullAnswer, streamFinishReason);
       if (finalAnswer !== fullAnswer) {
         yield { type: "text", text: finalAnswer.slice(fullAnswer.length) };
       }
@@ -1272,7 +1278,7 @@ export class AgentService {
       if (isAgentDeadlineError(error)) {
         // 超时但有部分结果 → 返回部分内容 + 继续提示
         if (fullAnswer.trim()) {
-          const partial = maybeAppendContinuationHint(fullAnswer);
+          const partial = appendContinuationHint(fullAnswer);
           scheduleAnswerPersistence(
             conversationId,
             agentHistoryThreadId,

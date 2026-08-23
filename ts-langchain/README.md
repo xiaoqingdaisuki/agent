@@ -100,8 +100,9 @@ OPENAI_MODEL=gpt-4o-mini
 # 可选：自定义 API 地址（如使用代理或本地模型，如 Ollama）
 OPENAI_BASE_URL=https://api.openai.com/v1
 
-# 模型输出、并发和请求预算
-LLM_MAX_OUTPUT_TOKENS=768
+# 模型上下文、输出、并发和请求预算
+# Context Window 总上下文 1000000；Input 与 Output 共同占用，不单独限制 Input
+LLM_MAX_OUTPUT_TOKENS=128000
 LLM_MAX_CONCURRENCY=2
 AGENT_DEADLINE_MS=120000
 AGENT_DEADLINE_WITH_TOOLS_MS=300000
@@ -247,7 +248,7 @@ GET  /api/v1/history                   问答历史
 | `OPENAI_API_KEY` | OpenAI API 密钥 | - | 是 |
 | `OPENAI_MODEL` | 使用的模型 | `gpt-4o-mini` | 否 |
 | `OPENAI_BASE_URL` | API 地址 | `https://api.openai.com/v1` | 否 |
-| `LLM_MAX_OUTPUT_TOKENS` | 单次模型输出上限 | `768` | 否 |
+| `LLM_MAX_OUTPUT_TOKENS` | 单次模型输出上限 | `128000` | 否 |
 | `LLM_MAX_CONCURRENCY` | 进程内模型并发上限 | `2` | 否 |
 | `AGENT_DEADLINE_MS` | 普通 Agent 总时限（毫秒） | `120000` | 否 |
 | `AGENT_DEADLINE_WITH_TOOLS_MS` | 工具 Agent 总时限（毫秒） | `300000` | 否 |

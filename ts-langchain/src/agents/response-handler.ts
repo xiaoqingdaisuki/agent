@@ -113,6 +113,30 @@ export function getFinishReason(message: AIMessage): string | undefined {
   return undefined;
 }
 
+// 从 Agent 输出或消息列表中提取最后一个 AI 消息的结束原因。
+export function getFinishReasonFromOutput(output: unknown): string | undefined {
+  if (!output || typeof output !== "object") return undefined;
+  const direct = getFinishReason(output as AIMessage);
+  if (direct) return direct;
+
+  const candidate = output as Record<string, any>;
+  if (candidate.output && candidate.output !== output) {
+    const nested = getFinishReasonFromOutput(candidate.output);
+    if (nested) return nested;
+  }
+  if (!Array.isArray(candidate.messages)) return undefined;
+
+  for (const message of [...candidate.messages].reverse()) {
+    const messageType = typeof message?._getType === "function"
+      ? message._getType()
+      : message?.type || message?.role;
+    if (messageType !== "ai" && messageType !== "assistant") continue;
+    const reason = getFinishReason(message as AIMessage);
+    if (reason) return reason;
+  }
+  return undefined;
+}
+
 // ============ 继续提示 ============
 
 const CONTINUATION_PROMPT = "\n\n---\n⚠️ 以上回答尚未完成。如需继续，请回复「继续」。";

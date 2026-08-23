@@ -1065,7 +1065,7 @@ class AgentService:
             )
             from src.agents.deadline import AgentDeadline
             from src.agents.response_handler import (
-                get_finish_reason,
+                get_finish_reason_from_output,
                 is_likely_truncated,
                 maybe_append_continuation_hint,
             )
@@ -1146,15 +1146,7 @@ class AgentService:
             reply_content = extract_agent_output_text(result) or "抱歉，我没有理解您的问题。"
 
             # 检测 LLM 输出截断
-            last_ai_msg = next(
-                (
-                    message
-                    for message in reversed(result.get("messages", []))
-                    if getattr(message, "type", "") == "ai"
-                ),
-                result["messages"][-1],
-            )
-            finish_reason = get_finish_reason(last_ai_msg)
+            finish_reason = get_finish_reason_from_output(result)
             if is_likely_truncated(reply_content, finish_reason):
                 reply_content = maybe_append_continuation_hint(reply_content, finish_reason)
 
@@ -1207,6 +1199,7 @@ class AgentService:
         observed_tool_event = False
         react_summary = None
         root_answer = ""
+        stream_finish_reason = None
         try:
             from src.agents.graph_agents import (
                 AGENT_RECURSION_LIMIT,
@@ -1216,7 +1209,11 @@ class AgentService:
                 is_direct_chat_message,
             )
             from src.agents.deadline import AgentDeadline
-            from src.agents.response_handler import maybe_append_continuation_hint
+            from src.agents.response_handler import (
+                append_continuation_hint,
+                get_finish_reason_from_output,
+                maybe_append_continuation_hint,
+            )
             from src.commands import (
                 execute_agent_command,
                 get_agent_prompt_override,
@@ -1255,6 +1252,7 @@ class AgentService:
                 from src.rag.rag_agent import build_rag_agent
 
                 rag_agent = build_rag_agent()
+                rag_finish_reason = None
                 with tool_call_scope(runtime_context):
                     async with AgentDeadline():
                         rag_input = {
@@ -1282,6 +1280,12 @@ class AgentService:
                                 ):
                                     output = event.get("data", {}).get("output", {})
                                     full_answer = extract_agent_output_text(output)
+                                if event.get("event") in {"on_chain_end", "on_chat_model_end"}:
+                                    finish_reason = get_finish_reason_from_output(
+                                        event.get("data", {}).get("output")
+                                    )
+                                    if finish_reason:
+                                        rag_finish_reason = finish_reason
                         else:
                             result = await rag_agent.ainvoke(rag_input)
                             full_answer = result["messages"][-1].content
@@ -1295,7 +1299,9 @@ class AgentService:
                             yield {"type": "text", "text": text}
                     else:
                         yield {"type": "text", "text": raw_answer}
-                final_answer = maybe_append_continuation_hint(raw_answer)
+                final_answer = maybe_append_continuation_hint(
+                    raw_answer, rag_finish_reason
+                )
                 if final_answer != raw_answer:
                     yield {"type": "text", "text": final_answer[len(raw_answer):]}
                 schedule_answer_persistence(
@@ -1356,6 +1362,11 @@ class AgentService:
                                         ):
                                             model_tool_runs.add(run_id)
                             elif event_name == "on_chat_model_end":
+                                finish_reason = get_finish_reason_from_output(
+                                    event.get("data", {}).get("output")
+                                )
+                                if finish_reason:
+                                    stream_finish_reason = finish_reason
                                 run_id = str(event.get("run_id") or "model")
                                 buffered = model_text_buffers.get(run_id, "")
                                 output = event.get("data", {}).get("output")
@@ -1483,6 +1494,7 @@ class AgentService:
                         full_answer = strip_xml_tool_stream(
                             extract_agent_output_text(fallback_result)
                         )
+                        stream_finish_reason = get_finish_reason_from_output(fallback_result)
                         if isinstance(fallback_result, dict):
                             from src.agents.react_policy import summarize_react_state
 
@@ -1503,7 +1515,7 @@ class AgentService:
                 emitted_text = True
                 yield {"type": "text", "text": full_answer}
 
-            final_answer = maybe_append_continuation_hint(full_answer)
+            final_answer = maybe_append_continuation_hint(full_answer, stream_finish_reason)
             if final_answer != full_answer:
                 yield {"type": "text", "text": final_answer[len(full_answer):]}
             schedule_answer_persistence(
@@ -1520,7 +1532,7 @@ class AgentService:
 
         except TimeoutError:
             if full_answer.strip():
-                partial = maybe_append_continuation_hint(full_answer)
+                partial = append_continuation_hint(full_answer)
                 schedule_answer_persistence(
                     conversation_id, content, partial, user_id or ""
                 )

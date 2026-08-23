@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     server_request_timeout_ms: int = 310000
     llm_timeout_ms: int = 30000
     llm_max_retries: int = Field(default=1, ge=0, le=2)
-    llm_max_output_tokens: int = Field(default=768, ge=256, le=8192)
+    llm_max_output_tokens: int = Field(default=128000, ge=256, le=128000)
     llm_max_concurrency: int = Field(default=2, ge=1, le=32)
     background_task_concurrency: int = Field(default=4, ge=1, le=32)
     background_task_queue_max: int = Field(default=200, ge=1, le=1000)
