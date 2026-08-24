@@ -15,6 +15,7 @@ import {
   CapabilitiesService,
   BusinessError,
   BusinessErrorCode,
+  waitForConversationPersistence,
 } from "../../../services/index.js";
 import {
   ProfileService,
@@ -212,6 +213,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         });
       }
 
+      await waitForConversationPersistence(convId);
       await ConversationService.appendUserMessage(convId, content);
       const assistantMessage = await AgentService.chat(
         convId,
@@ -259,6 +261,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       });
     }
 
+    await waitForConversationPersistence(convId);
     await ConversationService.appendUserMessage(convId, content);
     reply.hijack();
     reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");

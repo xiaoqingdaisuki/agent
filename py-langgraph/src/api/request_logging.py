@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import traceback
 from typing import Any
+from uuid import uuid4
 
 from fastapi import Request
 
@@ -48,19 +50,52 @@ def get_logged_request_body(request: Request) -> Any:
         return {"raw_body": raw_body.decode("utf-8", errors="replace")}
 
 
-# 记录原始异常、堆栈和请求上下文，便于直接通过 Docker 日志排障
+# 获取请求级 ID，优先复用上游 ID，否则为当前请求生成稳定 ID
+def get_request_id(request: Request) -> str:
+    request_id = request.headers.get("x-request-id") or getattr(
+        request.state, "request_id", None
+    )
+    if not request_id:
+        request_id = uuid4().hex
+        request.state.request_id = request_id
+    return request_id
+
+
+# 构造与 TS 日志 err/request_context 字段对应的错误事件
+def build_request_error_payload(
+    request: Request,
+    error: BaseException,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    stack = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    return {
+        "err": {
+            "type": type(error).__name__,
+            "message": str(error),
+            "stack": stack,
+        },
+        "request_context": {
+            "request_id": get_request_id(request),
+            "method": request.method,
+            "url": str(request.url),
+            "params": sanitize_log_value(dict(request.path_params)),
+            "query": sanitize_log_value(dict(request.query_params)),
+            "body": sanitize_log_value(get_logged_request_body(request)),
+            **sanitize_log_value(context or {}),
+        },
+    }
+
+
+# 记录与 TS 版本等价的原始异常、堆栈和请求上下文
 def log_request_error(
     request: Request,
-    error: Exception,
+    error: BaseException,
     context: dict[str, Any] | None = None,
 ) -> None:
+    payload = build_request_error_payload(request, error, context)
+    request.state.request_error_logged = True
     logger.error(
-        "Agent request failed | request_id=%s method=%s path=%s query=%s body=%s context=%s",
-        request.headers.get("x-request-id", ""),
-        request.method,
-        request.url.path,
-        sanitize_log_value(dict(request.query_params)),
-        sanitize_log_value(get_logged_request_body(request)),
-        sanitize_log_value(context or {}),
+        "Agent request failed | %s",
+        json.dumps(payload, ensure_ascii=False, default=str),
         exc_info=(type(error), error, error.__traceback__),
     )

@@ -15,6 +15,7 @@ import {
   isDirectChatMessage,
 } from "../agents/tool-agent.js";
 import {
+  getHistory,
   getHistoryBeforeInput,
   clearHistory,
   appendMessage,
@@ -155,6 +156,22 @@ function scheduleBackgroundTask(label: string, task: () => Promise<void>): void 
 export async function flushBackgroundTasks(): Promise<void> {
   while (backgroundTasks.size > 0) {
     await Promise.all([...backgroundTasks]);
+  }
+}
+
+// 等待指定会话上一轮回答完成后台持久化，避免快速连续请求读取到不完整历史。
+export async function waitForConversationPersistence(
+  conversationId: string,
+): Promise<void> {
+  const work = backgroundChains.get(`answer:${conversationId}`);
+  if (!work) return;
+  try {
+    await work;
+  } catch (error) {
+    console.warn(
+      `[service] previous conversation persistence failed for ${conversationId}:`,
+      error,
+    );
   }
 }
 
@@ -350,7 +367,11 @@ export function scheduleAnswerPersistence(
   userId?: string,
 ): void {
   scheduleBackgroundTask(`answer:${conversationId}`, async () => {
-    await appendMessage(agentHistoryThreadId, new HumanMessage(content));
+    const history = await getHistory(agentHistoryThreadId);
+    const last = history.at(-1);
+    if (last?._getType() !== "human" || last.content !== content) {
+      await appendMessage(agentHistoryThreadId, new HumanMessage(content));
+    }
     await appendMessage(agentHistoryThreadId, new AIMessage(answer));
     await ConversationService.appendAssistantMessage(conversationId, {
       id: crypto.randomUUID(),
@@ -850,6 +871,7 @@ export class AgentService {
     userId?: string,
   ): Promise<Message> {
     try {
+      await waitForConversationPersistence(conversationId);
       const command = executeAgentCommand(content, conversationId);
       if (command) {
         const reply: Message = {
@@ -998,6 +1020,7 @@ export class AgentService {
     let streamTextBuffer = "";
     let agentHistoryThreadId = conversationId;
     try {
+      await waitForConversationPersistence(conversationId);
       const command = executeAgentCommand(content, conversationId);
       if (command) {
         const reply: Message = {

@@ -79,6 +79,20 @@ async def flush_background_tasks() -> None:
         await asyncio.gather(*tuple(_background_tasks), return_exceptions=True)
 
 
+# 等待指定会话上一轮回答完成持久化，避免快速连续请求读取到不完整历史。
+async def wait_for_conversation_persistence(conversation_id: str) -> None:
+    task = _background_chains.get(f"answer:{conversation_id}")
+    if task is None:
+        return
+    try:
+        await asyncio.shield(task)
+    except Exception:
+        logger.warning(
+            "Previous conversation persistence failed | conversation_id=%s",
+            conversation_id,
+        )
+
+
 # 从 LangChain 消息块中提取可展示的文本增量。
 def get_stream_text(chunk) -> str:
     content = chunk.get("content", chunk) if isinstance(chunk, dict) else getattr(chunk, "content", chunk)
@@ -635,17 +649,27 @@ class ConversationService:
         )
 
     @staticmethod
-    # 获取会话的全部消息列表，内存未命中时从 D1 加载
+    # 获取会话的全部消息列表，优先刷新仓储并以进程缓存作为故障兜底。
     def get_messages(conv_id: str) -> list[dict]:
         conv = _conversations.get(conv_id)
-        if conv and conv.messages:
-            return [message.to_dict() for message in conv.messages]
+        cached = [message.to_dict() for message in conv.messages] if conv else []
 
-        # D1 回退
         try:
             from src.repositories import get_repositories
             repos = get_repositories()
-            messages_data, _ = repos.get_messages(conv_id, 200, 0)
+            messages_data = []
+            offset = 0
+            total = 0
+            while True:
+                page, total = repos.get_messages(conv_id, 200, offset)
+                if not page:
+                    break
+                messages_data.extend(page)
+                offset += len(page)
+                if len(messages_data) >= total:
+                    break
+            if not messages_data and cached:
+                return cached
             loaded = [
                 {
                     "id": m["id"],
@@ -672,7 +696,30 @@ class ConversationService:
             return loaded
         except Exception as exc:
             logger.warning("[service] D1 get messages for conv %s failed: %s", conv_id, exc)
-            return []
+            return cached
+
+    @staticmethod
+    # 获取提供给 Agent 的对话上下文，保留用户与助手消息作为补充信息源。
+    def get_agent_conversation_history(
+        conv_id: str, current_content: str | None = None
+    ) -> list[dict[str, str]]:
+        history = [
+            {
+                "role": str(message.get("role", "")),
+                "content": str(message.get("content", "")),
+            }
+            for message in ConversationService.get_messages(conv_id)
+            if message.get("role") in {"user", "assistant"}
+            and str(message.get("content", "")).strip()
+        ]
+        if (
+            current_content
+            and history
+            and history[-1]["role"] == "user"
+            and history[-1]["content"] == current_content
+        ):
+            history.pop()
+        return history
 
     @staticmethod
     # 清空会话消息列表和关联状态
@@ -1062,6 +1109,7 @@ class AgentService:
     # 执行 chat 对应的业务逻辑
     async def chat(conversation_id: str, content: str, user_id: str = None) -> Message:
         try:
+            await wait_for_conversation_persistence(conversation_id)
             from src.agents.graph_agents import (
                 AGENT_RECURSION_LIMIT,
                 build_chat_agent,
@@ -1111,6 +1159,9 @@ class AgentService:
                 if not conversation or conversation.mode != "knowledge"
                 else None
             )
+            conversation_history = ConversationService.get_agent_conversation_history(
+                conversation_id, content
+            )
             config = {
                 "configurable": {"thread_id": agent_thread_id},
                 "recursion_limit": AGENT_RECURSION_LIMIT,
@@ -1136,6 +1187,7 @@ class AgentService:
                         result = await build_rag_agent().ainvoke(
                             {
                                 "messages": [HumanMessage(content=content)],
+                                "conversation_history": conversation_history,
                                 "context": [],
                                 "should_retrieve": True,
                             }
@@ -1144,6 +1196,7 @@ class AgentService:
                         result = await agent.ainvoke(
                             {
                                 "messages": [{"role": "user", "content": content}],
+                                "conversation_history": conversation_history,
                                 "user_id": user_id,
                             },
                             config=config,
@@ -1207,6 +1260,7 @@ class AgentService:
         root_answer = ""
         stream_finish_reason = None
         try:
+            await wait_for_conversation_persistence(conversation_id)
             from src.agents.graph_agents import (
                 AGENT_RECURSION_LIMIT,
                 build_chat_agent,
@@ -1253,6 +1307,9 @@ class AgentService:
                 else conversation_id
             )
             runtime_context = create_tool_call_context(user_id or "", conversation_id)
+            conversation_history = ConversationService.get_agent_conversation_history(
+                conversation_id, content
+            )
             if conversation and conversation.mode == "knowledge":
                 from langchain_core.messages import HumanMessage
                 from src.rag.rag_agent import build_rag_agent
@@ -1263,6 +1320,7 @@ class AgentService:
                     async with AgentDeadline():
                         rag_input = {
                             "messages": [HumanMessage(content=content)],
+                            "conversation_history": conversation_history,
                             "context": [],
                             "should_retrieve": True,
                         }
@@ -1340,6 +1398,7 @@ class AgentService:
                         async for event in agent.astream_events(
                             {
                                 "messages": [{"role": "user", "content": content}],
+                                "conversation_history": conversation_history,
                                 "user_id": user_id,
                             },
                             config=config,
@@ -1438,6 +1497,7 @@ class AgentService:
                         async for update in agent.astream(
                             {
                                 "messages": [{"role": "user", "content": content}],
+                                "conversation_history": conversation_history,
                                 "user_id": user_id,
                             },
                             config=config,
@@ -1499,6 +1559,7 @@ class AgentService:
                         fallback_result = await agent.ainvoke(
                             {
                                 "messages": [{"role": "user", "content": content}],
+                                "conversation_history": conversation_history,
                                 "user_id": user_id,
                             },
                             config=config,
@@ -1588,4 +1649,5 @@ __all__ = [
     "Document",
     "KnowledgeService",
     "Message",
+    "wait_for_conversation_persistence",
 ]

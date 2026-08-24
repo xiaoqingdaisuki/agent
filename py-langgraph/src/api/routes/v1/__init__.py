@@ -22,6 +22,7 @@ from src.services import (
     ConversationService,
     KnowledgeService,
     Message,
+    wait_for_conversation_persistence,
 )
 
 router = APIRouter()
@@ -180,6 +181,7 @@ async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
         except Exception:
             pass  # 恢复失败不影响主流程
 
+        await wait_for_conversation_persistence(conv_id)
         ConversationService.append_user_message(conv_id, req.content, trusted_user_id)
         reply = await AgentService.chat(conv_id, req.content, user_id=trusted_user_id)
 
@@ -216,6 +218,7 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
     except Exception:
         pass  # 恢复失败不影响主流程
 
+    await wait_for_conversation_persistence(conv_id)
     ConversationService.append_user_message(conv_id, req.content, trusted_user_id)
 
     # 执行 event generator 对应的业务逻辑

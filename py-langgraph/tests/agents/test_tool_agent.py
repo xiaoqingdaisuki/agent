@@ -119,6 +119,24 @@ def test_direct_chat_routing_skips_tools_for_ordinary_answer_styles():
     assert graph_agents.is_direct_chat_message("随便聊点什么") is False
 
 
+def test_model_messages_keep_runtime_state_and_add_conversation_history():
+    """会话记录应作为补充上下文加入模型输入，而不是替换当前状态。"""
+    messages = graph_agents._model_messages(
+        {
+            "messages": [HumanMessage(content="当前问题")],
+            "conversation_history": [
+                {"role": "user", "content": "上一篇问题"},
+                {"role": "assistant", "content": "上一篇回答"},
+            ],
+        },
+        "system",
+    )
+
+    assert messages[0].content == "system"
+    assert "上一篇问题" in messages[1].content
+    assert messages[-1].content == "当前问题"
+
+
 def test_static_fast_path_never_returns_a_location_specific_recommendation():
     """地点推荐不得被静态回答劫持，必须保留完整 Agent 路由。"""
     assert graph_agents.get_fast_path_answer("北京有什么好吃的") is None

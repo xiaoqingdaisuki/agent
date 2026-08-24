@@ -10,7 +10,9 @@ from src.services import (
     ConversationService,
     Conversation,
     KnowledgeService,
+    Message,
     extract_agent_output_text,
+    flush_background_tasks,
 )
 
 
@@ -138,6 +140,36 @@ class TestConversationService:
 
 
 class TestAgentService:
+    @pytest.mark.asyncio
+    async def test_chat_passes_persisted_history_as_supplemental_context(self, monkeypatch):
+        """跨轮请求必须把已持久化的会话记录传给 Agent。"""
+        from langchain_core.messages import AIMessage
+        from src.agents import graph_agents
+
+        captured = {}
+
+        class FakeAgent:
+            async def ainvoke(self, payload, **_kwargs):
+                captured.update(payload)
+                return {"messages": [AIMessage(content="当前回答")]}
+
+        conversation = ConversationService.create("history context")
+        ConversationService.append_user_message(conversation.id, "上一篇问题")
+        ConversationService.append_assistant_message(
+            conversation.id,
+            Message("assistant", "上一篇回答"),
+        )
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+
+        reply = await AgentService.chat(conversation.id, "当前问题")
+        await flush_background_tasks()
+
+        assert reply.content == "当前回答"
+        assert captured["conversation_history"] == [
+            {"role": "user", "content": "上一篇问题"},
+            {"role": "assistant", "content": "上一篇回答"},
+        ]
+
     @pytest.mark.asyncio
     async def test_chat_returns_explicit_timeout_error(self, monkeypatch):
         from src.agents import graph_agents

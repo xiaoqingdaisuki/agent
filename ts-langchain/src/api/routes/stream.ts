@@ -1,5 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { AgentService, ConversationService } from "../../services/index.js";
+import {
+  AgentService,
+  ConversationService,
+  waitForConversationPersistence,
+} from "../../services/index.js";
 import { requireAgentUserId } from "../middleware/auth.js";
 import { logRequestError } from "../middleware/error.js";
 import { encodeSseDone, encodeSseEvent } from "../sse.js";
@@ -35,6 +39,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
 
       // 确保会话存在于当前仓储，并校验传入 thread_id 的用户归属。
       await ConversationService.ensure(threadId, trustedUserId);
+      await waitForConversationPersistence(threadId);
       await ConversationService.appendUserMessage(threadId, message);
 
       reply.raw.setHeader("Content-Type", "text/event-stream");

@@ -21,12 +21,14 @@ from src.commands import (
     restore_agent_command_state,
 )
 from src.api.auth import require_agent_user_id
+from src.api.request_logging import log_request_error
 from src.services import (
     BusinessError,
     ConversationService,
     Message,
     extract_agent_output_text,
     schedule_answer_persistence,
+    wait_for_conversation_persistence,
 )
 from src.tools.runtime.executor import create_tool_call_context, tool_call_scope
 
@@ -55,9 +57,11 @@ async def chat(payload: ChatRequest, request: Request):
     使用完整工具图，避免为了降低延迟而丢失工具能力。
     """
     trusted_user_id = require_agent_user_id(request, payload.user_id)
+    thread_id = payload.thread_id
     try:
         thread_id = payload.thread_id or str(uuid4())
         ConversationService.ensure(thread_id, trusted_user_id)
+        await wait_for_conversation_persistence(thread_id)
         ConversationService.append_user_message(
             thread_id,
             payload.message,
@@ -99,6 +103,9 @@ async def chat(payload: ChatRequest, request: Request):
             if is_direct_chat_message(payload.message)
             else build_tool_agent(system_prompt_override=prompt_override)
         )
+        conversation_history = ConversationService.get_agent_conversation_history(
+            thread_id, payload.message
+        )
 
         config = {
             "configurable": {"thread_id": agent_thread_id},
@@ -116,6 +123,7 @@ async def chat(payload: ChatRequest, request: Request):
                 result = await agent.ainvoke(
                     {
                         "messages": [{"role": "user", "content": payload.message}],
+                        "conversation_history": conversation_history,
                         "user_id": trusted_user_id,
                     },
                     config=config,
@@ -151,11 +159,26 @@ async def chat(payload: ChatRequest, request: Request):
             react=react_summary,
         )
     except BusinessError as error:
+        log_request_error(
+            request,
+            error,
+            {"thread_id": thread_id, "user_id": trusted_user_id, "stream": False},
+        )
         raise HTTPException(status_code=error.status_code, detail=error.to_dict())
-    except TimeoutError:
+    except TimeoutError as error:
+        log_request_error(
+            request,
+            error,
+            {"thread_id": thread_id, "user_id": trusted_user_id, "stream": False},
+        )
         raise HTTPException(
             status_code=504,
             detail={"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"},
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as error:
+        log_request_error(
+            request,
+            error,
+            {"thread_id": thread_id, "user_id": trusted_user_id, "stream": False},
+        )
+        raise HTTPException(status_code=500, detail=str(error))

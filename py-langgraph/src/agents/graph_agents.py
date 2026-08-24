@@ -183,6 +183,7 @@ class AgentState(TypedDict, total=False):
     """LangGraph Agent 状态 — 显式定义，与 TS 版隐式状态形成对比"""
 
     messages: Annotated[list[BaseMessage], add_messages]
+    conversation_history: list[dict[str, str]]
     user_id: str | None
     react_state: str
     stop_reason: str
@@ -197,6 +198,43 @@ class AgentState(TypedDict, total=False):
     reason_code: str | None
     started_at: float
     total_latency_ms: int
+
+
+# 将持久化会话历史格式化为模型可理解的补充上下文，不替换 LangGraph 当前状态。
+def _conversation_history_message(history: list[dict[str, str]] | None) -> SystemMessage | None:
+    if not history:
+        return None
+
+    lines = []
+    for message in history:
+        role = message.get("role", "").strip()
+        content = message.get("content", "").strip()
+        if role in {"user", "assistant"} and content:
+            speaker = "用户" if role == "user" else "助手"
+            lines.append(f"{speaker}: {content}")
+    if not lines:
+        return None
+    return SystemMessage(
+        content=(
+            "以下是同一会话中已持久化的对话记录，仅作为补充上下文使用。"
+            "请结合当前消息、运行状态、长期记忆和工具结果回答，不要把历史记录当作唯一信息来源。\n\n"
+            + "\n".join(lines)
+        )
+    )
+
+
+# 构建包含会话上下文、长期记忆和当前运行状态的模型消息序列。
+def _model_messages(
+    state: AgentState,
+    system_prompt: str,
+    message_override: list[BaseMessage] | None = None,
+) -> list[BaseMessage]:
+    messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
+    history_message = _conversation_history_message(state.get("conversation_history"))
+    if history_message is not None:
+        messages.append(history_message)
+    messages.extend(state["messages"] if message_override is None else message_override)
+    return messages
 
 
 # 修剪对话历史，限制消息数量并保持用户轮次边界
@@ -259,8 +297,11 @@ def build_chat_agent(checkpointer=None):
     Python 版: 显式定义图结构
     """
     global _default_chat_agent
-    if checkpointer is None and _default_chat_agent is not None:
+    use_default_checkpointer = checkpointer is None
+    if use_default_checkpointer and _default_chat_agent is not None:
         return _default_chat_agent
+    if use_default_checkpointer:
+        checkpointer = _get_default_checkpointer()
 
     from src.prompts.system import SYSTEM_PROMPT
 
@@ -279,7 +320,7 @@ def build_chat_agent(checkpointer=None):
                 pass
 
         async with _get_model_semaphore():
-            response = await llm.ainvoke([SystemMessage(content=system_prompt), *state["messages"]])
+            response = await llm.ainvoke(_model_messages(state, system_prompt))
         return {"messages": [response]}
 
     builder = StateGraph(AgentState)
@@ -290,7 +331,7 @@ def build_chat_agent(checkpointer=None):
     builder.add_edge("agent", END)
 
     agent = builder.compile(checkpointer=checkpointer)
-    if checkpointer is None:
+    if use_default_checkpointer:
         _default_chat_agent = agent
     return agent
 
@@ -677,7 +718,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
         response = None
         async with _get_model_semaphore():
             async for chunk in llm_with_tools.astream(
-                [SystemMessage(content=system_prompt), *state["messages"]]
+                _model_messages(state, system_prompt)
             ):
                 response = chunk if response is None else response + chunk
         if response is None:
@@ -793,8 +834,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
         async with _get_model_semaphore():
             response = await llm.ainvoke(
                 [
-                    SystemMessage(content=base_prompt),
-                    *messages,
+                    *_model_messages(state, base_prompt, messages),
                     SystemMessage(
                         content=(
                             "The tool-call safety limit has been reached. Give the best final "

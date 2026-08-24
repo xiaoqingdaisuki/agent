@@ -2,7 +2,9 @@ import asyncio
 import logging
 from functools import wraps
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -73,6 +75,37 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content=exc.to_dict(),
+        )
+
+    @app.exception_handler(HTTPException)
+    # 记录非预期 HTTP 500，并保留路由转换前的原始异常上下文
+    async def http_error_handler(request: Request, exc: HTTPException):
+        if exc.status_code >= 500 and not getattr(
+            request.state, "request_error_logged", False
+        ):
+            original_error = exc.__context__ if isinstance(exc.__context__, BaseException) else exc
+            log_request_error(
+                request,
+                original_error,
+                {"status_code": exc.status_code, "http_exception": True},
+            )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    # 记录与 TS 全局错误处理器一致的请求校验异常和请求上下文
+    async def validation_error_handler(request: Request, exc: RequestValidationError):
+        log_request_error(
+            request,
+            exc,
+            {"status_code": 422, "validation_errors": jsonable_encoder(exc.errors())},
+        )
+        return JSONResponse(
+            status_code=422,
+            content={"detail": jsonable_encoder(exc.errors())},
         )
 
     @app.exception_handler(Exception)

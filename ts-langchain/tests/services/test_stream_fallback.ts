@@ -28,6 +28,28 @@ describe("AgentService empty streams", () => {
     createDirectChatAgentMock.mockReset();
   });
 
+  it("passes the persisted previous turn as supplemental chat history", async () => {
+    const conversation = await ConversationService.create("history context");
+    await ConversationService.appendUserMessage(conversation.id, "上一篇问题");
+    await ConversationService.appendAssistantMessage(conversation.id, {
+      id: "previous-answer",
+      role: "assistant",
+      content: "上一篇回答",
+      createdAt: new Date().toISOString(),
+    });
+    const invoke = vi.fn().mockResolvedValue({ output: "当前回答" });
+    createToolAgentMock.mockResolvedValue({ invoke });
+
+    const reply = await AgentService.chat(conversation.id, "当前问题");
+    await flushBackgroundTasks();
+
+    expect(reply.content).toBe("当前回答");
+    expect(invoke.mock.calls[0][0].chat_history.map((message) => message.content)).toEqual([
+      "上一篇问题",
+      "上一篇回答",
+    ]);
+  });
+
   it("does not expose a user message as the final agent answer", () => {
     expect(
       extractAgentOutputText({

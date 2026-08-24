@@ -28,6 +28,7 @@ import {
   extractAgentOutputText,
   loadMemoryContext,
   scheduleAnswerPersistence,
+  waitForConversationPersistence,
 } from "../../services/index.js";
 import { requireAgentUserId } from "../middleware/auth.js";
 import { logRequestError } from "../middleware/error.js";
@@ -51,6 +52,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
 
         const threadId = thread_id || crypto.randomUUID();
         await ConversationService.ensure(threadId, trustedUserId);
+        await waitForConversationPersistence(threadId);
         await ConversationService.appendUserMessage(threadId, message);
 
         const command = executeAgentCommand(message, threadId);

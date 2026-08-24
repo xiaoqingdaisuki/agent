@@ -17,7 +17,7 @@ import {
 } from "../commands/index.js";
 
 export const MAX_HISTORY_MESSAGES = 50;
-const HISTORY_LOAD_TIMEOUT_MS = 300;
+const HISTORY_LOAD_PAGE_SIZE = 200;
 
 // 进程内对话历史（仅当前运行上下文使用）
 const conversations = new Map<string, BaseMessage[]>();
@@ -58,23 +58,27 @@ function filterMessagesForAgentHistory(
 // 获取 getHistory 对应的数据
 export async function getHistory(threadId: string): Promise<BaseMessage[]> {
   const cached = conversations.get(threadId);
-  if (cached && cached.length > 0) return cached;
 
-  // D1 回退
+  // 每次从仓储刷新，确保多请求实例和上一轮异步持久化的消息都能被读取。
   try {
     const repos = getRepositories();
-    const result = await Promise.race([
-      repos.message.getMessages(
-        getConversationThreadIdFromHistoryThreadId(threadId),
-        MAX_HISTORY_MESSAGES,
-        0,
-      ),
-      new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), HISTORY_LOAD_TIMEOUT_MS),
-      ),
-    ]);
-    if (result === null) return conversations.get(threadId) ?? [];
-    const { messages } = result;
+    const historyThreadId = getConversationThreadIdFromHistoryThreadId(threadId);
+    const messages = [];
+    let offset = 0;
+    let total = 0;
+    while (true) {
+      const page = await repos.message.getMessages(
+        historyThreadId,
+        HISTORY_LOAD_PAGE_SIZE,
+        offset,
+      );
+      if (page.messages.length === 0) break;
+      messages.push(...page.messages);
+      offset += page.messages.length;
+      total = page.total;
+      if (messages.length >= total) break;
+    }
+    if (messages.length === 0 && cached && cached.length > 0) return [...cached];
     const agentMessages = filterMessagesForAgentHistory(
       messages,
       isDarkModeHistoryThreadId(threadId),
@@ -91,10 +95,10 @@ export async function getHistory(threadId: string): Promise<BaseMessage[]> {
       }
     }
     conversations.set(threadId, loaded);
-    return loaded;
+    return [...loaded];
   } catch (err) {
     console.warn(`[memory] D1 load messages failed for thread ${threadId}: ${err}`);
-    return conversations.get(threadId) ?? [];
+    return cached ? [...cached] : [];
   }
 }
 
@@ -117,7 +121,7 @@ export async function getHistoryBeforeInput(
  */
 // 创建或注册 appendMessage 所需的数据
 export async function appendMessage(threadId: string, message: BaseMessage): Promise<void> {
-  const history = await getHistory(threadId);
+  const history = conversations.get(threadId) ?? (await getHistory(threadId));
   history.push(message);
 
   // 裁剪超出上限的旧消息

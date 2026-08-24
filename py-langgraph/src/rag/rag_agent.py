@@ -23,6 +23,7 @@ class RAGState(TypedDict):
     """RAG Agent 状态"""
 
     messages: Annotated[list[BaseMessage], operator.add]
+    conversation_history: list[dict[str, str]]
     context: list[dict[str, Any]]
     should_retrieve: bool
 
@@ -86,9 +87,17 @@ def build_rag_agent(
 
         # 构建带上下文的 prompt
         context_text = "\n\n".join(context) if context else "No relevant information found."
+        history_text = "\n".join(
+            f"{'用户' if item.get('role') == 'user' else '助手'}: {item.get('content', '')}"
+            for item in state.get("conversation_history", [])
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        ) or "No previous conversation history."
 
         prompt = f"""Based on the following context from the company knowledge base, answer the user's question.
 If the context doesn't contain relevant information, say so honestly.
+
+Previous conversation history (supplemental; combine it with the current question and retrieved context):
+{history_text}
 
 Context:
 {context_text}
