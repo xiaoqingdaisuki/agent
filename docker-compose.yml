@@ -50,6 +50,8 @@ services:
     build:
       context: ./ts-langchain
       dockerfile: Dockerfile
+      args:
+        NPM_REGISTRY_URL: ${NPM_REGISTRY_URL:-https://registry.npmmirror.com}
     ports:
       - "${TS_PUBLIC_PORT:-6001}:6001"
     healthcheck:
@@ -65,6 +67,8 @@ services:
     build:
       context: ./py-langgraph
       dockerfile: Dockerfile
+      args:
+        PYPI_SOURCE_URL: ${PYPI_SOURCE_URL:-https://mirrors.aliyun.com/pypi/simple/}
     environment:
       <<: *agent-environment
       HOST: 0.0.0.0

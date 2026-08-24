@@ -3,7 +3,8 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+ARG NPM_REGISTRY_URL=https://registry.npmmirror.com
+RUN npm ci --registry="$NPM_REGISTRY_URL"
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -15,7 +16,9 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+ARG NPM_REGISTRY_URL=https://registry.npmmirror.com
+RUN npm ci --omit=dev --registry="$NPM_REGISTRY_URL" \
+    && npm cache clean --force
 
 COPY --from=builder --chown=node:node /app/dist ./dist
 

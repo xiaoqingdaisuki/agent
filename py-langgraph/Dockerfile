@@ -5,7 +5,12 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY src ./src
-RUN pip wheel --no-cache-dir --wheel-dir /wheels .
+ARG PYPI_SOURCE_URL=https://mirrors.aliyun.com/pypi/simple/
+RUN pip wheel --no-cache-dir \
+    --index-url "$PYPI_SOURCE_URL" \
+    --retries 5 \
+    --timeout 120 \
+    --wheel-dir /wheels .
 
 FROM python:3.11-slim AS runtime
 
