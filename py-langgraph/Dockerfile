@@ -15,6 +15,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
+COPY --from=builder /app/src ./src
 RUN pip install --no-cache-dir /wheels/* \
     && rm -rf /wheels \
     && addgroup --system agent \
