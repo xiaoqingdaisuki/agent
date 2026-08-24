@@ -193,6 +193,58 @@ describe("AgentService empty streams", () => {
     ).toBe("深圳免费活动回答");
   });
 
+  it("emits one tool lifecycle for nested tool wrapper events", async () => {
+    createToolAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        yield {
+          event: "on_tool_start",
+          name: "calculator",
+          run_id: "outer-tool",
+          parent_ids: [],
+        };
+        yield {
+          event: "on_tool_start",
+          name: "calculator",
+          run_id: "inner-tool",
+          parent_ids: ["outer-tool"],
+        };
+        yield {
+          event: "on_tool_end",
+          name: "calculator",
+          run_id: "inner-tool",
+          parent_ids: ["outer-tool"],
+        };
+        yield {
+          event: "on_tool_end",
+          name: "calculator",
+          run_id: "outer-tool",
+          parent_ids: [],
+        };
+      },
+    });
+
+    const conversation = await ConversationService.create("nested tool lifecycle");
+    const events = [];
+    for await (const event of AgentService.chatStream(conversation.id, "计算 2 + 2")) {
+      events.push(event);
+    }
+
+    expect(events.filter((event) => event.type === "tool")).toEqual([
+      {
+        type: "tool",
+        toolName: "calculator",
+        status: "started",
+        callId: "outer-tool",
+      },
+      {
+        type: "tool",
+        toolName: "calculator",
+        status: "completed",
+        callId: "outer-tool",
+      },
+    ]);
+  });
+
   it("emits visible fallback text after a tool-only stream", async () => {
     createToolAgentMock.mockResolvedValue({
       streamEvents: async function* () {

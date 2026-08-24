@@ -270,6 +270,28 @@ class TestRuntimeToolWrapper:
         assert get_audit_log()[-1]["tool_name"] == "math.calculate"
 
     @pytest.mark.asyncio
+    async def test_runtime_wrapper_emits_one_tool_lifecycle(self):
+        from src.tools.registry import get_registry
+
+        wrapped = get_registry().get_tool("math.calculate")
+        context = create_tool_call_context("trusted-user", "trusted-conversation")
+        lifecycle = []
+
+        with tool_call_scope(context):
+            async for event in wrapped.astream_events(
+                {"expression": "2 + 2"}, version="v2"
+            ):
+                if event.get("event") in {"on_tool_start", "on_tool_end"}:
+                    lifecycle.append(event)
+
+        assert [event["event"] for event in lifecycle] == [
+            "on_tool_start",
+            "on_tool_end",
+        ]
+        assert len({event["run_id"] for event in lifecycle}) == 1
+        assert len(get_audit_log()) == 1
+
+    @pytest.mark.asyncio
     async def test_scopes_model_supplied_user_id_to_trusted_context(self):
         @tool
         async def echo_user(user_id: str) -> str:

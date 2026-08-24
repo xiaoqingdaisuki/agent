@@ -30,6 +30,31 @@ _background_semaphore: asyncio.Semaphore | None = None
 _background_semaphore_loop = None
 
 
+# 过滤工具包装器产生的嵌套或重复生命周期事件，确保一次调用只展示一组进度。
+def _accept_tool_lifecycle_event(
+    event: dict,
+    active_run_ids: set[str],
+    completed_run_ids: set[str],
+) -> bool:
+    event_name = event.get("event")
+    run_id = str(event.get("run_id") or "")
+    parent_ids = {str(parent_id) for parent_id in event.get("parent_ids", []) or []}
+    if parent_ids & active_run_ids:
+        return False
+    if not run_id:
+        return True
+    if event_name == "on_tool_start":
+        if run_id in active_run_ids or run_id in completed_run_ids:
+            return False
+        active_run_ids.add(run_id)
+        return True
+    if run_id in completed_run_ids:
+        return False
+    active_run_ids.discard(run_id)
+    completed_run_ids.add(run_id)
+    return True
+
+
 # 获取当前事件循环的后台任务并发闸门，避免持久化任务耗尽线程池。
 def _get_background_semaphore() -> asyncio.Semaphore:
     global _background_semaphore, _background_semaphore_loop
@@ -1394,6 +1419,8 @@ class AgentService:
                     completed_model_answer = ""
                     model_text_buffers: dict[str, str] = {}
                     model_tool_runs: set[str] = set()
+                    active_tool_run_ids: set[str] = set()
+                    completed_tool_run_ids: set[str] = set()
                     if hasattr(agent, "astream_events"):
                         async for event in agent.astream_events(
                             {
@@ -1459,6 +1486,10 @@ class AgentService:
                                     if candidate.strip():
                                         root_answer = candidate
                             elif event_name == "on_tool_start":
+                                if not _accept_tool_lifecycle_event(
+                                    event, active_tool_run_ids, completed_tool_run_ids
+                                ):
+                                    continue
                                 observed_tool_event = True
                                 yield {
                                     "type": "tool",
@@ -1467,6 +1498,10 @@ class AgentService:
                                     "call_id": event.get("run_id", ""),
                                 }
                             elif event_name == "on_tool_end":
+                                if not _accept_tool_lifecycle_event(
+                                    event, active_tool_run_ids, completed_tool_run_ids
+                                ):
+                                    continue
                                 observed_tool_event = True
                                 yield {
                                     "type": "tool",
@@ -1475,6 +1510,10 @@ class AgentService:
                                     "call_id": event.get("run_id", ""),
                                 }
                             elif event_name == "on_tool_error":
+                                if not _accept_tool_lifecycle_event(
+                                    event, active_tool_run_ids, completed_tool_run_ids
+                                ):
+                                    continue
                                 observed_tool_event = True
                                 yield {
                                     "type": "tool",

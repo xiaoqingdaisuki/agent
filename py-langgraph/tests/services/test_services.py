@@ -11,9 +11,29 @@ from src.services import (
     Conversation,
     KnowledgeService,
     Message,
+    _accept_tool_lifecycle_event,
     extract_agent_output_text,
     flush_background_tasks,
 )
+
+
+def test_nested_tool_lifecycle_is_emitted_once():
+    active_run_ids = set()
+    completed_run_ids = set()
+    events = [
+        {"event": "on_tool_start", "run_id": "outer", "parent_ids": []},
+        {"event": "on_tool_start", "run_id": "inner", "parent_ids": ["outer"]},
+        {"event": "on_tool_end", "run_id": "inner", "parent_ids": ["outer"]},
+        {"event": "on_tool_end", "run_id": "outer", "parent_ids": []},
+    ]
+
+    accepted = [
+        event["run_id"]
+        for event in events
+        if _accept_tool_lifecycle_event(event, active_run_ids, completed_run_ids)
+    ]
+
+    assert accepted == ["outer", "outer"]
 
 
 class TestBusinessError:

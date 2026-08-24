@@ -15,6 +15,7 @@ Tool Runtime — 统一执行管线
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -581,7 +582,15 @@ def wrap_tool_with_runtime(tool: BaseTool, descriptor: ToolDescriptor) -> Struct
         # 执行原始工具并保持其 Pydantic 参数模型约束
         async def execute_tool(input_data: Any, _context: ToolCallContext) -> Any:
             payload = input_data.model_dump() if isinstance(input_data, BaseModel) else input_data
-            return await tool.ainvoke(payload)
+            coroutine = getattr(tool, "coroutine", None)
+            if callable(coroutine):
+                result = coroutine(**payload)
+                return await result if inspect.isawaitable(result) else result
+            function = getattr(tool, "func", None)
+            if not callable(function):
+                raise TypeError(f"工具 {descriptor.name} 没有可执行函数")
+            result = await asyncio.to_thread(function, **payload)
+            return await result if inspect.isawaitable(result) else result
 
         executor = ToolExecutor(
             descriptor=descriptor,

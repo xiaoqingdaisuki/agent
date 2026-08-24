@@ -464,6 +464,36 @@ class ToolProgressChannel {
   }
 }
 
+type ToolLifecycleState = {
+  activeRunIds: Set<string>;
+  completedRunIds: Set<string>;
+};
+
+// 过滤工具包装器产生的嵌套或重复生命周期事件，确保一次调用只展示一组进度。
+function acceptToolLifecycleEvent(
+  event: Record<string, any>,
+  state: ToolLifecycleState,
+): boolean {
+  const eventName = event.event;
+  const runId = String(event.run_id || "");
+  const parentIds = new Set(
+    Array.isArray(event.parent_ids) ? event.parent_ids.map(String) : [],
+  );
+  for (const parentId of parentIds) {
+    if (state.activeRunIds.has(parentId)) return false;
+  }
+  if (!runId) return true;
+  if (eventName === "on_tool_start") {
+    if (state.activeRunIds.has(runId) || state.completedRunIds.has(runId)) return false;
+    state.activeRunIds.add(runId);
+    return true;
+  }
+  if (state.completedRunIds.has(runId)) return false;
+  state.activeRunIds.delete(runId);
+  state.completedRunIds.add(runId);
+  return true;
+}
+
 export interface Document {
   id: string;
   name: string;
@@ -1103,6 +1133,10 @@ export class AgentService {
       let streamFinishReason: string | undefined;
       const modelTextBuffers = new Map<string, string>();
       const modelToolRuns = new Set<string>();
+      const toolLifecycleState: ToolLifecycleState = {
+        activeRunIds: new Set<string>(),
+        completedRunIds: new Set<string>(),
+      };
       const scope = createToolCallScope(toolContext, {
         onToolProgress: (event) => {
           if (event.type === "started") deadline.enableToolBudget();
@@ -1172,6 +1206,7 @@ export class AgentService {
                 if (candidate.trim()) rootAnswer = candidate;
               }
             } else if (event.event === "on_tool_start") {
+              if (!acceptToolLifecycleEvent(event, toolLifecycleState)) continue;
               observedToolEvent = true;
               yield {
                 type: "tool",
@@ -1180,6 +1215,7 @@ export class AgentService {
                 callId: event.run_id || "",
               };
             } else if (event.event === "on_tool_end") {
+              if (!acceptToolLifecycleEvent(event, toolLifecycleState)) continue;
               observedToolEvent = true;
               yield {
                 type: "tool",
@@ -1188,6 +1224,7 @@ export class AgentService {
                 callId: event.run_id || "",
               };
             } else if (event.event === "on_tool_error") {
+              if (!acceptToolLifecycleEvent(event, toolLifecycleState)) continue;
               observedToolEvent = true;
               yield {
                 type: "tool",
