@@ -149,6 +149,7 @@ export class MemoryService {
     category: string = "fact",
     importance: number = 3,
   ): Promise<Memory> {
+    await ProfileService.getOrCreate(userId);
     const repos = getRepos();
     const memoryId = crypto.randomUUID();
     const data = await repos.memory.save(

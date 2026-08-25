@@ -79,11 +79,16 @@ def schedule_background_task(label: str, callback, *args) -> None:
                 await asyncio.shield(previous)
         except Exception:
             pass
-        try:
-            async with _get_background_semaphore():
-                await asyncio.to_thread(callback, *args)
-        except Exception:
-            logger.exception("Background task failed | label=%s", label)
+        for attempt in range(2):
+            try:
+                async with _get_background_semaphore():
+                    await asyncio.to_thread(callback, *args)
+                return
+            except Exception:
+                if attempt == 1:
+                    logger.exception("Background task failed | label=%s", label)
+                    return
+                await asyncio.sleep(0.2 * (attempt + 1))
 
     task = asyncio.create_task(runner(), name=f"agent-background-{label}")
     _background_tasks.add(task)
@@ -110,7 +115,15 @@ async def wait_for_conversation_persistence(conversation_id: str) -> None:
     if task is None:
         return
     try:
-        await asyncio.shield(task)
+        await asyncio.wait_for(
+            asyncio.shield(task),
+            timeout=settings.memory_request_timeout_ms / 1000,
+        )
+    except TimeoutError:
+        logger.warning(
+            "Conversation persistence still running; continuing request | conversation_id=%s",
+            conversation_id,
+        )
     except Exception:
         logger.warning(
             "Previous conversation persistence failed | conversation_id=%s",
@@ -655,9 +668,17 @@ class ConversationService:
         conv = _conversations.get(conv_id)
         if not conv:
             raise BusinessError(BusinessErrorCode.NOT_FOUND, "Conversation not found", 404)
-        ConversationService.get_messages(conv_id)
-        sequence_number = len(conv.messages)
-        conv.messages.append(message)
+        existing = next((item for item in conv.messages if item.id == message.id), None)
+        if existing is None:
+            ConversationService.get_messages(conv_id)
+            existing = next((item for item in conv.messages if item.id == message.id), None)
+        persisted_message = existing or message
+        if existing is None:
+            conv.messages.append(persisted_message)
+        sequence_number = next(
+            (index for index, item in enumerate(conv.messages) if item.id == persisted_message.id),
+            len(conv.messages) - 1,
+        )
 
         from src.repositories import get_repositories
 
@@ -665,11 +686,11 @@ class ConversationService:
             conv_id,
             user_id or conv.user_id,
             [{
-                "id": message.id,
+                "id": persisted_message.id,
                 "sequence_no": sequence_number,
                 "role": "assistant",
-                "content": message.content,
-                "created_at": message.created_at,
+                "content": persisted_message.content,
+                "created_at": persisted_message.created_at,
             }],
         )
 
@@ -705,16 +726,30 @@ class ConversationService:
                 for m in messages_data
             ]
 
+            # 网关可能暂时落后于进程缓存，保留尚未同步的本地消息，避免后续请求覆盖答案。
+            if conv and len(messages_data) < len(conv.messages):
+                remote_ids = {str(item["id"]) for item in messages_data}
+                loaded.extend(
+                    {
+                        "id": message.id,
+                        "role": message.role,
+                        "content": message.content,
+                        "created_at": message.created_at,
+                    }
+                    for message in conv.messages
+                    if message.id not in remote_ids
+                )
+
             # 写回内存
             if conv:
                 conv.messages = [
                     Message(
                         m["role"],
-                        m["content_json"],
+                        m["content"],
                         message_id=m["id"],
                         created_at=m["created_at"],
                     )
-                    for m in messages_data
+                    for m in loaded
                 ]
                 conv.message_count = sum(m.role == "user" for m in conv.messages)
 

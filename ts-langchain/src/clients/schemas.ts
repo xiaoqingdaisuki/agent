@@ -84,10 +84,17 @@ export const MessagesPageSchema = z.object({
   total: z.number(),
 });
 
-export const SearchResponseSchema = z.object({
-  items: z.array(MemorySearchResultSchema),
-  degraded: z.boolean(),
-});
+export const SearchResponseSchema = z
+  .object({
+    items: z.array(MemorySearchResultSchema).optional(),
+    // 兼容旧版 Worker 曾返回的 results 字段。
+    results: z.array(MemorySearchResultSchema).optional(),
+    degraded: z.boolean(),
+  })
+  .transform((data) => ({
+    items: data.items ?? data.results ?? [],
+    degraded: data.degraded,
+  }));
 
 // ============ 文档模型 ==========
 

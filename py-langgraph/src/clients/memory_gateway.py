@@ -8,6 +8,7 @@ Cloudflare Service HTTP Client — Cloudflare 长期存储服务客户端
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -106,7 +107,21 @@ class CloudflareMemoryClient:
         client = await self._get_client()
         headers = self._headers(idempotency_key)
 
-        response = await client.request(method, path, content=json.dumps(body, ensure_ascii=False) if body is not None else None, headers=headers)
+        request_content = json.dumps(body, ensure_ascii=False) if body is not None else None
+        retryable = method in {"GET", "DELETE"} or path.endswith("messages:batch") or bool(idempotency_key)
+        attempts = 3 if retryable else 1
+        response = None
+        for attempt in range(attempts):
+            try:
+                response = await client.request(method, path, content=request_content, headers=headers)
+                break
+            except (httpx.TimeoutException, httpx.NetworkError):
+                if attempt + 1 >= attempts:
+                    raise
+                await asyncio.sleep(0.15 * (attempt + 1))
+
+        if response is None:
+            raise MemoryGatewayError("MEMORY_REQUEST_FAILED", "记忆网关请求失败", 503)
 
         if response.status_code in {401, 403, 404, 409}:
             try:
@@ -288,7 +303,11 @@ class CloudflareMemoryClient:
         if category:
             body["category"] = category
         result = await self._request("POST", f"/internal/v1/users/{_path_segment(user_id)}/memories:search", body)
-        return SearchResponseData.model_validate(result.get("data", {})).model_dump()
+        data = result.get("data", {})
+        # 兼容旧版 Worker 曾返回的 results 字段。
+        if "items" not in data and "results" in data:
+            data = {**data, "items": data["results"]}
+        return SearchResponseData.model_validate(data).model_dump()
 
     # ============ Document ============
 

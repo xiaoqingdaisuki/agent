@@ -223,8 +223,15 @@ npm install
 npx wrangler d1 migrations apply agent-db --local    # 初始化本地 D1
 npx wrangler dev                                     # 本地开发 (localhost:8787)
 npx wrangler secret put SERVICE_SECRET               # 设置 Bearer Secret
+npx wrangler vectorize create-metadata-index memory-embeddings --propertyName user_id --type string
+npx wrangler vectorize create-metadata-index memory-embeddings --propertyName category --type string
+npx wrangler vectorize create-metadata-index memory-embeddings --propertyName active --type boolean
+npx wrangler vectorize create-metadata-index memory-embeddings --propertyName entity_type --type string
+npx wrangler vectorize create-metadata-index memory-embeddings --propertyName document_id --type string
 npx wrangler deploy                                  # 部署到线上
 ```
+
+Vectorize 元数据索引是 RAG 和用户隔离检索的前置条件；重复部署时先用 `npx wrangler vectorize list-metadata-index memory-embeddings` 检查，首次创建后需要等待 Cloudflare 完成异步索引构建。
 
 ### TypeScript 版本
 

@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     memory_search_mode: str = "hybrid"
     memory_auto_extract: bool = True
     memory_max_active_per_user: int = 50
-    memory_request_timeout_ms: int = 5000
+    memory_request_timeout_ms: int = 15000
 
     @field_validator("openai_base_url")
     @classmethod

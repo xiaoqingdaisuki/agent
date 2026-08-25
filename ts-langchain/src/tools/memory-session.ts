@@ -29,7 +29,7 @@ export const sessionMemoryDescriptor: ToolDescriptor = {
   category: "MEMORY",
   risk_level: "R1",
   side_effect: "read",
-  timeout_ms: 5000,
+  timeout_ms: 15000,
   required_permissions: ["memory.session.read"],
   data_classification: ["internal"],
   owner: "memory",

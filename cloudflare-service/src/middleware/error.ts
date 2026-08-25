@@ -70,6 +70,19 @@ export function errorHandler(error: any, c: any) {
     );
   }
 
+  // Zod 请求校验失败应返回客户端参数错误，而不是误报为存储服务故障。
+  if (error?.name === "ZodError" || Array.isArray(error?.issues)) {
+    return jsonResponse(
+      {
+        ok: false,
+        data: null,
+        error: { code: "MEMORY_INVALID_REQUEST", message: "请求参数校验失败" },
+        meta: { request_id: requestId },
+      },
+      400,
+    );
+  }
+
   // D1 错误
   const d1ErrorCode = getD1ErrorCode(error);
   if (d1ErrorCode) {

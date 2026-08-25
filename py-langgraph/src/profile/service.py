@@ -88,6 +88,7 @@ class MemoryService:
     # 创建或注册 add 所需的数据
     def add(user_id: str, content: str, category: str = "fact", importance: int = 3) -> Memory:
         """存储一条新记忆"""
+        ProfileService.get_or_create(user_id)
         repos = _get_repositories()
         data = repos.save_memory(user_id, content.strip(), category, importance)
         return Memory(

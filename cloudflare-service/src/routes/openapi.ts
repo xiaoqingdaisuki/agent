@@ -17,6 +17,13 @@ import {
   ProfileSaveSchema, ConversationCreateSchema, MessageBatchSchema,
   GatewayResponseSchema,
 } from "../schemas/memory-models.js";
+import {
+  DocumentSchema,
+  ChunkSchema,
+  DocumentUploadRequestSchema,
+  DocumentSearchRequestSchema,
+  DocumentSearchResultSchema,
+} from "../schemas/document-models.js";
 
 // ============ Schema 引用辅助函数 ==========
 
@@ -203,6 +210,11 @@ function getOpenApiSpec(): Record<string, unknown> {
         MemoryCategory: zodToOpenApi(MemoryCategorySchema),
         ConversationMode: zodToOpenApi(ConversationModeSchema),
         MessageRole: zodToOpenApi(MessageRoleSchema),
+        Document: zodToOpenApi(DocumentSchema),
+        Chunk: zodToOpenApi(ChunkSchema),
+        DocumentUploadRequest: zodToOpenApi(DocumentUploadRequestSchema),
+        DocumentSearchRequest: zodToOpenApi(DocumentSearchRequestSchema),
+        DocumentSearchResult: zodToOpenApi(DocumentSearchResultSchema),
         GatewayResponse: zodToOpenApi(GatewayResponseSchema),
       },
       responses: {
@@ -646,6 +658,76 @@ function getOpenApiSpec(): Record<string, unknown> {
               },
             },
           },
+        },
+      },
+      "/internal/v1/documents": {
+        post: {
+          tags: ["Document"],
+          summary: "上传并索引文档",
+          requestBody: { required: true, content: { "application/json": { schema: zodToOpenApi(DocumentUploadRequestSchema) } } },
+          responses: { "201": { description: "文档已上传", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } } },
+        },
+        get: {
+          tags: ["Document"],
+          summary: "列出用户文档",
+          parameters: [
+            { name: "user_id", in: "query", required: true, schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer", default: 20, maximum: 100 } },
+            { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+            { name: "category", in: "query", schema: { type: "string" } },
+          ],
+          responses: { "200": { description: "文档列表", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } } },
+        },
+      },
+      "/internal/v1/documents/{document_id}": {
+        get: {
+          tags: ["Document"],
+          summary: "获取文档及分块",
+          parameters: [{ name: "document_id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "文档详情", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } }, "404": { $ref: "#/components/responses/NotFound" } },
+        },
+        delete: {
+          tags: ["Document"],
+          summary: "删除文档",
+          parameters: [{ name: "document_id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "文档已删除", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } }, "404": { $ref: "#/components/responses/NotFound" } },
+        },
+      },
+      "/internal/v1/documents/{document_id}/reindex": {
+        post: {
+          tags: ["Document"],
+          summary: "重建文档索引",
+          parameters: [{ name: "document_id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "索引已重建", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } }, "404": { $ref: "#/components/responses/NotFound" } },
+        },
+      },
+      "/internal/v1/documents:search": {
+        post: {
+          tags: ["Document"],
+          summary: "语义搜索文档",
+          requestBody: { required: true, content: { "application/json": { schema: zodToOpenApi(DocumentSearchRequestSchema) } } },
+          responses: { "200": { description: "文档搜索结果", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } } },
+        },
+      },
+      "/internal/v1/checkpoints/{thread_id}": {
+        post: {
+          tags: ["Checkpoint"],
+          summary: "保存 LangGraph checkpoint",
+          parameters: [{ name: "thread_id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["checkpoint_id"], properties: { checkpoint_id: { type: "string" }, parent_checkpoint_id: { type: "string", nullable: true }, checkpoint_data: { type: "object" }, metadata: { type: "object" } } } } } },
+          responses: { "200": { description: "checkpoint 已保存", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } } },
+        },
+        get: {
+          tags: ["Checkpoint"],
+          summary: "读取最新 checkpoint",
+          parameters: [{ name: "thread_id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "checkpoint 数据", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } }, "404": { $ref: "#/components/responses/NotFound" } },
+        },
+        delete: {
+          tags: ["Checkpoint"],
+          summary: "删除线程 checkpoint",
+          parameters: [{ name: "thread_id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "checkpoint 已删除", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } } },
         },
       },
     },

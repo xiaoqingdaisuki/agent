@@ -19,6 +19,7 @@ import {
   getMemoryById,
   normalizeContent,
 } from "../repositories/memory.js";
+import { getOrCreateProfile } from "../repositories/profile.js";
 import { validateMemoryContent, redactSensitive } from "../middleware/security.js";
 import { MemorySaveRequestSchema, MemorySearchRequestSchema } from "../schemas/memory-models.js";
 
@@ -48,6 +49,8 @@ export function registerMemoryRoutes(app: any) {
     const content = redactSensitive(rawContent.trim());
 
     try {
+      // 记忆表依赖用户画像，允许新用户直接写入第一条记忆。
+      await getOrCreateProfile(c.env.DB, userId);
       const result = await saveMemory(c.env.DB, c.env.MEMORY_INDEX, c.env.AI, {
         id: memoryId,
         user_id: userId,

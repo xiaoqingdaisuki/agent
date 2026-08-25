@@ -118,7 +118,7 @@ const envSchema = z.object({
     ),
   MEMORY_AUTO_EXTRACT: z.preprocess(parseBooleanEnv, z.boolean()).default(true),
   MEMORY_MAX_ACTIVE_PER_USER: z.coerce.number().int().min(1).max(200).default(50),
-  MEMORY_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(5_000),
+  MEMORY_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(15_000),
   BACKGROUND_TASK_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   BACKGROUND_TASK_QUEUE_MAX: z.coerce.number().int().min(1).max(1_000).default(200),
 });
