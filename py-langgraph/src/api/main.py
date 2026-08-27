@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_REQUEST_TIMEOUT = settings.server_request_timeout_ms / 1000
 
 
-# 在应用关闭时收敛后台持久化任务并释放共享网关连接。
 @asynccontextmanager
+# 在应用关闭时收敛后台持久化任务并释放共享网关连接。
 async def _lifespan(_app: FastAPI):
     yield
     from src.repositories import close_repositories
@@ -104,6 +104,9 @@ def create_app() -> FastAPI:
                 {"status_code": exc.status_code, "http_exception": True},
             )
         detail = exc.detail if isinstance(exc.detail, dict) else {}
+        nested_error = detail.get("error")
+        if isinstance(nested_error, dict):
+            detail = nested_error
         error = {
             "code": str(detail.get("code") or f"HTTP_{exc.status_code}"),
             "message": str(detail.get("message") or exc.detail or "请求失败"),

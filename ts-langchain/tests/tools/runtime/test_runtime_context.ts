@@ -7,6 +7,7 @@ import {
   budgetGuard,
   createToolCallScope,
   getToolCallContext,
+  permissionCheck,
   runWithToolCallContext,
   wrapToolWithRuntime,
 } from "../../../src/tools/runtime/executor.js";
@@ -24,6 +25,21 @@ function context(userId: string, roles: string[] = ["member"]): ToolCallContext 
 }
 
 describe("per-request tool runtime", () => {
+  it("preserves denial reasons and role order across permission cache hits", () => {
+    const roles = ["viewer", "member"];
+    const descriptor: ToolDescriptor = {
+      name: "memory.user.save", version: "1.0.0", title: "save", description: "save",
+      category: "MEMORY", risk_level: "R2", side_effect: "write", timeout_ms: 1000,
+      required_permissions: ["memory.user.write"], input_schema: {},
+    };
+    const first = permissionCheck(context("denied-cache-user", roles), descriptor);
+    const second = permissionCheck(context("denied-cache-user", roles), descriptor);
+
+    expect(first).toEqual(second);
+    expect(second.reason).toContain("PERMISSION_DENIED");
+    expect(roles).toEqual(["viewer", "member"]);
+  });
+
   it("isolates concurrent request contexts", async () => {
     const first = createToolCallScope(context("first"));
     const second = createToolCallScope(context("second"));

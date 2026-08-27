@@ -254,6 +254,30 @@ class TestAgentService:
         assert events == [{"type": "text", "text": "knowledge answer"}]
 
     @pytest.mark.asyncio
+    async def test_non_streamed_knowledge_conversation_scopes_rag_to_user(self, monkeypatch):
+        from langchain_core.messages import AIMessage
+        from src.rag import rag_agent
+
+        captured = {}
+
+        class FakeRagAgent:
+            async def ainvoke(self, state):
+                captured.update(state)
+                return {"messages": [AIMessage(content="knowledge answer")]}
+
+        conversation = ConversationService.create(
+            "Knowledge", mode="knowledge", user_id="knowledge-user"
+        )
+        monkeypatch.setattr(rag_agent, "build_rag_agent", lambda: FakeRagAgent())
+
+        reply = await AgentService.chat(
+            conversation.id, "question", user_id="knowledge-user"
+        )
+
+        assert reply.content == "knowledge answer"
+        assert captured["user_id"] == "knowledge-user"
+
+    @pytest.mark.asyncio
     async def test_explicit_knowledge_query_skips_model_planning(self, monkeypatch):
         from src.agents import graph_agents
 
@@ -261,7 +285,7 @@ class TestAgentService:
 
         async def fake_knowledge_chat(content, _history=None, user_id=""):
             assert "知识库" in content
-            assert user_id == "tenant:test"
+            assert user_id == "knowledge-user"
             return {"output": "没有检索到"}
 
         monkeypatch.setattr(KnowledgeService, "chat", fake_knowledge_chat)
@@ -276,11 +300,30 @@ class TestAgentService:
             async for event in AgentService.chat_stream(
                 conversation.id,
                 "请从知识库查询 Agent 项目整改",
+                user_id="knowledge-user",
                 tool_identity={"tenant_id": "tenant:test", "roles": ["member"]},
             )
         ]
 
         assert events == [{"type": "text", "text": "没有检索到"}]
+
+    @pytest.mark.asyncio
+    async def test_profile_enrichment_failure_does_not_fail_answer(self, monkeypatch):
+        from src.agents import graph_agents
+        from src.profile.service import ProfileService
+
+        conversation = ConversationService.create("background enrichment")
+        monkeypatch.setattr(graph_agents, "get_fast_path_answer", lambda _content: "快速回答")
+        monkeypatch.setattr(
+            ProfileService,
+            "update",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("profile unavailable")),
+        )
+
+        reply = await AgentService.chat(conversation.id, "你好", user_id="profile-user")
+
+        assert reply.content == "快速回答"
+        await flush_background_tasks()
 
     @pytest.mark.asyncio
     async def test_tool_only_stream_emits_fallback_answer(self, monkeypatch):

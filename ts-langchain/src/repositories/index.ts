@@ -60,8 +60,13 @@ function nextIsoTimestamp(previous?: string): string {
   return new Date(Math.max(Date.now(), previousMs + 1)).toISOString();
 }
 
+// 读取进程内消息的最大序号并返回下一可用值，兼容显式序号留下的空洞。
+function nextInMemorySequence(messages: readonly MessageData[]): number {
+  return messages.reduce((max, message) => Math.max(max, message.sequence_no + 1), 0);
+}
+
 // 构建进程内仓储，供关闭 Cloudflare 记忆模式时使用。
-const inMemoryRepositories: Repositories = {
+export const inMemoryRepositories: Repositories = {
   profile: {
     // 获取或创建进程内用户画像。
     async getOrCreate(userId, name = "") {
@@ -132,7 +137,7 @@ const inMemoryRepositories: Repositories = {
     async createBatch(conversationId, _userId, messages) {
       const existing = inMemoryMessages.get(conversationId) ?? [];
       const byId = new Map(existing.map((message) => [message.id, message]));
-      let nextSequence = existing.reduce((max, message) => Math.max(max, message.sequence_no + 1), 0);
+      let nextSequence = nextInMemorySequence(existing);
       for (const message of messages) {
         const stored: MessageData = { ...message, sequence_no: message.sequence_no ?? nextSequence++ };
         byId.set(message.id, stored);
@@ -166,9 +171,10 @@ const inMemoryRepositories: Repositories = {
       }
       const now = new Date().toISOString();
       const messages = inMemoryMessages.get(conversationId) ?? [];
+      const nextSequence = nextInMemorySequence(messages);
       const userMessage: MessageData = {
         id: userMessageId, conversation_id: conversationId, user_id: userId,
-        sequence_no: messages.length, role: "user", content_json: content, created_at: now,
+        sequence_no: nextSequence, role: "user", content_json: content, created_at: now,
       };
       const turn: TurnData = {
         id: turnId, conversation_id: conversationId, user_id: userId,
@@ -190,7 +196,9 @@ const inMemoryRepositories: Repositories = {
       if (turn.status === "completed") return { ...turn };
       if (turn.status !== "streaming") throw new MemoryGatewayError("MEMORY_TURN_STATE_CONFLICT", `Cannot transition Turn from ${turn.status} to completed`, 409);
       const messages = inMemoryMessages.get(turn.conversation_id) ?? [];
-      if (!messages.some((item) => item.id === message.id)) messages.push({ ...message, sequence_no: messages.length });
+      if (!messages.some((item) => item.id === message.id)) {
+        messages.push({ ...message, sequence_no: nextInMemorySequence(messages) });
+      }
       inMemoryMessages.set(turn.conversation_id, messages);
       const updated: TurnData = {
         ...turn, status: "completed", assistant_message_id: message.id,

@@ -53,8 +53,10 @@ const envSchema = z.object({
     .max(120_000)
     .default(30_000),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(2).default(1),
-  LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_192).default(4_096),
-  HISTORY_CONTEXT_TOKEN_BUDGET: z.coerce.number().int().min(1_024).max(128_000).default(16_000),
+  LLM_MAX_CONTEXT_TOKENS: z.coerce.number().int().min(1_024).max(128_000).default(128_000),
+  LLM_MAX_INPUT_TOKENS: z.coerce.number().int().min(1_024).max(48_000).default(48_000),
+  LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(16_000).default(16_000),
+  HISTORY_CONTEXT_TOKEN_BUDGET: z.coerce.number().int().min(1_024).max(48_000).default(48_000),
   LLM_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
   LLM_QUEUE_MAX: z.coerce.number().int().min(1).max(1_000).default(100),
   LLM_QUEUE_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(5_000),

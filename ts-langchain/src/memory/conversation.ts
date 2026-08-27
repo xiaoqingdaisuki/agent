@@ -10,7 +10,10 @@ import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from "@langchain/
 import { getRepositories } from "../repositories/index.js";
 import { config } from "../config/index.js";
 
-export const MAX_HISTORY_TOKENS = config.HISTORY_CONTEXT_TOKEN_BUDGET;
+export const MAX_HISTORY_TOKENS = Math.min(
+  config.HISTORY_CONTEXT_TOKEN_BUDGET,
+  config.LLM_MAX_INPUT_TOKENS,
+);
 const HISTORY_LOAD_PAGE_SIZE = 200;
 
 // 进程内对话历史（仅当前运行上下文使用）

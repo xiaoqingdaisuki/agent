@@ -180,8 +180,15 @@ async function processDocumentChunkJob(db: D1Database, index: VectorizeIndex, ai
 
 // 重试失败的任务
 export async function retryFailedJobs(db: D1Database, index: VectorizeIndex, ai: Ai): Promise<{ processed: number; failed: number }> {
-  void db;
-  void index;
-  void ai;
-  return { processed: 0, failed: 0 };
+  const { results } = await db
+    .prepare("SELECT id FROM memory_index_jobs WHERE status = 'failed' ORDER BY created_at ASC LIMIT ?")
+    .bind(DEFAULTS.INDEX_JOB_BATCH_SIZE)
+    .all<{ id: string }>();
+  const now = new Date().toISOString();
+  for (const job of results ?? []) {
+    await db.prepare(
+      "UPDATE memory_index_jobs SET status = 'pending', retry_count = 0, next_retry_at = ?, last_error = NULL, lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE id = ? AND status = 'failed'",
+    ).bind(now, now, job.id).run();
+  }
+  return processPendingJobs(db, index, ai);
 }

@@ -297,7 +297,7 @@ def strip_xml_tool_stream(text: str) -> str:
     return drain_xml_tool_stream(text, final=True)[0].strip()
 
 
-# 串行持久化一个完整回答，保证流结束前会话与历史已经一致。
+# 串行执行非关键记忆与画像补充，避免阻塞响应关键路径。
 def schedule_answer_persistence(
     conversation_id: str,
     content: str,
@@ -323,7 +323,14 @@ def schedule_answer_persistence(
                 await asyncio.shield(previous)
             except Exception:
                 pass
-        await asyncio.to_thread(persist)
+        try:
+            await asyncio.to_thread(persist)
+        except Exception as error:
+            logger.warning(
+                "Non-critical answer enrichment failed for conversation %s: %s",
+                conversation_id,
+                error,
+            )
 
     task = asyncio.create_task(runner(), name=f"agent-answer-{conversation_id}")
     _background_tasks.add(task)
@@ -490,8 +497,8 @@ DEFAULT_CONVERSATION_USER_ID = "anonymous"
 
 
 class ConversationService:
-    # 将原子 Turn 命令已持久化的消息同步到进程缓存。
     @staticmethod
+    # 将原子 Turn 命令已持久化的消息同步到进程缓存。
     def cache_persisted_message(conv_id: str, message: Message) -> None:
         conv = _conversations.get(conv_id)
         if not conv:
@@ -1239,8 +1246,8 @@ class KnowledgeService:
 
 
 class TurnService:
-    # 创建或复用客户端消息对应的持久化 Turn。
     @staticmethod
+    # 创建或复用客户端消息对应的持久化 Turn。
     def begin(
         conversation_id: str,
         user_id: str,
@@ -1277,8 +1284,8 @@ class TurnService:
                 ) from error
             raise
 
-    # 将新 Turn 标记为执行中并关联已落库的用户消息。
     @staticmethod
+    # 将新 Turn 标记为执行中并关联已落库的用户消息。
     def start(turn_id: str, user_id: str, user_message_id: str) -> dict:
         from src.repositories import get_repositories
 
@@ -1286,8 +1293,8 @@ class TurnService:
             turn_id, user_id, status="streaming", user_message_id=user_message_id
         )
 
-    # 将 Turn 完成并保存可直接复用的助手响应。
     @staticmethod
+    # 将 Turn 完成并保存可直接复用的助手响应。
     def complete(turn_id: str, user_id: str, message: Message) -> dict:
         from src.repositories import get_repositories
 
@@ -1307,8 +1314,8 @@ class TurnService:
         ConversationService.cache_persisted_message(turn["conversation_id"], message)
         return turn
 
-    # 将执行异常或客户端取消记录为终态。
     @staticmethod
+    # 将执行异常或客户端取消记录为终态。
     def terminate(turn_id: str, user_id: str, cancelled: bool, error_code: str) -> dict:
         from src.repositories import get_repositories
 
@@ -1319,8 +1326,8 @@ class TurnService:
             error_code=error_code,
         )
 
-    # 从已完成 Turn 中恢复助手响应。
     @staticmethod
+    # 从已完成 Turn 中恢复助手响应。
     def completed_message(turn: dict) -> Message | None:
         if turn.get("status") != "completed" or not turn.get("assistant_content_json"):
             return None
@@ -1334,8 +1341,8 @@ class TurnService:
         except (TypeError, ValueError, json.JSONDecodeError):
             return None
 
-    # 将重复的非终态或失败 Turn 转换为稳定业务错误。
     @staticmethod
+    # 将重复的非终态或失败 Turn 转换为稳定业务错误。
     def duplicate_error(status: str) -> BusinessError:
         if status in {"pending", "streaming"}:
             return BusinessError(
@@ -1382,17 +1389,15 @@ class AgentService:
 
             fast_answer = get_fast_path_answer(content)
             if fast_answer:
-                await schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
+                schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
                 return Message("assistant", fast_answer)
 
             conversation = ConversationService.get(conversation_id)
             if is_explicit_knowledge_query(content):
-                knowledge_scope = str(
-                    (tool_identity or {}).get("tenant_id", f"user:{user_id or 'anonymous'}")
-                )
+                knowledge_scope = user_id or "anonymous"
                 result = await KnowledgeService.chat(content, user_id=knowledge_scope)
                 reply_content = str(result["output"])
-                await schedule_answer_persistence(
+                schedule_answer_persistence(
                     conversation_id, content, reply_content, user_id or ""
                 )
                 return Message("assistant", reply_content)
@@ -1443,6 +1448,7 @@ class AgentService:
                                 "conversation_history": conversation_history,
                                 "context": [],
                                 "should_retrieve": True,
+                                "user_id": user_id or "",
                             }
                         )
                     else:
@@ -1463,7 +1469,7 @@ class AgentService:
                 reply_content = maybe_append_continuation_hint(reply_content, finish_reason)
 
             reply = Message("assistant", reply_content)
-            await schedule_answer_persistence(conversation_id, content, reply_content, user_id or "")
+            schedule_answer_persistence(conversation_id, content, reply_content, user_id or "")
 
             return reply
 
@@ -1543,18 +1549,16 @@ class AgentService:
 
             fast_answer = get_fast_path_answer(content)
             if fast_answer:
-                await schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
+                schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
                 yield {"type": "text", "text": fast_answer}
                 return
 
             conversation = ConversationService.get(conversation_id)
             if is_explicit_knowledge_query(content):
-                knowledge_scope = str(
-                    (tool_identity or {}).get("tenant_id", f"user:{user_id or 'anonymous'}")
-                )
+                knowledge_scope = user_id or "anonymous"
                 result = await KnowledgeService.chat(content, user_id=knowledge_scope)
                 full_answer = str(result["output"])
-                await schedule_answer_persistence(
+                schedule_answer_persistence(
                     conversation_id, content, full_answer, user_id or ""
                 )
                 yield {"type": "text", "text": full_answer}
@@ -1629,7 +1633,7 @@ class AgentService:
                 )
                 if final_answer != raw_answer:
                     yield {"type": "text", "text": final_answer[len(raw_answer):]}
-                await schedule_answer_persistence(
+                schedule_answer_persistence(
                     conversation_id, content, final_answer, user_id or ""
                 )
                 return
@@ -1871,7 +1875,7 @@ class AgentService:
             final_answer = maybe_append_continuation_hint(full_answer, stream_finish_reason)
             if final_answer != full_answer:
                 yield {"type": "text", "text": final_answer[len(full_answer):]}
-            await schedule_answer_persistence(
+            schedule_answer_persistence(
                 conversation_id, content, final_answer, user_id or ""
             )
             if react_summary:
@@ -1886,7 +1890,7 @@ class AgentService:
         except TimeoutError:
             if full_answer.strip():
                 partial = append_continuation_hint(full_answer)
-                await schedule_answer_persistence(
+                schedule_answer_persistence(
                     conversation_id, content, partial, user_id or ""
                 )
                 yield {
@@ -1896,7 +1900,7 @@ class AgentService:
                 }
             else:
                 timeout_answer = "AI助手响应超时，请稍后重试。"
-                await schedule_answer_persistence(
+                schedule_answer_persistence(
                     conversation_id, content, timeout_answer, user_id or ""
                 )
                 yield {"type": "text", "text": timeout_answer}
@@ -1920,7 +1924,7 @@ class AgentService:
                 else:
                     timeout_answer = "AI助手响应超时，请稍后重试。"
                     suffix = timeout_answer
-                await schedule_answer_persistence(
+                schedule_answer_persistence(
                     conversation_id, content, timeout_answer, user_id or ""
                 )
                 if suffix:

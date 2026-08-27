@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { getRepositories } from "../../src/repositories/index.js";
+import { getRepositories, inMemoryRepositories } from "../../src/repositories/index.js";
 
 // ============ Mock CloudflareMemoryClient ============
 
@@ -484,5 +484,33 @@ describe("Repository Contract — CloudflareRepositories", () => {
         expect(result.items[0]).toHaveProperty("final_score");
       }
     });
+  });
+});
+
+describe("In-memory Turn sequencing", () => {
+  it("continues after the maximum explicit message sequence", async () => {
+    const conversationId = `sequence-${crypto.randomUUID()}`;
+    await inMemoryRepositories.conversation.create("sequence-user", "Sequence", "chat", conversationId);
+    await inMemoryRepositories.message.createBatch(conversationId, "sequence-user", [
+      {
+        id: `${conversationId}-zero`, conversation_id: conversationId, user_id: "sequence-user",
+        sequence_no: 0, role: "user", content_json: "zero", created_at: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: `${conversationId}-two`, conversation_id: conversationId, user_id: "sequence-user",
+        sequence_no: 2, role: "assistant", content_json: "two", created_at: "2026-01-01T00:00:01Z",
+      },
+    ]);
+
+    const result = await inMemoryRepositories.turn.begin(
+      conversationId,
+      "sequence-user",
+      `${conversationId}-client`,
+      "next",
+      `${conversationId}-turn`,
+      `${conversationId}-next`,
+    );
+
+    expect(result.userMessage.sequence_no).toBe(3);
   });
 });

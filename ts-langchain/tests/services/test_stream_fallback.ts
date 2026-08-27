@@ -37,7 +37,7 @@ describe("AgentService empty streams", () => {
     for await (const event of AgentService.chatStream(
       conversation.id,
       "请从知识库查询 Agent 项目整改",
-      undefined,
+      "knowledge-user",
       undefined,
       { tenantId: "tenant:test", roles: ["member"] },
     )) {
@@ -48,9 +48,21 @@ describe("AgentService empty streams", () => {
     expect(knowledgeChat).toHaveBeenCalledWith(
       "请从知识库查询 Agent 项目整改",
       [],
-      "tenant:test",
+      "knowledge-user",
     );
     expect(createToolAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fail a successful answer when profile enrichment fails", async () => {
+    getFastPathAnswerMock.mockReturnValueOnce("快速回答");
+    const profileUpdate = vi.spyOn(ProfileService, "update").mockRejectedValueOnce(new Error("profile unavailable"));
+    const conversation = await ConversationService.create("background enrichment");
+
+    const reply = await AgentService.chat(conversation.id, "你好", "profile-user");
+
+    expect(reply.content).toBe("快速回答");
+    await flushBackgroundTasks();
+    expect(profileUpdate).toHaveBeenCalledWith("profile-user");
   });
 
   it("passes the persisted previous turn as supplemental chat history", async () => {

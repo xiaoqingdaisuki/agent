@@ -52,6 +52,7 @@ class TestHealthEndpoint:
         assert live.json()["live"] is True
         assert ready.status_code in {200, 503}
         assert "components" in ready.json()
+        assert ready.json()["timestamp"].endswith("Z")
 
 
 class TestCors:
@@ -75,6 +76,33 @@ class TestCors:
 
 
 class TestChatEndpoint:
+    @pytest.mark.asyncio
+    async def test_duplicate_stream_preserves_turn_error_code(self, client: AsyncClient, monkeypatch):
+        from src.services import TurnService
+
+        conversation = await client.post(
+            "/api/v1/conversations",
+            json={"title": "in progress", "user_id": "test-user"},
+        )
+        conversation_id = conversation.json()["id"]
+        monkeypatch.setattr(
+            TurnService,
+            "begin",
+            lambda *_args, **_kwargs: ({
+                "id": "turn-in-progress",
+                "status": "streaming",
+                "assistant_content_json": None,
+            }, False),
+        )
+
+        response = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages/stream",
+            json={"content": "继续", "user_id": "test-user", "client_message_id": "same"},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "TURN_IN_PROGRESS"
+
     @pytest.mark.asyncio
     async def test_same_client_message_id_reuses_completed_turn(self, client: AsyncClient):
         conversation = await client.post(

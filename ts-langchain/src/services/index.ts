@@ -385,7 +385,7 @@ function stripXmlToolStream(text: string): string {
   return drainXmlToolStream(text, true).text.trim();
 }
 
-// 串行持久化一个完整回答，保证流结束前会话与历史已经一致。
+// 串行执行非关键历史与画像补充，避免阻塞响应关键路径。
 export function scheduleAnswerPersistence(
   conversationId: string,
   agentHistoryThreadId: string,
@@ -398,19 +398,26 @@ export function scheduleAnswerPersistence(
   const work = (previous || Promise.resolve())
     .catch(() => undefined)
     .then(async () => {
-    const history = await getHistory(agentHistoryThreadId);
-    const last = history.at(-1);
-    if (last?._getType() !== "human" || last.content !== content) {
-      await appendMessage(agentHistoryThreadId, new HumanMessage(content));
-    }
-    await appendMessage(agentHistoryThreadId, new AIMessage(answer));
-    if (userId) {
-      if (config.MEMORY_AUTO_EXTRACT) {
-        await MemoryService.extractMemoriesFromConversation(userId, content, answer);
+      const history = await getHistory(agentHistoryThreadId);
+      const last = history.at(-1);
+      if (last?._getType() !== "human" || last.content !== content) {
+        await appendMessage(agentHistoryThreadId, new HumanMessage(content));
       }
-      invalidateMemoryContext(userId);
-      await ProfileService.update(userId);
-    }
+      await appendMessage(agentHistoryThreadId, new AIMessage(answer));
+      if (userId) {
+        try {
+          if (config.MEMORY_AUTO_EXTRACT) {
+            await MemoryService.extractMemoriesFromConversation(userId, content, answer);
+          }
+          invalidateMemoryContext(userId);
+          await ProfileService.update(userId);
+        } catch (error) {
+          console.warn(
+            `[service] non-critical answer enrichment failed for ${conversationId}:`,
+            error,
+          );
+        }
+      }
     });
   backgroundTasks.add(work);
   backgroundChains.set(label, work);
@@ -1017,7 +1024,7 @@ export class AgentService {
       await waitForConversationPersistence(conversationId);
       const fastAnswer = getFastPathAnswer(content);
       if (fastAnswer) {
-        await scheduleAnswerPersistence(conversationId, conversationId, content, fastAnswer, userId);
+        scheduleAnswerPersistence(conversationId, conversationId, content, fastAnswer, userId);
         return {
           id: crypto.randomUUID(),
           role: "assistant",
@@ -1028,10 +1035,10 @@ export class AgentService {
 
       const conversation = await ConversationService.get(conversationId);
       if (isExplicitKnowledgeQuery(content)) {
-        const knowledgeScope = toolIdentity?.tenantId ?? `user:${userId || "anonymous"}`;
+        const knowledgeScope = userId || "anonymous";
         const result = await KnowledgeService.chat(content, [], knowledgeScope);
         const replyContent = String(result.output);
-        await scheduleAnswerPersistence(conversationId, conversationId, content, replyContent, userId);
+        scheduleAnswerPersistence(conversationId, conversationId, content, replyContent, userId);
         return {
           id: crypto.randomUUID(),
           role: "assistant",
@@ -1099,7 +1106,7 @@ export class AgentService {
         reply.content = maybeAppendContinuationHint(reply.content, finishReason);
       }
 
-      await scheduleAnswerPersistence(
+      scheduleAnswerPersistence(
         conversationId,
         agentHistoryThreadId,
         content,
@@ -1168,16 +1175,16 @@ export class AgentService {
       await waitForConversationPersistence(conversationId);
       const fastAnswer = getFastPathAnswer(content);
       if (fastAnswer) {
-        await scheduleAnswerPersistence(conversationId, conversationId, content, fastAnswer, userId);
+        scheduleAnswerPersistence(conversationId, conversationId, content, fastAnswer, userId);
         yield { type: "text", text: fastAnswer };
         return;
       }
       const conversation = await ConversationService.get(conversationId);
       if (isExplicitKnowledgeQuery(content)) {
-        const knowledgeScope = toolIdentity?.tenantId ?? `user:${userId || "anonymous"}`;
+        const knowledgeScope = userId || "anonymous";
         const result = await KnowledgeService.chat(content, [], knowledgeScope);
         fullAnswer = String(result.output);
-        await scheduleAnswerPersistence(
+        scheduleAnswerPersistence(
           conversationId,
           conversationId,
           content,
@@ -1203,7 +1210,7 @@ export class AgentService {
           String(result.output || "抱歉，我没有理解您的问题。"),
           getFinishReasonFromOutput(result),
         );
-        await scheduleAnswerPersistence(
+        scheduleAnswerPersistence(
           conversationId,
           agentHistoryThreadId,
           content,
@@ -1424,7 +1431,7 @@ export class AgentService {
       if (finalAnswer !== fullAnswer) {
         yield { type: "text", text: finalAnswer.slice(fullAnswer.length) };
       }
-      await scheduleAnswerPersistence(
+      scheduleAnswerPersistence(
         conversationId,
         agentHistoryThreadId,
         content,
@@ -1447,7 +1454,7 @@ export class AgentService {
         // 超时但有部分结果 → 返回部分内容 + 继续提示
         if (fullAnswer.trim()) {
           const partial = appendContinuationHint(fullAnswer);
-          await scheduleAnswerPersistence(
+          scheduleAnswerPersistence(
             conversationId,
             agentHistoryThreadId,
             content,
@@ -1462,7 +1469,7 @@ export class AgentService {
           return;
         }
         const timeoutAnswer = "AI助手响应超时，请稍后重试。";
-        await scheduleAnswerPersistence(
+        scheduleAnswerPersistence(
           conversationId,
           agentHistoryThreadId,
           content,

@@ -1,5 +1,7 @@
 """健康检查与 readiness 状态。"""
 
+from datetime import UTC, datetime
+
 from src.config.settings import settings
 
 
@@ -12,6 +14,7 @@ def get_readiness() -> dict:
         "status": "ok" if ready else "degraded",
         "ready": ready,
         "version": "0.2.0",
+        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "components": {
             "model": "configured" if model_ready else "missing_configuration",
             "memory_gateway": "configured" if memory_ready else "missing_configuration",

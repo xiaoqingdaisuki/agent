@@ -81,6 +81,22 @@ class TestPermissionCheck:
         assert granted is False
         assert "UNAUTHENTICATED" in (reason or "")
 
+    def test_cached_denial_preserves_string_reason(self):
+        desc = ToolDescriptor(
+            name="test.denied-cache", version="1.0.0", title="Test",
+            description="test", category="MEMORY", risk_level="R2",
+            side_effect="write", timeout_ms=5000,
+            required_permissions=["memory.user.write"],
+        )
+        context = _make_context(user_id="cached-user", roles=["member"])
+
+        first = permission_check(context, desc)
+        second = permission_check(context, desc)
+
+        assert first == second
+        assert isinstance(second[1], str)
+        assert "PERMISSION_DENIED" in second[1]
+
 
 class TestValidateInput:
     def test_valid_input(self):

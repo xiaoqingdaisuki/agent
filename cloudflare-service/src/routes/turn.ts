@@ -38,7 +38,9 @@ const CompleteTurnSchema = z.object({
 
 // 注册 Turn 的创建、查询和状态更新路由。
 export function registerTurnRoutes(app: any) {
-  app.post("/internal/v1/conversations/:conversation_id/turns:begin", async (c: any) => {
+  app.post("/internal/v1/conversations/:conversation_id/turns:begin",
+  // 处理原子开始 Turn 并写入用户消息的请求。
+  async (c: any) => {
     const conversationId = c.req.param("conversation_id");
     const body = BeginTurnSchema.parse(await c.req.json());
     const conversation = await getConversation(c.env.DB, conversationId);
@@ -65,7 +67,9 @@ export function registerTurnRoutes(app: any) {
     }
   });
 
-  app.post("/internal/v1/turns/:turn_id/complete", async (c: any) => {
+  app.post("/internal/v1/turns/:turn_id/complete",
+  // 处理原子完成 Turn 并写入助手消息的请求。
+  async (c: any) => {
     const turnId = c.req.param("turn_id");
     const body = CompleteTurnSchema.parse(await c.req.json());
     const existing = await getTurn(c.env.DB, turnId);
@@ -89,7 +93,9 @@ export function registerTurnRoutes(app: any) {
     }
   });
 
-  app.post("/internal/v1/conversations/:conversation_id/turns", async (c: any) => {
+  app.post("/internal/v1/conversations/:conversation_id/turns",
+  // 处理兼容的 Turn 创建或复用请求。
+  async (c: any) => {
     const conversationId = c.req.param("conversation_id");
     const body = CreateTurnSchema.parse(await c.req.json());
     const conversation = await getConversation(c.env.DB, conversationId);
@@ -112,7 +118,9 @@ export function registerTurnRoutes(app: any) {
     }
   });
 
-  app.get("/internal/v1/turns/:turn_id", async (c: any) => {
+  app.get("/internal/v1/turns/:turn_id",
+  // 按可信用户读取指定 Turn。
+  async (c: any) => {
     const query = GetTurnQuerySchema.parse(c.req.query());
     const turn = await getTurn(c.env.DB, c.req.param("turn_id"));
     const conversation = turn ? await getConversation(c.env.DB, turn.conversation_id) : null;
@@ -120,7 +128,9 @@ export function registerTurnRoutes(app: any) {
     return c.json({ ok: true, data: turn, error: null, meta: { request_id: c.get("requestId") } });
   });
 
-  app.patch("/internal/v1/turns/:turn_id", async (c: any) => {
+  app.patch("/internal/v1/turns/:turn_id",
+  // 按不可逆状态机更新指定 Turn。
+  async (c: any) => {
     const turnId = c.req.param("turn_id");
     const body = UpdateTurnSchema.parse(await c.req.json());
     const existing = await getTurn(c.env.DB, turnId);

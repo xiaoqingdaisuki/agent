@@ -79,6 +79,11 @@ def get_repositories():
     return _repositories
 
 
+# 读取消息最大序号并返回下一可用值，兼容显式序号留下的空洞。
+def _next_message_sequence(messages: list[dict]) -> int:
+    return max((message["sequence_no"] + 1 for message in messages), default=0)
+
+
 # 关闭共享网关客户端及仓储事件循环，供应用优雅停机使用。
 async def close_repositories() -> None:
     global _repositories, _sync_loop, _sync_loop_thread
@@ -187,7 +192,7 @@ class InMemoryRepositories:
     def create_message_batch(self, conversation_id: str, user_id: str, messages: list[dict]) -> None:
         stored = self._messages.setdefault(conversation_id, [])
         by_id = {message["id"]: message for message in stored}
-        next_sequence = max((message["sequence_no"] + 1 for message in stored), default=0)
+        next_sequence = _next_message_sequence(stored)
         for message in messages:
             by_id[message["id"]] = {
                 "id": message["id"],
@@ -281,11 +286,12 @@ class InMemoryRepositories:
         turn_id = turn_id or str(uuid.uuid4())
         user_message_id = user_message_id or str(uuid.uuid4())
         messages = self._messages.setdefault(conversation_id, [])
+        next_sequence = _next_message_sequence(messages)
         message = {
             "id": user_message_id,
             "conversation_id": conversation_id,
             "user_id": user_id,
-            "sequence_no": len(messages),
+            "sequence_no": next_sequence,
             "role": "user",
             "content_json": content,
             "created_at": now,
@@ -323,7 +329,7 @@ class InMemoryRepositories:
             **message,
             "conversation_id": turn["conversation_id"],
             "user_id": user_id,
-            "sequence_no": len(messages),
+            "sequence_no": _next_message_sequence(messages),
         }
         if not any(item["id"] == message["id"] for item in messages):
             messages.append(stored)
@@ -484,8 +490,8 @@ class Repositories:
         self._turn_fallback = InMemoryRepositories()
         self._use_turn_fallback = False
 
-    # 判断旧版 Gateway 是否尚未提供 Turn API。
     @staticmethod
+    # 判断旧版 Gateway 是否尚未提供 Turn API。
     def _is_legacy_turn_gateway(error: Exception) -> bool:
         from src.clients.memory_gateway import MemoryGatewayError
 

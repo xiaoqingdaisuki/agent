@@ -63,27 +63,32 @@ export async function flushAuditLogs(): Promise<void> {
   if (!config.MEMORY_ENABLED) return;
   if (auditFlush) return auditFlush;
   if (auditLog.length === 0) return;
-  const entries = auditLog.splice(0, 500);
   auditFlush = (async () => {
-    try {
-      await getGatewayClient().writeAuditLogs(
-        entries.map((e) => ({
-          user_id: e.user_id, tenant_id: e.tenant_id,
-          conversation_id: e.conversation_id, tool_name: e.tool_name,
-          tool_version: e.tool_version, risk_level: e.risk_level, ok: e.ok,
-          error_code: e.error_code, duration_ms: e.duration_ms,
-          request_id: e.request_id, trace_id: e.trace_id,
-        })),
-      );
-    } catch (err) {
-      auditLog.unshift(...entries);
-      if (auditLog.length > 1_000) auditLog.length = 1_000;
-      console.warn("[executor] Failed to flush audit logs to Gateway:", err);
-    } finally {
-      auditFlush = null;
+    while (auditLog.length > 0) {
+      const entries = auditLog.splice(0, 500);
+      try {
+        await getGatewayClient().writeAuditLogs(
+          entries.map((e) => ({
+            user_id: e.user_id, tenant_id: e.tenant_id,
+            conversation_id: e.conversation_id, tool_name: e.tool_name,
+            tool_version: e.tool_version, risk_level: e.risk_level, ok: e.ok,
+            error_code: e.error_code, duration_ms: e.duration_ms,
+            request_id: e.request_id, trace_id: e.trace_id,
+          })),
+        );
+      } catch (err) {
+        auditLog.unshift(...entries);
+        if (auditLog.length > 1_000) auditLog.length = 1_000;
+        console.warn("[executor] Failed to flush audit logs to Gateway:", err);
+        break;
+      }
     }
   })();
-  return auditFlush;
+  try {
+    await auditFlush;
+  } finally {
+    auditFlush = null;
+  }
 }
 
 // 获取 getAuditLog 对应的数据
@@ -100,7 +105,7 @@ export function clearAuditLog(): void {
 
 const permissionCache = new Map<
   string,
-  { granted: boolean; expires: number }
+  { granted: boolean; reason?: string; expires: number }
 >();
 const PERMISSION_CACHE_TTL_MS = 5_000;
 
@@ -112,10 +117,10 @@ export function permissionCheck(
   const perms = descriptor.required_permissions ?? [];
 
   // 检查缓存
-  const cacheKey = `${context.user_id}:${context.tenant_id}:${(context.roles ?? []).sort().join(",")}:${perms.join(",")}`;
+  const cacheKey = `${context.user_id}:${context.tenant_id}:${[...(context.roles ?? [])].sort().join(",")}:${[...perms].sort().join(",")}`;
   const cached = permissionCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) {
-    return { granted: cached.granted };
+    return { granted: cached.granted, reason: cached.reason };
   }
 
   const requiresIdentity = descriptor.risk_level !== "R0";
@@ -128,6 +133,7 @@ export function permissionCheck(
 
   permissionCache.set(cacheKey, {
     granted,
+    reason,
     expires: Date.now() + PERMISSION_CACHE_TTL_MS,
   });
 

@@ -80,7 +80,7 @@ export async function beginTurnWithUserMessage(
          SELECT ?, c.id, c.user_id, c.next_sequence_no, 'user', ?, ?
          FROM conversations c JOIN turns t ON t.id = ?
          WHERE c.id = ? AND c.user_id = ? AND c.deleted_at IS NULL AND t.user_message_id = ?
-         ON CONFLICT(id) DO NOTHING`,
+        `,
       ).bind(input.user_message_id, input.user_content_json, now, input.id, input.conversation_id, input.user_id, input.user_message_id),
       db.prepare(
         `UPDATE conversations
@@ -107,7 +107,16 @@ export async function beginTurnWithUserMessage(
 
   const turn = await getTurn(db, input.id);
   const userMessage = await getCommandMessage(db, input.user_message_id);
-  if (!turn || !userMessage) throw new Error("Turn begin command did not persist atomically");
+  if (
+    !turn
+    || !userMessage
+    || turn.user_message_id !== input.user_message_id
+    || userMessage.conversation_id !== input.conversation_id
+    || userMessage.user_id !== input.user_id
+    || userMessage.role !== "user"
+  ) {
+    throw new Error("Turn begin command did not persist atomically");
+  }
   return { turn, userMessage, created: true };
 }
 
@@ -140,8 +149,7 @@ export async function completeTurnWithAssistantMessage(
       `INSERT INTO messages (id, conversation_id, user_id, sequence_no, role, content_json, created_at)
        SELECT ?, c.id, c.user_id, c.next_sequence_no, 'assistant', ?, ?
        FROM conversations c JOIN turns t ON t.conversation_id = c.id
-       WHERE t.id = ? AND t.user_id = ? AND t.status = 'streaming' AND c.deleted_at IS NULL
-       ON CONFLICT(id) DO NOTHING`,
+       WHERE t.id = ? AND t.user_id = ? AND t.status = 'streaming' AND c.deleted_at IS NULL`,
     ).bind(input.assistant_message_id, input.message_content_json, now, turnId, input.user_id),
     db.prepare(
       `UPDATE conversations
@@ -160,7 +168,15 @@ export async function completeTurnWithAssistantMessage(
 
   const turn = await getTurn(db, turnId);
   const assistantMessage = await getCommandMessage(db, input.assistant_message_id);
-  if (!turn || turn.status !== "completed" || !assistantMessage) {
+  if (
+    !turn
+    || turn.status !== "completed"
+    || turn.assistant_message_id !== input.assistant_message_id
+    || !assistantMessage
+    || assistantMessage.conversation_id !== existing.conversation_id
+    || assistantMessage.user_id !== input.user_id
+    || assistantMessage.role !== "assistant"
+  ) {
     throw new Error("Turn complete command did not persist atomically");
   }
   return { turn, assistantMessage };

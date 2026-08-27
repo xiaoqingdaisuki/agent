@@ -61,7 +61,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
 
         const fastAnswer = getFastPathAnswer(message);
         if (fastAnswer) {
-          await scheduleAnswerPersistence(
+          scheduleAnswerPersistence(
             threadId,
             threadId,
             message,
@@ -129,7 +129,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
           replyText = maybeAppendContinuationHint(replyText, finishReason);
         }
 
-        await scheduleAnswerPersistence(
+        scheduleAnswerPersistence(
           threadId,
           agentHistoryThreadId,
           message,

@@ -16,8 +16,10 @@ class Settings(BaseSettings):
     server_request_timeout_ms: int = 310000
     llm_timeout_ms: int = 30000
     llm_max_retries: int = Field(default=1, ge=0, le=2)
-    llm_max_output_tokens: int = Field(default=4096, ge=256, le=8192)
-    history_context_token_budget: int = Field(default=16000, ge=1024, le=128000)
+    llm_max_context_tokens: int = Field(default=128000, ge=1024, le=128000)
+    llm_max_input_tokens: int = Field(default=48000, ge=1024, le=48000)
+    llm_max_output_tokens: int = Field(default=16000, ge=256, le=16000)
+    history_context_token_budget: int = Field(default=48000, ge=1024, le=48000)
     llm_max_concurrency: int = Field(default=2, ge=1, le=32)
     llm_queue_max: int = Field(default=100, ge=1, le=1000)
     llm_queue_timeout_ms: int = Field(default=5000, ge=100, le=60000)

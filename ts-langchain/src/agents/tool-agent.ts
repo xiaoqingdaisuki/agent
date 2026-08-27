@@ -230,7 +230,9 @@ async function runWithModelCapacity<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   if (signal?.aborted) throw signal.reason || new DOMException("Aborted", "AbortError");
-  if (activeModelCalls >= config.LLM_MAX_CONCURRENCY) {
+  if (activeModelCalls < config.LLM_MAX_CONCURRENCY) {
+    activeModelCalls += 1;
+  } else {
     if (modelWaiters.length >= config.LLM_QUEUE_MAX) {
       throw Object.assign(new Error("Model capacity queue is full"), { code: "RATE_LIMITED" });
     }
@@ -260,11 +262,10 @@ async function runWithModelCapacity<T>(
       modelWaiters.push(waiter);
     });
   }
-  activeModelCalls += 1;
   try {
     return await operation();
   } finally {
-    activeModelCalls -= 1;
+    let transferred = false;
     while (modelWaiters.length > 0) {
       const waiter = modelWaiters.shift();
       if (!waiter) break;
@@ -274,9 +275,12 @@ async function runWithModelCapacity<T>(
         waiter.reject(waiter.signal.reason || new DOMException("Aborted", "AbortError"));
         continue;
       }
+      // 将当前占用的槽位直接转交给队首，避免新请求在等待者恢复前插队。
       waiter.resolve();
+      transferred = true;
       break;
     }
+    if (!transferred) activeModelCalls -= 1;
   }
 }
 

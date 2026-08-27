@@ -8,6 +8,7 @@ import {
   getNextSequenceNumber,
 } from "../src/repositories/message.js";
 import { createOrGetTurn } from "../src/repositories/turn.js";
+import { retryFailedJobs } from "../src/services/index-job.js";
 import {
   createDocument,
   deleteDocument,
@@ -257,6 +258,7 @@ describe("Persistent identifiers and ordering", () => {
 
     expect(statements.some((statement) => statement.includes("OR REPLACE"))).toBe(false);
     expect(statements.some((statement) => statement.includes("ON CONFLICT(id)"))).toBe(true);
+    expect(statements.some((statement) => statement.includes("messages.conversation_id = excluded.conversation_id"))).toBe(true);
   });
 
   it("queries the newest message page in descending sequence order when requested", async () => {
@@ -282,6 +284,7 @@ describe("Persistent identifiers and ordering", () => {
     );
 
     expect(statements[0]).toContain("ORDER BY sequence_no DESC");
+    expect(statements[1]).toContain("SELECT message_count AS cnt FROM conversations");
   });
 
   it("reuses the existing Turn for the same conversation idempotency key", async () => {
@@ -311,6 +314,32 @@ describe("Persistent identifiers and ordering", () => {
     });
 
     expect(result).toEqual({ turn: existing, created: false });
+  });
+
+  it("requeues failed index jobs for an explicit recovery attempt", async () => {
+    const statements: string[] = [];
+    const database = {
+      prepare: (sql: string) => {
+        statements.push(sql);
+        return {
+          bind: () => ({
+            all: async () => ({
+              results: sql.includes("WHERE status = 'failed'") ? [{ id: "job-failed" }] : [],
+            }),
+            run: async () => ({ meta: { changes: 1 } }),
+          }),
+        };
+      },
+    };
+
+    const result = await retryFailedJobs(
+      database as unknown as D1Database,
+      {} as VectorizeIndex,
+      {} as Ai,
+    );
+
+    expect(result).toEqual({ processed: 0, failed: 0 });
+    expect(statements.some((sql) => sql.includes("SET status = 'pending'"))).toBe(true);
   });
 });
 

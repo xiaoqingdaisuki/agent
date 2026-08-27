@@ -134,25 +134,31 @@ function getGatewayClient() {
 export async function flushToolMetrics(): Promise<void> {
   if (!config.MEMORY_ENABLED) return;
   if (metricsFlush) return metricsFlush;
-  const toFlush = metricsCollector.drain(500);
-  if (toFlush.length === 0) return;
+  if (metricsCollector.getEvents(1).length === 0) return;
   metricsFlush = (async () => {
-    try {
-      await getGatewayClient().writeToolMetrics(
-        toFlush.map((m) => ({
-          tool_name: m.tool_name, tool_version: m.tool_version, ok: m.ok,
-          error_code: m.error_code, duration_ms: m.duration_ms,
-          risk_level: m.risk_level, user_id: m.user_id, tenant_id: m.tenant_id,
-        })),
-      );
-    } catch (err) {
-      metricsCollector.restore(toFlush);
-      console.warn("[metrics] Failed to flush tool metrics to Gateway:", err);
-    } finally {
-      metricsFlush = null;
+    while (true) {
+      const toFlush = metricsCollector.drain(500);
+      if (toFlush.length === 0) break;
+      try {
+        await getGatewayClient().writeToolMetrics(
+          toFlush.map((m) => ({
+            tool_name: m.tool_name, tool_version: m.tool_version, ok: m.ok,
+            error_code: m.error_code, duration_ms: m.duration_ms,
+            risk_level: m.risk_level, user_id: m.user_id, tenant_id: m.tenant_id,
+          })),
+        );
+      } catch (err) {
+        metricsCollector.restore(toFlush);
+        console.warn("[metrics] Failed to flush tool metrics to Gateway:", err);
+        break;
+      }
     }
   })();
-  return metricsFlush;
+  try {
+    await metricsFlush;
+  } finally {
+    metricsFlush = null;
+  }
 }
 
 // 获取 getMetricsCollector 对应的数据

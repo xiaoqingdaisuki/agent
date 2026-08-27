@@ -137,6 +137,28 @@ def test_model_messages_keep_runtime_state_and_add_conversation_history():
     assert messages[-1].content == "当前问题"
 
 
+def test_model_messages_do_not_duplicate_checkpointed_history():
+    """已存在于图状态的持久化历史只能进入模型上下文一次。"""
+    messages = graph_agents._model_messages(
+        {
+            "messages": [
+                HumanMessage(content="上一篇问题"),
+                AIMessage(content="上一篇回答"),
+                HumanMessage(content="当前问题"),
+            ],
+            "conversation_history": [
+                {"role": "user", "content": "上一篇问题"},
+                {"role": "assistant", "content": "上一篇回答"},
+            ],
+        },
+        "system",
+    )
+
+    contents = [str(message.content) for message in messages]
+    assert sum("上一篇问题" in content for content in contents) == 1
+    assert sum("上一篇回答" in content for content in contents) == 1
+
+
 def test_static_fast_path_never_returns_a_location_specific_recommendation():
     """地点推荐不得被静态回答劫持，必须保留完整 Agent 路由。"""
     assert graph_agents.get_fast_path_answer("北京有什么好吃的") is None

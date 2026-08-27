@@ -148,8 +148,7 @@ def _flush_metrics() -> None:
     global _metrics_flush_inflight
     if _metrics_flush_inflight:
         return
-    events = _metrics.peek_pending()
-    if not events:
+    if not _metrics.peek_pending(1):
         return
     _metrics_flush_inflight = True
     try:
@@ -158,26 +157,32 @@ def _flush_metrics() -> None:
         from src.clients.memory_gateway import CloudflareMemoryClient
 
         client = CloudflareMemoryClient()
-        entries = [
-            {
-                "tool_name": e.tool_name,
-                "tool_version": e.tool_version,
-                "ok": e.ok,
-                "error_code": e.error_code,
-                "duration_ms": e.duration_ms,
-                "risk_level": e.risk_level,
-                "user_id": e.user_id,
-                "tenant_id": e.tenant_id,
-            }
-            for e in events
-        ]
-
-        # 执行 do flush 对应的业务逻辑
-        async def _do_flush():
+        # 连续刷完当前积压，避免最后不足阈值的一批永久滞留。
+        async def _do_flush() -> None:
             global _metrics_flush_inflight
             try:
-                await client.write_tool_metrics(entries)
-                _metrics.acknowledge(len(events))
+                while True:
+                    events = _metrics.peek_pending()
+                    if not events:
+                        break
+                    entries = [
+                        {
+                            "tool_name": event.tool_name,
+                            "tool_version": event.tool_version,
+                            "ok": event.ok,
+                            "error_code": event.error_code,
+                            "duration_ms": event.duration_ms,
+                            "risk_level": event.risk_level,
+                            "user_id": event.user_id,
+                            "tenant_id": event.tenant_id,
+                        }
+                        for event in events
+                    ]
+                    await client.write_tool_metrics(entries)
+                    _metrics.acknowledge(len(events))
+            except Exception:
+                # 保留未确认指标，等待后续调用再次触发刷新。
+                pass
             finally:
                 await client.close()
                 _metrics_flush_inflight = False

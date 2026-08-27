@@ -99,9 +99,11 @@ OPENAI_MODEL=gpt-4o-mini
 # 可选：自定义 API 地址
 OPENAI_BASE_URL=https://api.openai.com/v1
 
-# 模型上下文、输出、并发和请求预算
-LLM_MAX_OUTPUT_TOKENS=4096
-HISTORY_CONTEXT_TOKEN_BUDGET=16000
+# 模型上下文、输入、输出、并发和请求预算
+LLM_MAX_CONTEXT_TOKENS=128000
+LLM_MAX_INPUT_TOKENS=48000
+LLM_MAX_OUTPUT_TOKENS=16000
+HISTORY_CONTEXT_TOKEN_BUDGET=48000
 LLM_MAX_CONCURRENCY=2
 LLM_QUEUE_MAX=100
 LLM_QUEUE_TIMEOUT_MS=5000
@@ -263,8 +265,10 @@ GET  /api/v1/history                   问答历史
 | `OPENAI_API_KEY` | OpenAI API 密钥 | - | 是 |
 | `OPENAI_MODEL` | 使用的模型 | `gpt-4o-mini` | 否 |
 | `OPENAI_BASE_URL` | API 地址 | `https://api.openai.com/v1` | 否 |
-| `LLM_MAX_OUTPUT_TOKENS` | 单次模型输出上限（允许 256～8192） | `4096` | 否 |
-| `HISTORY_CONTEXT_TOKEN_BUDGET` | 注入模型的历史上下文预算 | `16000` | 否 |
+| `LLM_MAX_CONTEXT_TOKENS` | Agent 最大上下文窗口（允许 1024～128000） | `128000` | 否 |
+| `LLM_MAX_INPUT_TOKENS` | Agent 最大输入 token 数（允许 1024～48000） | `48000` | 否 |
+| `LLM_MAX_OUTPUT_TOKENS` | 单次模型输出上限（允许 256～16000） | `16000` | 否 |
+| `HISTORY_CONTEXT_TOKEN_BUDGET` | 注入模型的历史上下文预算（不超过输入上限） | `48000` | 否 |
 | `LLM_MAX_CONCURRENCY` | 进程内模型并发上限 | `2` | 否 |
 | `LLM_QUEUE_MAX` | 模型等待队列上限 | `100` | 否 |
 | `LLM_QUEUE_TIMEOUT_MS` | 模型排队超时（毫秒） | `5000` | 否 |

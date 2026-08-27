@@ -24,6 +24,7 @@ async function main() {
     await app.listen({ port: config.PORT, host: "0.0.0.0" });
     console.log(`TS Agent server running on http://localhost:${config.PORT}`);
     let stopping = false;
+    // 仅处理一次停止信号，并在收敛后台任务后退出进程。
     const handleSignal = (signal: string) => {
       if (stopping) return;
       stopping = true;

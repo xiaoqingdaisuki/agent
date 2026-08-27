@@ -46,20 +46,23 @@ def test_background_task_limits_have_safe_defaults():
     assert settings.background_task_queue_max == 200
 
 
-def test_model_output_has_a_bounded_default():
-    """模型单次输出应有明确上限，避免普通请求无限扩写。"""
+def test_model_token_budgets_use_requested_defaults():
+    """Agent 上下文、输入和输出预算应采用统一约定。"""
     settings = Settings(_env_file=None)
 
-    assert settings.llm_max_output_tokens == 4096
+    assert settings.llm_max_context_tokens == 128000
+    assert settings.llm_max_input_tokens == 48000
+    assert settings.history_context_token_budget == 48000
+    assert settings.llm_max_output_tokens == 16000
 
 
-def test_model_output_allows_bounded_reasoning_model_limit(monkeypatch):
-    """推理模型的输出上限最多允许配置到 8192。"""
-    monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "8192")
+def test_model_output_allows_requested_limit(monkeypatch):
+    """模型输出允许配置到约定的 16000 token 上限。"""
+    monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "16000")
 
     settings = Settings(_env_file=None)
 
-    assert settings.llm_max_output_tokens == 8192
+    assert settings.llm_max_output_tokens == 16000
 
 
 def test_memory_disabled_uses_singleton_in_memory_storage(monkeypatch):

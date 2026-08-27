@@ -62,7 +62,7 @@ def clear_audit_log() -> None:
 
 # ============ 权限检查 ============
 
-_permission_cache: dict[str, tuple[bool, float]] = {}
+_permission_cache: dict[str, tuple[bool, str | None, float]] = {}
 _PERMISSION_CACHE_TTL = 5.0  # seconds
 
 
@@ -74,10 +74,10 @@ def permission_check(
     perms = descriptor.required_permissions or []
 
     # 检查缓存
-    cache_key = f"{context.user_id}:{context.tenant_id}:{','.join(sorted(context.roles))}:{','.join(perms)}"
+    cache_key = f"{context.user_id}:{context.tenant_id}:{','.join(sorted(context.roles))}:{','.join(sorted(perms))}"
     cached = _permission_cache.get(cache_key)
-    if cached and (time.time() - cached[1]) < _PERMISSION_CACHE_TTL:
-        return cached
+    if cached and (time.time() - cached[2]) < _PERMISSION_CACHE_TTL:
+        return cached[0], cached[1]
 
     requires_identity = descriptor.risk_level != "R0"
     granted = (not requires_identity or bool(context.user_id)) and has_tool_permissions(context, descriptor)
@@ -89,7 +89,7 @@ def permission_check(
         else "PERMISSION_DENIED: required tool permission is not granted"
     )
 
-    _permission_cache[cache_key] = (granted, time.time())
+    _permission_cache[cache_key] = (granted, reason, time.time())
     return granted, reason
 
 
@@ -280,7 +280,6 @@ def _flush_audit_logs() -> None:
     global _audit_flush_inflight
     if _audit_flush_inflight or not _audit_log:
         return
-    entries = _audit_log[:500]
     _audit_flush_inflight = True
     try:
         import asyncio
@@ -290,11 +289,16 @@ def _flush_audit_logs() -> None:
         client = CloudflareMemoryClient()
 
         # 执行 do flush 对应的业务逻辑
-        async def _do_flush():
+        async def _do_flush() -> None:
             global _audit_flush_inflight
             try:
-                await client.write_audit_logs(entries)
-                del _audit_log[: len(entries)]
+                while _audit_log:
+                    entries = _audit_log[:500]
+                    await client.write_audit_logs(entries)
+                    del _audit_log[: len(entries)]
+            except Exception:
+                # 保留未确认条目，等待后续工具调用再次触发刷新。
+                pass
             finally:
                 await client.close()
                 if len(_audit_log) > 1000:

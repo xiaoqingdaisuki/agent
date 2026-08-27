@@ -16,6 +16,7 @@ export function encodeSseDone(eventId?: string): string {
 export class SseEventSequencer {
   private sequence = 0;
 
+  // 初始化指定 Turn 的 SSE 单调序号生成器。
   constructor(private readonly turnId: string) {}
 
   // 编码带事件 ID 的标准 SSE 业务事件。

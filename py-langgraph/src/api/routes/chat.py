@@ -73,7 +73,7 @@ async def chat(payload: ChatRequest, request: Request):
         active_turn_id = turn["id"]
         fast_answer = get_fast_path_answer(payload.message)
         if fast_answer:
-            await schedule_answer_persistence(
+            schedule_answer_persistence(
                 thread_id,
                 payload.message,
                 fast_answer,
@@ -139,7 +139,7 @@ async def chat(payload: ChatRequest, request: Request):
         if is_likely_truncated(reply_text, finish_reason):
             reply_text = maybe_append_continuation_hint(reply_text, finish_reason)
 
-        await schedule_answer_persistence(
+        schedule_answer_persistence(
             thread_id,
             payload.message,
             reply_text,

@@ -37,7 +37,10 @@ MAX_SAME_TOOL_CALLS = settings.react_max_same_tool_calls
 MAX_WEB_SEARCH_CALLS = 2
 MAX_TOTAL_TIME_MS = settings.react_max_total_time_ms
 AGENT_RECURSION_LIMIT = MAX_REACT_STEPS * 3 + 4
-MAX_HISTORY_TOKENS = settings.history_context_token_budget
+MAX_HISTORY_TOKENS = min(
+    settings.history_context_token_budget,
+    settings.llm_max_input_tokens,
+)
 MEMORY_CONTEXT_TIMEOUT_SECONDS = 0.3
 _default_chat_agent = None
 _model_semaphore: asyncio.Semaphore | None = None
@@ -59,8 +62,8 @@ def _get_model_semaphore() -> asyncio.Semaphore:
     return _model_semaphore
 
 
-# 在有界等待时间内获取模型并发槽并确保最终释放。
 @asynccontextmanager
+# 在有界等待时间内获取模型并发槽并确保最终释放。
 async def _model_capacity():
     global _model_waiters
     semaphore = _get_model_semaphore()
@@ -264,13 +267,47 @@ def trim_conversation_history_to_token_budget(
     return history[keep_from:]
 
 
-# 将持久化会话历史格式化为模型可理解的补充上下文，不替换 LangGraph 当前状态。
-def _conversation_history_message(history: list[dict[str, str]] | None) -> SystemMessage | None:
-    if not history:
+# 移除已存在于图状态前缀中的持久化历史，避免同一轮上下文重复注入。
+def _history_without_state_overlap(
+    history: list[dict[str, str]], state_messages: list[BaseMessage]
+) -> list[dict[str, str]]:
+    filtered_history = [
+        dict(item)
+        for item in history
+        if item.get("role", "").strip() in {"user", "assistant"}
+        and str(item.get("content", "")).strip()
+    ]
+    normalized_history = [
+        (item.get("role", "").strip(), str(item.get("content", "")).strip())
+        for item in filtered_history
+    ]
+    normalized_state = [
+        (
+            "user" if message.type == "human" else "assistant",
+            _message_content_text(message.content).strip(),
+        )
+        for message in state_messages
+        if message.type in {"human", "ai"} and _message_content_text(message.content).strip()
+    ]
+    max_overlap = min(len(normalized_history), len(normalized_state))
+    for overlap in range(max_overlap, 0, -1):
+        if normalized_history[-overlap:] == normalized_state[:overlap]:
+            return filtered_history[:-overlap]
+    return filtered_history
+
+
+# 将未被图状态覆盖的持久化历史格式化为有界补充上下文。
+def _conversation_history_message(
+    history: list[dict[str, str]] | None,
+    state_messages: list[BaseMessage],
+    token_budget: int,
+) -> SystemMessage | None:
+    if not history or token_budget <= 0:
         return None
 
     lines = []
-    for message in trim_conversation_history_to_token_budget(history):
+    unique_history = _history_without_state_overlap(history, state_messages)
+    for message in trim_conversation_history_to_token_budget(unique_history, token_budget):
         role = message.get("role", "").strip()
         content = message.get("content", "").strip()
         if role in {"user", "assistant"} and content:
@@ -294,8 +331,16 @@ def _model_messages(
     message_override: list[BaseMessage] | None = None,
     memory_reference: str = "",
 ) -> list[BaseMessage]:
+    state_messages = state["messages"] if message_override is None else message_override
     messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
-    history_message = _conversation_history_message(state.get("conversation_history"))
+    reference_tokens = sum(estimate_message_tokens(message) for message in state_messages)
+    if memory_reference:
+        reference_tokens += _estimate_text_tokens(memory_reference)
+    history_message = _conversation_history_message(
+        state.get("conversation_history"),
+        state_messages,
+        max(0, MAX_HISTORY_TOKENS - reference_tokens),
+    )
     if history_message is not None:
         messages.append(history_message)
     if memory_reference:
@@ -305,7 +350,7 @@ def _model_messages(
                 + memory_reference
             )
         )
-    messages.extend(state["messages"] if message_override is None else message_override)
+    messages.extend(state_messages)
     return messages
 
 

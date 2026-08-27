@@ -42,12 +42,22 @@ describe("配置契约", () => {
     expect(config.LLM_MAX_OUTPUT_TOKENS).toBe(2048);
   });
 
-  it("将模型输出硬上限限制为 8192", async () => {
-    vi.stubEnv("LLM_MAX_OUTPUT_TOKENS", "8192");
+  it("将模型输出硬上限限制为 16000", async () => {
+    vi.stubEnv("LLM_MAX_OUTPUT_TOKENS", "16000");
     vi.resetModules();
 
     const { config } = await import("../../src/config/index.js");
 
-    expect(config.LLM_MAX_OUTPUT_TOKENS).toBe(8192);
+    expect(config.LLM_MAX_OUTPUT_TOKENS).toBe(16000);
+  });
+
+  it("使用规定的 Agent 上下文和输入默认预算", async () => {
+    vi.resetModules();
+
+    const { config } = await import("../../src/config/index.js");
+
+    expect(config.LLM_MAX_CONTEXT_TOKENS).toBe(128000);
+    expect(config.LLM_MAX_INPUT_TOKENS).toBe(48000);
+    expect(config.HISTORY_CONTEXT_TOKEN_BUDGET).toBe(48000);
   });
 });

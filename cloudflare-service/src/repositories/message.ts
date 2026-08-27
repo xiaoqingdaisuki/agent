@@ -34,7 +34,8 @@ export async function createMessageBatch(db: D1Database, messages: Message[]): P
   const stmt = db.prepare(
     `INSERT INTO messages (id, conversation_id, user_id, sequence_no, role, content_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET role = excluded.role, content_json = excluded.content_json`,
+     ON CONFLICT(id) DO UPDATE SET role = excluded.role, content_json = excluded.content_json
+     WHERE messages.conversation_id = excluded.conversation_id AND messages.user_id = excluded.user_id`,
   );
 
   const conversationId = messages[0].conversation_id;
@@ -75,7 +76,8 @@ export async function createMessageBatchWithCounter(
         `INSERT INTO messages (id, conversation_id, user_id, sequence_no, role, content_json, created_at)
          SELECT ?, id, user_id, next_sequence_no, ?, ?, ? FROM conversations
          WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-         ON CONFLICT(id) DO UPDATE SET role = excluded.role, content_json = excluded.content_json`,
+         ON CONFLICT(id) DO UPDATE SET role = excluded.role, content_json = excluded.content_json
+         WHERE messages.conversation_id = excluded.conversation_id AND messages.user_id = excluded.user_id`,
       ).bind(message.id, message.role, message.content_json, message.created_at, conversationId, userId),
       db.prepare(
         `UPDATE conversations SET next_sequence_no = next_sequence_no + 1,
@@ -105,7 +107,7 @@ export async function getMessagesByConversation(
     .all<Message>();
 
   const countResult = await db
-    .prepare("SELECT COUNT(*) as cnt FROM messages WHERE conversation_id = ?")
+    .prepare("SELECT message_count AS cnt FROM conversations WHERE id = ? AND deleted_at IS NULL")
     .bind(conversationId)
     .first<{ cnt: number }>();
 
