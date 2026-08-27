@@ -236,10 +236,10 @@ describe("Persistent identifiers and ordering", () => {
   });
 
   it("never replaces a different message that owns the same sequence", async () => {
-    let preparedSql = "";
+    const statements: string[] = [];
     const database = {
       prepare: (sql: string) => {
-        preparedSql = sql;
+        statements.push(sql);
         return { bind: () => ({ run: async () => ({}) }) };
       },
       batch: async () => [],
@@ -255,8 +255,8 @@ describe("Persistent identifiers and ordering", () => {
       created_at: "2026-01-01T00:00:00.000Z",
     }]);
 
-    expect(preparedSql).not.toContain("OR REPLACE");
-    expect(preparedSql).toContain("ON CONFLICT(id)");
+    expect(statements.some((statement) => statement.includes("OR REPLACE"))).toBe(false);
+    expect(statements.some((statement) => statement.includes("ON CONFLICT(id)"))).toBe(true);
   });
 
   it("queries the newest message page in descending sequence order when requested", async () => {

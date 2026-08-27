@@ -404,14 +404,7 @@ export function scheduleAnswerPersistence(
       await appendMessage(agentHistoryThreadId, new HumanMessage(content));
     }
     await appendMessage(agentHistoryThreadId, new AIMessage(answer));
-    await ConversationService.appendAssistantMessage(conversationId, {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: answer,
-      createdAt: new Date().toISOString(),
-    });
     if (userId) {
-      await HistoryService.record(userId, conversationId, content, answer);
       if (config.MEMORY_AUTO_EXTRACT) {
         await MemoryService.extractMemoriesFromConversation(userId, content, answer);
       }
@@ -539,6 +532,8 @@ export interface SearchResult {
   score: number;
   page?: number;
   chunk_index?: number;
+  // 标记本次检索是否走降级路径（本地倒排/非向量语义检索）。
+  degraded?: boolean;
 }
 
 export interface Capabilities {
@@ -599,6 +594,15 @@ const conversationMessages = new Map<string, Message[]>();
 const DEFAULT_CONVERSATION_USER_ID = "anonymous";
 
 export class ConversationService {
+  // 将已由原子 Turn 命令持久化的消息同步到进程缓存。
+  static cachePersistedMessage(conversationId: string, message: Message): void {
+    const messages = conversationMessages.get(conversationId) ?? [];
+    if (!messages.some((item) => item.id === message.id)) messages.push(message);
+    conversationMessages.set(conversationId, messages);
+    const conversation = conversations.get(conversationId);
+    if (conversation && message.role === "user") conversation.messageCount += 1;
+  }
+
   // 创建新会话，分配唯一 ID 并初始化消息列表，同时持久化到 D1
   static async create(
     title: string,
@@ -825,10 +829,8 @@ export class ConversationService {
     };
 
     conv.messageCount++;
-    const messages = await this.getMessages(conversationId);
-    const sequenceNumber = messages.length;
-    messages.push(msg);
-    conversationMessages.set(conversationId, messages);
+    const cachedMessages = conversationMessages.get(conversationId);
+    if (cachedMessages) cachedMessages.push(msg);
 
     if (conv.userId) {
       const repos = getRepositories();
@@ -837,7 +839,6 @@ export class ConversationService {
           id: msg.id,
           conversation_id: conversationId,
           user_id: conv.userId,
-          sequence_no: sequenceNumber,
           role: "user",
           content_json: content,
           created_at: msg.createdAt,
@@ -853,10 +854,10 @@ export class ConversationService {
     conversationId: string,
     message: Message,
   ): Promise<void> {
-    const messages = await this.getMessages(conversationId);
-    const sequenceNumber = messages.length;
-    messages.push(message);
-    conversationMessages.set(conversationId, messages);
+    const cachedMessages = conversationMessages.get(conversationId);
+    if (cachedMessages && !cachedMessages.some((item) => item.id === message.id)) {
+      cachedMessages.push(message);
+    }
 
     const conversation = conversations.get(conversationId);
     if (conversation?.userId) {
@@ -866,7 +867,6 @@ export class ConversationService {
           id: message.id,
           conversation_id: conversationId,
           user_id: conversation.userId,
-          sequence_no: sequenceNumber,
           role: "assistant",
           content_json: message.content,
           created_at: message.createdAt,
@@ -921,13 +921,22 @@ export class ConversationService {
 
 export class TurnService {
   // 创建或复用客户端消息对应的持久化 Turn。
-  static async begin(conversationId: string, userId: string, clientMessageId?: string) {
+  static async begin(conversationId: string, userId: string, content: string, clientMessageId?: string) {
     try {
-      return await getRepositories().turn.createOrGet(
+      const result = await getRepositories().turn.begin(
         conversationId,
         userId,
         clientMessageId || crypto.randomUUID(),
+        content,
       );
+      const userMessage: Message = {
+        id: result.userMessage.id,
+        role: "user",
+        content: result.userMessage.content_json,
+        createdAt: result.userMessage.created_at,
+      };
+      if (result.created) ConversationService.cachePersistedMessage(conversationId, userMessage);
+      return { ...result, userMessage };
     } catch (error) {
       if (error instanceof MemoryGatewayError && error.code === "MEMORY_CONVERSATION_BUSY") {
         throw new BusinessError(BusinessErrorCode.TURN_IN_PROGRESS, "该会话已有请求正在处理中", 409);
@@ -946,11 +955,17 @@ export class TurnService {
 
   // 将 Turn 原子完成并保存可直接复用的助手响应。
   static async complete(turnId: string, userId: string, message: Message) {
-    return getRepositories().turn.update(turnId, userId, {
-      status: "completed",
-      assistant_message_id: message.id,
-      assistant_content_json: JSON.stringify(message),
+    const turn = await getRepositories().turn.complete(turnId, userId, {
+      id: message.id,
+      conversation_id: "",
+      user_id: userId,
+      sequence_no: 0,
+      role: "assistant",
+      content_json: message.content,
+      created_at: message.createdAt,
     });
+    ConversationService.cachePersistedMessage(turn.conversation_id, message);
+    return turn;
   }
 
   // 将执行异常或客户端取消记录为终态。
@@ -1550,7 +1565,12 @@ function replaceLocalDocumentSearchIndex(documentId: string, chunks: string[]): 
 }
 
 // 在关闭 Cloudflare Memory 时通过倒排索引执行有界 Top-K 词法检索。
-function searchLocalDocuments(query: string, topK: number, userId: string): SearchResult[] {
+function searchLocalDocuments(
+  query: string,
+  topK: number,
+  userId: string,
+  documentIds?: string[],
+): SearchResult[] {
   const normalizedQuery = query.trim().toLowerCase();
   const queryCharacters = new Set([...normalizedQuery].filter((character) => !/\s/.test(character)));
   if (!normalizedQuery || queryCharacters.size === 0) return [];
@@ -1564,6 +1584,8 @@ function searchLocalDocuments(query: string, topK: number, userId: string): Sear
     const entry = localSearchEntries.get(key);
     const document = entry ? documents.get(entry.documentId) : undefined;
     if (!entry || !document || documentOwners.get(entry.documentId) !== userId) continue;
+    // 限定检索文件范围（file.search 过滤当前用户的指定文件）。
+    if (documentIds && documentIds.length > 0 && !documentIds.includes(entry.documentId)) continue;
     const exactMatch = entry.normalizedContent.includes(normalizedQuery);
     const matchedCharacters = exactMatch
       ? queryCharacters.size
@@ -1866,21 +1888,29 @@ export class KnowledgeService {
     query: string,
     topK: number = 5,
     userId: string = LOCAL_KNOWLEDGE_SCOPE,
+    documentIds?: string[],
   ): Promise<SearchResult[]> {
-    if (!config.MEMORY_ENABLED) return searchLocalDocuments(query, topK, userId);
+    if (!config.MEMORY_ENABLED) {
+      return searchLocalDocuments(query, topK, userId, documentIds).map((r) => ({
+        ...r,
+        degraded: true,
+      }));
+    }
     try {
       const result = await this.client.searchDocuments(
         userId,
         query,
-        { limit: topK },
+        { limit: topK, documentIds },
       );
 
+      const degraded = Boolean((result as { degraded?: boolean }).degraded);
       return result.results.map((r) => ({
         document_id: r.document_id,
         document_name: (r.metadata.document_name as string) || (r.metadata.filename as string) || "未知文档",
         content: r.content,
         score: r.score,
         chunk_index: r.chunk_index,
+        degraded,
       }));
     } catch (error: any) {
       throw new BusinessError(

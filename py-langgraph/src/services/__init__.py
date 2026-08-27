@@ -306,15 +306,9 @@ def schedule_answer_persistence(
 ) -> asyncio.Task[None]:
     # 同步写入会话、问答历史、记忆和画像。
     def persist() -> None:
-        ConversationService.append_assistant_message(
-            conversation_id,
-            Message("assistant", answer),
-            user_id,
-        )
         if user_id:
-            from src.profile.service import HistoryService, MemoryService, ProfileService
+            from src.profile.service import MemoryService, ProfileService
 
-            HistoryService.record(user_id, conversation_id, content, answer)
             if settings.memory_auto_extract:
                 MemoryService.extract_memories_from_conversation(user_id, content, answer)
             ProfileService.update(user_id)
@@ -496,6 +490,17 @@ DEFAULT_CONVERSATION_USER_ID = "anonymous"
 
 
 class ConversationService:
+    # 将原子 Turn 命令已持久化的消息同步到进程缓存。
+    @staticmethod
+    def cache_persisted_message(conv_id: str, message: Message) -> None:
+        conv = _conversations.get(conv_id)
+        if not conv:
+            return
+        if not any(item.id == message.id for item in conv.messages):
+            conv.messages.append(message)
+            if message.role == "user":
+                conv.message_count += 1
+
     # 创建新会话并注册到内存存储，同时持久化到 D1
     @staticmethod
     # 创建或注册 create 所需的数据
@@ -675,10 +680,8 @@ class ConversationService:
         conv = _conversations.get(conv_id)
         if not conv:
             raise BusinessError(BusinessErrorCode.NOT_FOUND, "Conversation not found", 404)
-        ConversationService.get_messages(conv_id)
         conv.message_count += 1
         message = Message("user", content)
-        sequence_number = len(conv.messages)
         conv.messages.append(message)
 
         from src.repositories import get_repositories
@@ -688,7 +691,6 @@ class ConversationService:
             user_id or conv.user_id,
             [{
                 "id": message.id,
-                "sequence_no": sequence_number,
                 "role": "user",
                 "content": content,
                 "created_at": message.created_at,
@@ -704,16 +706,9 @@ class ConversationService:
         if not conv:
             raise BusinessError(BusinessErrorCode.NOT_FOUND, "Conversation not found", 404)
         existing = next((item for item in conv.messages if item.id == message.id), None)
-        if existing is None:
-            ConversationService.get_messages(conv_id)
-            existing = next((item for item in conv.messages if item.id == message.id), None)
         persisted_message = existing or message
         if existing is None:
             conv.messages.append(persisted_message)
-        sequence_number = next(
-            (index for index, item in enumerate(conv.messages) if item.id == persisted_message.id),
-            len(conv.messages) - 1,
-        )
 
         from src.repositories import get_repositories
 
@@ -722,7 +717,6 @@ class ConversationService:
             user_id or conv.user_id,
             [{
                 "id": persisted_message.id,
-                "sequence_no": sequence_number,
                 "role": "assistant",
                 "content": persisted_message.content,
                 "created_at": persisted_message.created_at,
@@ -760,20 +754,6 @@ class ConversationService:
                 }
                 for m in messages_data
             ]
-
-            # 网关可能暂时落后于进程缓存，保留尚未同步的本地消息，避免后续请求覆盖答案。
-            if conv and len(messages_data) < len(conv.messages):
-                remote_ids = {str(item["id"]) for item in messages_data}
-                loaded.extend(
-                    {
-                        "id": message.id,
-                        "role": message.role,
-                        "content": message.content,
-                        "created_at": message.created_at,
-                    }
-                    for message in conv.messages
-                    if message.id not in remote_ids
-                )
 
             # 写回内存
             if conv:
@@ -900,7 +880,12 @@ def _replace_local_document_search_index(document_id: str, chunks: list[str]) ->
 
 
 # 在关闭 Cloudflare Memory 时通过倒排索引执行有界 Top-K 词法检索。
-def _search_local_documents(query: str, top_k: int, user_id: str) -> list[dict]:
+def _search_local_documents(
+    query: str,
+    top_k: int,
+    user_id: str,
+    document_ids: list[str] | None = None,
+) -> list[dict]:
     normalized_query = query.strip().lower()
     query_characters = {character for character in normalized_query if not character.isspace()}
     if not normalized_query or not query_characters:
@@ -915,6 +900,9 @@ def _search_local_documents(query: str, top_k: int, user_id: str) -> list[dict]:
         entry = _local_search_entries.get(key)
         document = _documents.get(entry["document_id"]) if entry else None
         if not entry or not document or _document_owners.get(document.id) != user_id:
+            continue
+        # 限定检索文件范围（file.search 过滤当前用户的指定文件）。
+        if document_ids and document.id not in document_ids:
             continue
         exact_match = normalized_query in entry["normalized_content"]
         matched_characters = (
@@ -931,6 +919,7 @@ def _search_local_documents(query: str, top_k: int, user_id: str) -> list[dict]:
             "content": entry["content"][:2000],
             "score": score,
             "chunk_index": entry["chunk_index"],
+            "degraded": True,
         }
         if len(results) < top_k:
             results.append(result)
@@ -1192,10 +1181,11 @@ class KnowledgeService:
         query: str,
         top_k: int = 5,
         user_id: str = _LOCAL_KNOWLEDGE_SCOPE,
+        document_ids: list[str] | None = None,
     ) -> list[dict]:
         """知识检索"""
         if not settings.memory_enabled:
-            return _search_local_documents(query, top_k, user_id)
+            return _search_local_documents(query, top_k, user_id, document_ids)
         try:
             from src.clients.memory_gateway import CloudflareMemoryClient
 
@@ -1204,8 +1194,10 @@ class KnowledgeService:
                 user_id=user_id,
                 query=query,
                 limit=top_k,
+                document_ids=document_ids,
             )
 
+            degraded = bool(result.get("degraded", False))
             return [
                 {
                     "document_id": r.get("document_id", ""),
@@ -1213,6 +1205,7 @@ class KnowledgeService:
                     "content": r.get("content", ""),
                     "score": r.get("score", 0),
                     "chunk_index": r.get("chunk_index"),
+                    "degraded": degraded,
                 }
                 for r in result.get("results", [])
             ]
@@ -1248,14 +1241,33 @@ class KnowledgeService:
 class TurnService:
     # 创建或复用客户端消息对应的持久化 Turn。
     @staticmethod
-    def begin(conversation_id: str, user_id: str, client_message_id: str | None = None) -> tuple[dict, bool]:
+    def begin(
+        conversation_id: str,
+        user_id: str,
+        content: str,
+        client_message_id: str | None = None,
+    ) -> tuple[dict, bool]:
         from src.repositories import get_repositories
         from src.clients.memory_gateway import MemoryGatewayError
 
         try:
-            return get_repositories().create_or_get_turn(
-                conversation_id, user_id, client_message_id or str(uuid.uuid4())
+            turn, user_message, created = get_repositories().begin_turn(
+                conversation_id,
+                user_id,
+                client_message_id or str(uuid.uuid4()),
+                content,
             )
+            if created:
+                ConversationService.cache_persisted_message(
+                    conversation_id,
+                    Message(
+                        "user",
+                        user_message["content_json"],
+                        user_message["id"],
+                        user_message["created_at"],
+                    ),
+                )
+            return turn, created
         except MemoryGatewayError as error:
             if error.code == "MEMORY_CONVERSATION_BUSY":
                 raise BusinessError(
@@ -1279,13 +1291,21 @@ class TurnService:
     def complete(turn_id: str, user_id: str, message: Message) -> dict:
         from src.repositories import get_repositories
 
-        return get_repositories().update_turn(
+        turn = get_repositories().complete_turn(
             turn_id,
             user_id,
-            status="completed",
-            assistant_message_id=message.id,
-            assistant_content_json=json.dumps(message.to_dict(), ensure_ascii=False),
+            {
+                "id": message.id,
+                "conversation_id": "",
+                "user_id": user_id,
+                "sequence_no": 0,
+                "role": "assistant",
+                "content_json": message.content,
+                "created_at": message.created_at,
+            },
         )
+        ConversationService.cache_persisted_message(turn["conversation_id"], message)
+        return turn
 
     # 将执行异常或客户端取消记录为终态。
     @staticmethod

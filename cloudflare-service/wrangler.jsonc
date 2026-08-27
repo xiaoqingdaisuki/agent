@@ -29,6 +29,9 @@
   "dev": {
     "port": 6100,
   },
+  "triggers": {
+    "crons": ["*/5 * * * *"],
+  },
   "observability": {
     "enabled": false,
     "head_sampling_rate": 1,

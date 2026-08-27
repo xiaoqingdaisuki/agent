@@ -41,6 +41,7 @@ import {
   GatewayResponseSchema,
   UserProfileSchema,
   ConversationSchema,
+  MessageSchema,
   MessagesPageSchema,
   MemorySchema,
   SearchResponseSchema,
@@ -473,6 +474,51 @@ export class CloudflareMemoryClient {
     )) as { data: unknown };
     const data = result.data as Record<string, unknown>;
     return { turn: validateTurn(data), created: data.created === true };
+  }
+
+  // 原子创建 Turn 并保存用户消息。
+  async beginTurn(
+    conversationId: string,
+    userId: string,
+    clientMessageId: string,
+    content: string,
+    turnId: string = crypto.randomUUID(),
+    userMessageId: string = crypto.randomUUID(),
+  ): Promise<{ turn: TurnData; userMessage: import("../repositories/types.js").MessageData; created: boolean }> {
+    const result = validateGatewayResponse(await this.request(
+      "POST",
+      `/internal/v1/conversations/${encodeURIComponent(conversationId)}/turns:begin`,
+      { id: turnId, user_id: userId, client_message_id: clientMessageId, user_message_id: userMessageId, content },
+      clientMessageId,
+    )) as { data: unknown };
+    const data = result.data as Record<string, unknown>;
+    return {
+      turn: validateTurn(data),
+      userMessage: MessageSchema.parse(data.user_message),
+      created: data.created === true,
+    };
+  }
+
+  // 原子保存助手消息并完成 Turn。
+  async completeTurn(
+    turnId: string,
+    userId: string,
+    message: import("../repositories/types.js").MessageData,
+    assistantContentJson: string,
+  ): Promise<TurnData> {
+    const result = validateGatewayResponse(await this.request(
+      "POST",
+      `/internal/v1/turns/${encodeURIComponent(turnId)}/complete`,
+      {
+        user_id: userId,
+        assistant_message_id: message.id,
+        content: message.content_json,
+        assistant_content_json: assistantContentJson,
+        created_at: message.created_at,
+      },
+      `${turnId}:complete`,
+    )) as { data: unknown };
+    return validateTurn(result.data);
   }
 
   // 按用户读取指定 Turn。

@@ -38,6 +38,9 @@ export interface MessageData {
   created_at: string;
 }
 
+/** 可由仓储原子分配序号的消息写入数据 */
+export type MessageWriteData = Omit<MessageData, "sequence_no"> & { sequence_no?: number };
+
 /** 单轮 Agent 执行状态 */
 export type TurnStatus = "pending" | "streaming" | "completed" | "failed" | "cancelled";
 
@@ -147,7 +150,7 @@ export interface MessageRepository {
   createBatch(
     conversationId: string,
     userId: string,
-    messages: MessageData[],
+    messages: MessageWriteData[],
   ): Promise<void>;
 
   /** 获取会话消息列表 */
@@ -164,6 +167,19 @@ export interface MessageRepository {
 
 /** Turn 仓储接口 */
 export interface TurnRepository {
+  /** 原子创建 Turn 并保存用户消息 */
+  begin(
+    conversationId: string,
+    userId: string,
+    clientMessageId: string,
+    content: string,
+    turnId?: string,
+    userMessageId?: string,
+  ): Promise<{ turn: TurnData; userMessage: MessageData; created: boolean }>;
+
+  /** 原子保存助手消息并完成 Turn */
+  complete(turnId: string, userId: string, message: MessageData): Promise<TurnData>;
+
   /** 原子创建或复用客户端消息对应的 Turn */
   createOrGet(
     conversationId: string,

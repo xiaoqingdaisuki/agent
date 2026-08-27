@@ -33,6 +33,139 @@ export interface Turn {
   completed_at: string | null;
 }
 
+export interface TurnCommandMessage {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  sequence_no: number;
+  role: "user" | "assistant";
+  content_json: string;
+  created_at: string;
+}
+
+// 读取指定消息，供原子 Turn 命令返回实际分配的序号。
+async function getCommandMessage(db: D1Database, messageId: string): Promise<TurnCommandMessage | null> {
+  const result = await db.prepare(
+    "SELECT id, conversation_id, user_id, sequence_no, role, content_json, created_at FROM messages WHERE id = ?",
+  ).bind(messageId).first<TurnCommandMessage>();
+  return result ?? null;
+}
+
+// 原子创建执行中 Turn 并追加用户消息，重复幂等键不会推进会话序号。
+export async function beginTurnWithUserMessage(
+  db: D1Database,
+  input: Pick<Turn, "id" | "conversation_id" | "user_id" | "client_message_id"> & {
+    user_message_id: string;
+    user_content_json: string;
+    created_at?: string;
+  },
+): Promise<{ turn: Turn; userMessage: TurnCommandMessage; created: boolean }> {
+  const existing = await getTurnByClientMessageId(db, input.conversation_id, input.client_message_id);
+  if (existing) {
+    const existingMessage = existing.user_message_id
+      ? await getCommandMessage(db, existing.user_message_id)
+      : null;
+    if (!existingMessage) throw new Error("Existing Turn is missing its user message");
+    return { turn: existing, userMessage: existingMessage, created: false };
+  }
+
+  const now = input.created_at || new Date().toISOString();
+  try {
+    await db.batch([
+      db.prepare(
+        "INSERT INTO turns (id, conversation_id, user_id, client_message_id, status, user_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'streaming', ?, ?, ?)",
+      ).bind(input.id, input.conversation_id, input.user_id, input.client_message_id, input.user_message_id, now, now),
+      db.prepare(
+        `INSERT INTO messages (id, conversation_id, user_id, sequence_no, role, content_json, created_at)
+         SELECT ?, c.id, c.user_id, c.next_sequence_no, 'user', ?, ?
+         FROM conversations c JOIN turns t ON t.id = ?
+         WHERE c.id = ? AND c.user_id = ? AND c.deleted_at IS NULL AND t.user_message_id = ?
+         ON CONFLICT(id) DO NOTHING`,
+      ).bind(input.user_message_id, input.user_content_json, now, input.id, input.conversation_id, input.user_id, input.user_message_id),
+      db.prepare(
+        `UPDATE conversations
+         SET next_sequence_no = next_sequence_no + 1, message_count = message_count + 1,
+             version = version + 1, updated_at = ?
+         WHERE id = ? AND EXISTS (
+           SELECT 1 FROM messages WHERE id = ? AND conversation_id = conversations.id
+             AND sequence_no = conversations.next_sequence_no
+         )`,
+      ).bind(now, input.conversation_id, input.user_message_id),
+    ]);
+  } catch (error) {
+    const raced = await getTurnByClientMessageId(db, input.conversation_id, input.client_message_id);
+    if (raced?.user_message_id) {
+      const racedMessage = await getCommandMessage(db, raced.user_message_id);
+      if (racedMessage) return { turn: raced, userMessage: racedMessage, created: false };
+    }
+    const active = await db.prepare(
+      "SELECT id FROM turns WHERE conversation_id = ? AND status IN ('pending', 'streaming') LIMIT 1",
+    ).bind(input.conversation_id).first<{ id: string }>();
+    if (active) throw new TurnConversationBusyError(active.id);
+    throw error;
+  }
+
+  const turn = await getTurn(db, input.id);
+  const userMessage = await getCommandMessage(db, input.user_message_id);
+  if (!turn || !userMessage) throw new Error("Turn begin command did not persist atomically");
+  return { turn, userMessage, created: true };
+}
+
+// 原子追加助手消息并完成 Turn，重复完成请求不会写入第二条消息。
+export async function completeTurnWithAssistantMessage(
+  db: D1Database,
+  turnId: string,
+  input: {
+    user_id: string;
+    assistant_message_id: string;
+    assistant_content_json: string;
+    message_content_json: string;
+    created_at?: string;
+  },
+): Promise<{ turn: Turn; assistantMessage: TurnCommandMessage }> {
+  const existing = await getTurn(db, turnId);
+  if (!existing || existing.user_id !== input.user_id) throw new Error("Turn not found");
+  if (existing.status === "completed" && existing.assistant_message_id) {
+    const existingMessage = await getCommandMessage(db, existing.assistant_message_id);
+    if (!existingMessage) throw new Error("Completed Turn is missing its assistant message");
+    return { turn: existing, assistantMessage: existingMessage };
+  }
+  if (existing.status !== "streaming") {
+    throw new TurnTransitionError(existing.status, "completed");
+  }
+
+  const now = input.created_at || new Date().toISOString();
+  await db.batch([
+    db.prepare(
+      `INSERT INTO messages (id, conversation_id, user_id, sequence_no, role, content_json, created_at)
+       SELECT ?, c.id, c.user_id, c.next_sequence_no, 'assistant', ?, ?
+       FROM conversations c JOIN turns t ON t.conversation_id = c.id
+       WHERE t.id = ? AND t.user_id = ? AND t.status = 'streaming' AND c.deleted_at IS NULL
+       ON CONFLICT(id) DO NOTHING`,
+    ).bind(input.assistant_message_id, input.message_content_json, now, turnId, input.user_id),
+    db.prepare(
+      `UPDATE conversations
+       SET next_sequence_no = next_sequence_no + 1, message_count = message_count + 1,
+           version = version + 1, updated_at = ?
+       WHERE id = ? AND EXISTS (
+         SELECT 1 FROM messages WHERE id = ? AND conversation_id = conversations.id
+           AND sequence_no = conversations.next_sequence_no
+       )`,
+    ).bind(now, existing.conversation_id, input.assistant_message_id),
+    db.prepare(
+      `UPDATE turns SET status = 'completed', assistant_message_id = ?, assistant_content_json = ?,
+       updated_at = ?, completed_at = ? WHERE id = ? AND user_id = ? AND status = 'streaming'`,
+    ).bind(input.assistant_message_id, input.assistant_content_json, now, now, turnId, input.user_id),
+  ]);
+
+  const turn = await getTurn(db, turnId);
+  const assistantMessage = await getCommandMessage(db, input.assistant_message_id);
+  if (!turn || turn.status !== "completed" || !assistantMessage) {
+    throw new Error("Turn complete command did not persist atomically");
+  }
+  return { turn, assistantMessage };
+}
+
 // 按会话和客户端消息 ID 读取唯一 Turn。
 export async function getTurnByClientMessageId(
   db: D1Database,

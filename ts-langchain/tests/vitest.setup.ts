@@ -95,15 +95,18 @@ export const mockCloudflareClient = {
   createMessagesBatch: vi.fn(async (convId: string, userId: string, messages: any[]) => {
     const existing = mockMessages.get(convId) || [];
     const keys = new Set(existing.map((m: any) => m.sequence_no));
+    let nextSequence = Math.max(-1, ...Array.from(keys, (value) => Number(value))) + 1;
     for (const msg of messages) {
-      if (!keys.has(msg.sequence_no)) {
+      const sequenceNo = msg.sequence_no ?? nextSequence++;
+      if (!keys.has(sequenceNo)) {
         existing.push({
           ...msg,
+          sequence_no: sequenceNo,
           conversation_id: convId,
           user_id: userId,
           content_json: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? {}),
         });
-        keys.add(msg.sequence_no);
+        keys.add(sequenceNo);
       }
     }
     mockMessages.set(convId, existing);
@@ -137,6 +140,47 @@ export const mockCloudflareClient = {
     mockTurns.set(turnId, turn);
     mockTurnKeys.set(key, turnId);
     return { turn: { ...turn }, created: true };
+  }),
+
+  beginTurn: vi.fn(async (convId: string, userId: string, clientMessageId: string, content: string, turnId = crypto.randomUUID(), userMessageId = crypto.randomUUID()) => {
+    const key = `${convId}\u0000${clientMessageId}`;
+    const existingId = mockTurnKeys.get(key);
+    if (existingId) {
+      const turn = mockTurns.get(existingId);
+      const userMessage = (mockMessages.get(convId) || []).find((item: any) => item.id === turn.user_message_id);
+      return { turn: { ...turn }, userMessage: { ...userMessage }, created: false };
+    }
+    const now = new Date().toISOString();
+    const messages = mockMessages.get(convId) || [];
+    const userMessage = {
+      id: userMessageId, conversation_id: convId, user_id: userId, sequence_no: messages.length,
+      role: "user", content_json: content, created_at: now,
+    };
+    const turn = {
+      id: turnId, conversation_id: convId, user_id: userId, client_message_id: clientMessageId,
+      status: "streaming", user_message_id: userMessageId, assistant_message_id: null,
+      assistant_content_json: null, error_code: null, created_at: now, updated_at: now, completed_at: null,
+    };
+    messages.push(userMessage);
+    mockMessages.set(convId, messages);
+    mockTurns.set(turnId, turn);
+    mockTurnKeys.set(key, turnId);
+    return { turn: { ...turn }, userMessage: { ...userMessage }, created: true };
+  }),
+
+  completeTurn: vi.fn(async (turnId: string, userId: string, message: any, assistantContentJson: string) => {
+    const turn = mockTurns.get(turnId);
+    if (!turn || turn.user_id !== userId) throw new Error("MEMORY_TURN_NOT_FOUND");
+    if (turn.status === "completed") return { ...turn };
+    const messages = mockMessages.get(turn.conversation_id) || [];
+    messages.push({ ...message, conversation_id: turn.conversation_id, sequence_no: messages.length });
+    mockMessages.set(turn.conversation_id, messages);
+    Object.assign(turn, {
+      status: "completed", assistant_message_id: message.id,
+      assistant_content_json: assistantContentJson, updated_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+    });
+    return { ...turn };
   }),
 
   getTurn: vi.fn(async (turnId: string, userId: string) => {

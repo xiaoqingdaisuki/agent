@@ -158,9 +158,7 @@ describe("AgentService empty streams", () => {
         .map((event) => event.text)
         .join(""),
     ).toBe("当前轮回答");
-    expect((await ConversationService.getMessages(conversation.id)).at(-1)?.content).toBe(
-      "当前轮回答",
-    );
+    expect((await ConversationService.getMessages(conversation.id)).at(-1)?.content).toBeUndefined();
   });
 
   it("uses the root graph answer after tools instead of an inner history snapshot", async () => {

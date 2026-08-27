@@ -13,23 +13,26 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  next_sequence_no: number;
+  message_count: number;
+  version: number;
 }
 
 // 创建会话
-export async function createConversation(db: D1Database, conv: Omit<Conversation, "created_at" | "updated_at" | "deleted_at">): Promise<Conversation> {
+export async function createConversation(db: D1Database, conv: Omit<Conversation, "created_at" | "updated_at" | "deleted_at" | "next_sequence_no" | "message_count" | "version">): Promise<Conversation> {
   const now = new Date().toISOString();
   await db
     .prepare("INSERT INTO conversations (id, user_id, title, mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
     .bind(conv.id, conv.user_id, conv.title, conv.mode, now, now)
     .run();
 
-  return { ...conv, created_at: now, updated_at: now, deleted_at: null };
+  return { ...conv, created_at: now, updated_at: now, deleted_at: null, next_sequence_no: 0, message_count: 0, version: 0 };
 }
 
 // 获取会话
 export async function getConversation(db: D1Database, id: string): Promise<Conversation | null> {
   const result = await db
-    .prepare("SELECT id, user_id, title, mode, created_at, updated_at, deleted_at FROM conversations WHERE id = ? AND deleted_at IS NULL")
+    .prepare("SELECT id, user_id, title, mode, created_at, updated_at, deleted_at, next_sequence_no, message_count, version FROM conversations WHERE id = ? AND deleted_at IS NULL")
     .bind(id)
     .first<Conversation>();
 
@@ -39,7 +42,7 @@ export async function getConversation(db: D1Database, id: string): Promise<Conve
 // 列出用户的会话（分页）
 export async function listConversationsByUser(db: D1Database, userId: string, limit = 20, offset = 0): Promise<Conversation[]> {
   const { results } = await db
-    .prepare("SELECT id, user_id, title, mode, created_at, updated_at, deleted_at FROM conversations WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?")
+    .prepare("SELECT id, user_id, title, mode, created_at, updated_at, deleted_at, next_sequence_no, message_count, version FROM conversations WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?")
     .bind(userId, limit, offset)
     .all<Conversation>();
 

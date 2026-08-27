@@ -1,6 +1,6 @@
 # Agent 双版本项目
 
-使用 **TypeScript + LangChain** 和 **Python + LangGraph** 实现同一套 Agent API。TS 版通过 `createAgent` 做声明式编排，Python 版通过 `StateGraph` 显式控制节点与边；两版独立维护工具、Prompt、配置和运行状态，便于验证后按相同契约对照实现。
+使用 **TypeScript + LangChain** 和 **Python + LangGraph** 实现同一套 Agent API。TS 版通过 `createAgent` 做声明式编排，Python 版通过 `StateGraph` 显式控制节点与边；两版独立维护工具、Prompt、配置和运行状态。当前实现覆盖轻量直答与完整 ReAct 工具链、用户隔离的会话/画像/长期记忆/知识库、图片生成、可恢复 Turn、流式 SSE、限流和分层超时。
 
 ## 核心对比
 
@@ -11,8 +11,10 @@
 | 条件路由 | middleware 层面 | `add_conditional_edges()` 一等公民 |
 | 状态管理 | 隐式消息列表 | 显式 TypedDict State |
 | 持久化 | `MEMORY_ENABLED=true` 使用 Cloudflare Service；关闭时使用进程内仓储 | `MEMORY_ENABLED=true` 使用 Cloudflare Service；关闭时使用进程内仓储 |
-| 人机协同 | 需自行实现 | `interrupt_before` 原生支持（工具调用前可插入人工确认） |
-| 多 Agent | 需自行编排 | supervisor + `Command` 路由 |
+| 请求可靠性 | `client_message_id` + Turn 状态机，原子写入用户/助手消息 | 与 TS 版保持相同 Turn 与幂等契约 |
+| 性能治理 | Agent/Prompt 缓存、模型并发队列、后台任务池 | 编译图缓存、模型并发队列、后台任务池 |
+| 人机协同 | 需自行实现 | 框架支持 `interrupt_before`，当前生产图未启用 |
+| 多 Agent | 当前未实现，需自行编排 | 当前未实现，可用显式图继续扩展 |
 
 ## Cloudflare 持久化服务
 
@@ -20,15 +22,19 @@
 
 - 用户画像（Profile）CRUD
 - 会话与消息管理（Conversation + Message）
+- 单轮执行管理（Turn）：幂等键、并发互斥、状态转换与异常恢复
 - 长期记忆存储与语义搜索（Memory + Vectorize）
 - 知识库文档管理（Document + RAG）
+- 审计日志、工具指标和 LangGraph checkpoint
 - 统一 Bearer Secret 认证
 
 ts-langchain 和 py-langgraph 均通过 HTTP 调用此服务，不直接持有数据库凭证。
 
-Cloudflare Service 是可选能力。`MEMORY_ENABLED=false` 时，两版都不会访问 Gateway、D1 或 Vectorize；会话、画像、记忆和知识文档保存在当前进程内，知识检索使用有界 Top-K 字符倒排索引，服务重启后本地数据会清空。`MEMORY_ENABLED=true` 时才需要配置 `CLOUDFLARE_MEMORY_BASE_URL` 和 `CLOUDFLARE_MEMORY_SECRET`。
+Cloudflare Service 是可选能力。`MEMORY_ENABLED=false` 时，两版都不会访问 Gateway、D1 或 Vectorize；会话、Turn、画像、记忆和知识文档保存在当前进程内，知识检索使用有界 Top-K 字符倒排索引，服务重启后本地数据会清空。`MEMORY_ENABLED=true` 时才需要配置 `CLOUDFLARE_MEMORY_BASE_URL` 和 `CLOUDFLARE_MEMORY_SECRET`。
 
-普通解释、翻译、写作、计划、比较和代码请求会走不携带工具 schema 的轻量模型路径；实时信息、计算、文件、知识库、记忆、推荐及未知意图保守保留完整工具链。高频固定问答可直接本地返回，默认模型输出预算由 `LLM_MAX_OUTPUT_TOKENS` 控制。
+持久化模式下，同一会话同一时刻只允许一个活动 Turn。`client_message_id` 在会话内唯一：重试已完成请求会复用结果，处理中或已失败的重复请求返回稳定的 `409`。Turn 开始与用户消息、Turn 完成与助手消息分别通过 D1 batch 原子提交；会话维护 `next_sequence_no` 和 `message_count`，避免每次写入扫描消息表。Cloudflare Cron 每 5 分钟回收陈旧 Turn，并通过带租约的索引任务消费避免多个 Worker 重复处理同一向量任务。
+
+普通解释、翻译、写作、计划、比较和代码请求会走不携带工具 schema 的轻量模型路径；实时信息、计算、文件、知识库、记忆、推荐及未知意图保守保留完整工具链。高频固定问答可直接本地返回。模型输出默认限制为 4096 tokens；历史上下文单独按 16000 tokens 裁剪，并从完整用户轮次边界开始保留，降低无效上下文和推理成本。
 
 ## 项目结构
 
@@ -47,14 +53,15 @@ agent/
 │   │   │   ├── profile.ts         # PUT/GET /users/{id}/profile
 │   │   │   ├── conversation.ts    # 会话 CRUD
 │   │   │   ├── message.ts         # 消息批量写入/查询/清空
+│   │   │   ├── turn.ts            # Turn 幂等、状态转换与恢复
 │   │   │   ├── memory.ts          # 记忆 CRUD + 语义搜索
 │   │   │   ├── document.ts        # 文档上传/列表/搜索/重新索引
 │   │   │   ├── checkpoint.ts      # LangGraph checkpoint
 │   │   │   ├── audit-log.ts       # 审计日志
 │   │   │   ├── tool-metrics.ts    # 工具指标
 │   │   │   └── openapi.ts         # GET /openapi.json
-│   │   ├── repositories/          # D1 数据访问层
-│   │   ├── services/              # 业务服务（embedding, index-job）
+│   │   ├── repositories/          # D1 数据访问层（含 Turn 原子命令）
+│   │   ├── services/              # Embedding 与带租约的异步索引任务
 │   │   └── schemas/               # Zod 4 数据模型
 │   ├── migrations/                # D1 迁移 SQL
 │   ├── wrangler.jsonc             # Worker 配置（bindings: D1, Vectorize, AI）
@@ -70,9 +77,7 @@ agent/
 │   │   │   ├── response-handler.ts # 响应格式化处理
 │   │   │   └── index.ts            # Agent 导出
 │   │   ├── services/
-│   │   │   └── index.ts            # Service Layer（业务编排 + 本地知识检索）
-│   │   ├── commands/
-│   │   │   └── index.ts            # CLI 命令入口
+│   │   │   └── index.ts            # 业务编排、Turn、缓存与后台任务
 │   │   ├── rag/
 │   │   │   ├── loader.ts           # 文档加载（TXT, MD）
 │   │   │   ├── splitter.ts         # 文本切分（递归字符切分）
@@ -92,7 +97,6 @@ agent/
 │   │   │   ├── web-search.ts       # 联网搜索
 │   │   │   ├── web-read.ts         # 网页读取
 │   │   │   ├── web-extract.ts      # 网页正文提取
-│   │   │   ├── file-read.ts        # 文件读取
 │   │   │   ├── file-search.ts      # 文件内容检索
 │   │   │   ├── calculator.ts       # 安全计算
 │   │   │   ├── time.ts             # 当前时间与时区换算
@@ -116,6 +120,7 @@ agent/
 │   │   │   │   ├── auth.ts         # Bearer 鉴权
 │   │   │   │   └── error.ts        # 统一错误处理
 │   │   │   ├── sse.ts              # SSE 编码
+│   │   │   ├── health.ts           # 存活与就绪状态
 │   │   │   └── index.ts            # Fastify 应用入口
 │   │   ├── profile/
 │   │   │   ├── index.ts            # UserProfile / Memory / QARecord 模型
@@ -138,9 +143,7 @@ agent/
 │   │   │   ├── deadline.py        # Agent 执行超时控制
 │   │   │   └── response_handler.py # 响应格式化处理
 │   │   ├── services/
-│   │   │   └── __init__.py        # Service Layer（业务编排 + 本地知识检索）
-│   │   ├── commands/
-│   │   │   └── __init__.py        # CLI 命令入口
+│   │   │   └── __init__.py        # 业务编排、Turn、缓存与后台任务
 │   │   ├── rag/
 │   │   │   ├── loader.py          # 文档加载（TXT, MD）
 │   │   │   ├── splitter.py        # 文本切分（递归字符切分）
@@ -156,7 +159,6 @@ agent/
 │   │   │   ├── search.py          # 联网搜索
 │   │   │   ├── web_read.py        # 网页读取
 │   │   │   ├── web_extract.py     # 网页正文提取
-│   │   │   ├── file_read.py       # 文件读取
 │   │   │   ├── file_search.py     # 文件内容检索
 │   │   │   ├── calculator.py      # 安全计算
 │   │   │   ├── time.py            # 当前时间与时区换算
@@ -185,6 +187,7 @@ agent/
 │   │   │   ├── auth.py            # Bearer 鉴权
 │   │   │   ├── request_logging.py # 请求日志
 │   │   │   ├── sse.py             # SSE 编码
+│   │   │   ├── health.py          # 存活与就绪状态
 │   │   │   └── main.py            # FastAPI 应用入口
 │   │   ├── prompts/
 │   │   │   └── system.py          # Prompt 模板
@@ -221,7 +224,7 @@ bash deploy-ecs.sh all
 cd cloudflare-service
 npm install
 npx wrangler d1 migrations apply agent-db --local    # 初始化本地 D1
-npx wrangler dev                                     # 本地开发 (localhost:8787)
+npx wrangler dev                                     # 本地开发（wrangler.jsonc 默认 localhost:6100）
 npx wrangler secret put SERVICE_SECRET               # 设置 Bearer Secret
 npx wrangler vectorize create-metadata-index memory-embeddings --propertyName user_id --type string
 npx wrangler vectorize create-metadata-index memory-embeddings --propertyName category --type string
@@ -265,6 +268,8 @@ uvicorn src.api.main:app --reload
 
 ```
 GET  /api/v1/health                    健康检查
+GET  /api/v1/health/live               进程存活探针
+GET  /api/v1/health/ready              模型与 Memory 配置就绪探针
 GET  /api/v1/capabilities              可用能力列表
 
 POST /api/v1/conversations             创建会话
@@ -326,10 +331,17 @@ POST  /internal/v1/conversations/{id}/messages:batch 批量写入消息
 GET   /internal/v1/conversations/{id}/messages       查询消息
 DELETE /internal/v1/conversations/{id}/messages       清空消息
 
+POST  /internal/v1/conversations/{id}/turns:begin   原子创建/复用 Turn 并写入用户消息
+POST  /internal/v1/turns/{turn_id}/complete         原子写入助手消息并完成 Turn
+POST  /internal/v1/conversations/{id}/turns         创建/复用 Turn（兼容接口）
+GET   /internal/v1/turns/{turn_id}?user_id=...      查询 Turn
+PATCH /internal/v1/turns/{turn_id}                  更新 Turn 状态
+
 PUT   /internal/v1/users/{user_id}/memories/{id}    保存记忆
 GET   /internal/v1/users/{user_id}/memories         列出记忆
 PATCH /internal/v1/users/{user_id}/memories/{id}    更新记忆
 DELETE /internal/v1/users/{user_id}/memories/{id}   删除记忆
+DELETE /internal/v1/users/{user_id}/memories        清空用户记忆
 POST  /internal/v1/users/{user_id}/memories:search  语义搜索记忆
 
 POST  /internal/v1/documents                        上传文档
@@ -338,6 +350,18 @@ GET   /internal/v1/documents/{id}                   文档详情
 DELETE /internal/v1/documents/{id}                  删除文档
 POST  /internal/v1/documents/{id}/reindex           重新索引
 POST  /internal/v1/documents:search                 语义搜索文档
+
+POST  /internal/v1/checkpoints/{thread_id}          保存 LangGraph checkpoint
+GET   /internal/v1/checkpoints/{thread_id}          读取最新 checkpoint
+DELETE /internal/v1/checkpoints/{thread_id}         删除 checkpoint
+
+POST  /internal/v1/audit-logs                       批量写入工具审计日志
+GET   /internal/v1/audit-logs                       查询审计日志
+DELETE /internal/v1/audit-logs                      清理审计日志
+
+POST  /internal/v1/tool-metrics                     批量写入工具指标
+GET   /internal/v1/tool-metrics                     查询指标明细
+GET   /internal/v1/tool-metrics/snapshot            查询指标快照
 
 GET   /internal/v1/openapi.json                     OpenAPI 规范
 ```

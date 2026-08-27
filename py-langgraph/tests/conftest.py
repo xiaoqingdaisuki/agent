@@ -109,10 +109,13 @@ class FakeMessageRepository:
         if conversation_id not in self._messages:
             self._messages[conversation_id] = []
         existing_keys = {m["sequence_no"] for m in self._messages[conversation_id]}
+        next_sequence = max(existing_keys, default=-1) + 1
         for msg in messages:
-            if msg["sequence_no"] not in existing_keys:
-                self._messages[conversation_id].append(dict(msg))
-                existing_keys.add(msg["sequence_no"])
+            sequence_no = msg.get("sequence_no", next_sequence)
+            if sequence_no not in existing_keys:
+                self._messages[conversation_id].append({**msg, "sequence_no": sequence_no})
+                existing_keys.add(sequence_no)
+                next_sequence = max(next_sequence, sequence_no + 1)
 
     def get_messages(
         self, conversation_id: str, limit: int = 50, offset: int = 0, direction: str = "asc"
@@ -148,6 +151,51 @@ class FakeTurnRepository:
         self._keys[key] = turn_id
         self._turns[turn_id] = turn
         return dict(turn), True
+
+    def begin(self, conversation_id, user_id, client_message_id, content, turn_id, user_message_id, message_repository):
+        key = (conversation_id, client_message_id)
+        if key in self._keys:
+            turn = self._turns[self._keys[key]]
+            messages, _ = message_repository.get_messages(conversation_id, 1000, 0)
+            message = next(item for item in messages if item["id"] == turn["user_message_id"])
+            return dict(turn), message, False
+        now = __import__("datetime").datetime.now().isoformat()
+        messages, total = message_repository.get_messages(conversation_id, 1000, 0)
+        message = {
+            "id": user_message_id, "conversation_id": conversation_id, "user_id": user_id,
+            "sequence_no": total, "role": "user", "content_json": content, "created_at": now,
+        }
+        turn = {
+            "id": turn_id, "conversation_id": conversation_id, "user_id": user_id,
+            "client_message_id": client_message_id, "status": "streaming",
+            "user_message_id": user_message_id, "assistant_message_id": None,
+            "assistant_content_json": None, "error_code": None,
+            "created_at": now, "updated_at": now, "completed_at": None,
+        }
+        message_repository.create_batch(conversation_id, user_id, [message])
+        self._keys[key] = turn_id
+        self._turns[turn_id] = turn
+        return dict(turn), dict(message), True
+
+    def complete(self, turn_id, user_id, message, assistant_content_json, message_repository):
+        turn = self._turns[turn_id]
+        if turn["status"] == "completed":
+            return dict(turn)
+        _, total = message_repository.get_messages(turn["conversation_id"], 1000, 0)
+        message_repository.create_batch(
+            turn["conversation_id"],
+            user_id,
+            [{**message, "conversation_id": turn["conversation_id"], "sequence_no": total}],
+        )
+        turn.update(
+            {
+                "status": "completed", "assistant_message_id": message["id"],
+                "assistant_content_json": assistant_content_json,
+                "updated_at": __import__("datetime").datetime.now().isoformat(),
+                "completed_at": __import__("datetime").datetime.now().isoformat(),
+            }
+        )
+        return dict(turn)
 
     def get(self, turn_id, user_id):
         turn = self._turns.get(turn_id)
@@ -379,6 +427,17 @@ class FakeCloudflareMemoryClient:
 
     async def create_or_get_turn(self, conversation_id, user_id, client_message_id, turn_id):
         return self._repos.turn.create_or_get(conversation_id, user_id, client_message_id, turn_id)
+
+    async def begin_turn(self, conversation_id, user_id, client_message_id, content, turn_id, user_message_id):
+        return self._repos.turn.begin(
+            conversation_id, user_id, client_message_id, content, turn_id,
+            user_message_id, self._repos.message,
+        )
+
+    async def complete_turn(self, turn_id, user_id, message, assistant_content_json):
+        return self._repos.turn.complete(
+            turn_id, user_id, message, assistant_content_json, self._repos.message
+        )
 
     async def get_turn(self, turn_id, user_id):
         return self._repos.turn.get(turn_id, user_id)

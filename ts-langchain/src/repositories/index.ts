@@ -15,6 +15,7 @@ import {
   type UserProfileData,
   type ConversationData,
   type MessageData,
+  type MessageWriteData,
   type TurnData,
   type TurnStatus,
   type MemoryData,
@@ -131,7 +132,11 @@ const inMemoryRepositories: Repositories = {
     async createBatch(conversationId, _userId, messages) {
       const existing = inMemoryMessages.get(conversationId) ?? [];
       const byId = new Map(existing.map((message) => [message.id, message]));
-      for (const message of messages) byId.set(message.id, message);
+      let nextSequence = existing.reduce((max, message) => Math.max(max, message.sequence_no + 1), 0);
+      for (const message of messages) {
+        const stored: MessageData = { ...message, sequence_no: message.sequence_no ?? nextSequence++ };
+        byId.set(message.id, stored);
+      }
       inMemoryMessages.set(conversationId, Array.from(byId.values()).sort((a, b) => a.sequence_no - b.sequence_no));
     },
     // 分页获取进程内会话消息。
@@ -146,6 +151,55 @@ const inMemoryRepositories: Repositories = {
     },
   },
   turn: {
+    // 原子创建进程内 Turn 并追加用户消息。
+    async begin(conversationId, userId, clientMessageId, content, turnId = crypto.randomUUID(), userMessageId = crypto.randomUUID()) {
+      const key = `${conversationId}\u0000${clientMessageId}`;
+      const existingId = inMemoryTurnKeys.get(key);
+      if (existingId) {
+        const turn = inMemoryTurns.get(existingId)!;
+        const userMessage = (inMemoryMessages.get(conversationId) ?? []).find((message) => message.id === turn.user_message_id);
+        if (!userMessage) throw new MemoryGatewayError("MEMORY_TURN_INCONSISTENT", "Turn 缺少用户消息", 500);
+        return { turn: { ...turn }, userMessage: { ...userMessage }, created: false };
+      }
+      if (Array.from(inMemoryTurns.values()).some((turn) => turn.conversation_id === conversationId && (turn.status === "pending" || turn.status === "streaming"))) {
+        throw new MemoryGatewayError("MEMORY_CONVERSATION_BUSY", "会话中已有请求正在处理", 409);
+      }
+      const now = new Date().toISOString();
+      const messages = inMemoryMessages.get(conversationId) ?? [];
+      const userMessage: MessageData = {
+        id: userMessageId, conversation_id: conversationId, user_id: userId,
+        sequence_no: messages.length, role: "user", content_json: content, created_at: now,
+      };
+      const turn: TurnData = {
+        id: turnId, conversation_id: conversationId, user_id: userId,
+        client_message_id: clientMessageId, status: "streaming",
+        user_message_id: userMessageId, assistant_message_id: null,
+        assistant_content_json: null, error_code: null,
+        created_at: now, updated_at: now, completed_at: null,
+      };
+      messages.push(userMessage);
+      inMemoryMessages.set(conversationId, messages);
+      inMemoryTurnKeys.set(key, turnId);
+      inMemoryTurns.set(turnId, turn);
+      return { turn: { ...turn }, userMessage: { ...userMessage }, created: true };
+    },
+    // 原子追加进程内助手消息并完成 Turn。
+    async complete(turnId, userId, message) {
+      const turn = inMemoryTurns.get(turnId);
+      if (!turn || turn.user_id !== userId) throw new MemoryGatewayError("MEMORY_TURN_NOT_FOUND", "Turn 不存在或无权访问", 404);
+      if (turn.status === "completed") return { ...turn };
+      if (turn.status !== "streaming") throw new MemoryGatewayError("MEMORY_TURN_STATE_CONFLICT", `Cannot transition Turn from ${turn.status} to completed`, 409);
+      const messages = inMemoryMessages.get(turn.conversation_id) ?? [];
+      if (!messages.some((item) => item.id === message.id)) messages.push({ ...message, sequence_no: messages.length });
+      inMemoryMessages.set(turn.conversation_id, messages);
+      const updated: TurnData = {
+        ...turn, status: "completed", assistant_message_id: message.id,
+        assistant_content_json: JSON.stringify({ id: message.id, role: "assistant", content: message.content_json, createdAt: message.created_at }),
+        updated_at: nextIsoTimestamp(turn.updated_at), completed_at: nextIsoTimestamp(turn.updated_at),
+      };
+      inMemoryTurns.set(turnId, updated);
+      return { ...updated };
+    },
     // 原子创建或复用进程内 Turn。
     async createOrGet(conversationId, userId, clientMessageId, turnId = crypto.randomUUID()) {
       const key = `${conversationId}\u0000${clientMessageId}`;
@@ -318,6 +372,29 @@ class CloudflareTurnRepository implements TurnRepository {
   // 初始化 Turn 仓储。
   constructor(private readonly _client: CloudflareMemoryClient) {}
 
+  // 原子创建 Turn 并保存用户消息。
+  async begin(conversationId: string, userId: string, clientMessageId: string, content: string, turnId?: string, userMessageId?: string) {
+    if (this.useLocalFallback) return inMemoryRepositories.turn.begin(conversationId, userId, clientMessageId, content, turnId, userMessageId);
+    try {
+      return await this._client.beginTurn(conversationId, userId, clientMessageId, content, turnId, userMessageId);
+    } catch (error) {
+      if (!this.isLegacyGateway(error)) throw error;
+      this.enableLocalFallback();
+      return inMemoryRepositories.turn.begin(conversationId, userId, clientMessageId, content, turnId, userMessageId);
+    }
+  }
+
+  // 原子保存助手消息并完成 Turn。
+  async complete(turnId: string, userId: string, message: MessageData): Promise<TurnData> {
+    if (this.useLocalFallback) return inMemoryRepositories.turn.complete(turnId, userId, message);
+    return this._client.completeTurn(
+      turnId,
+      userId,
+      message,
+      JSON.stringify({ id: message.id, role: "assistant", content: message.content_json, createdAt: message.created_at }),
+    );
+  }
+
   // 判断旧版 Gateway 是否尚未提供 Turn API。
   private isLegacyGateway(error: unknown): boolean {
     return error instanceof MemoryGatewayError && error.statusCode === 404 && error.code === "MEMORY_NOT_FOUND";
@@ -443,7 +520,7 @@ class CloudflareMessageRepository implements MessageRepository {
   async createBatch(
     conversationId: string,
     userId: string,
-    messages: MessageData[],
+    messages: MessageWriteData[],
   ): Promise<void> {
     await this._client.createMessagesBatch(
       conversationId,

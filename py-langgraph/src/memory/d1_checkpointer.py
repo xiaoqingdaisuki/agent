@@ -22,6 +22,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any, Optional
 
+import httpx
+
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
     ChannelVersions,
@@ -53,6 +55,20 @@ class D1Checkpointer(BaseCheckpointSaver):
         self._gateway_secret = gateway_secret
         # 缓存已恢复的 thread_id，避免重复加载
         self._restored: set[str] = set()
+        self._async_client: httpx.AsyncClient | None = None
+
+    # 获取当前应用事件循环复用的 Gateway 客户端。
+    async def _get_async_client(self) -> httpx.AsyncClient:
+        if self._async_client is None or self._async_client.is_closed:
+            self._async_client = httpx.AsyncClient(
+                base_url=self._gateway_base_url,
+                headers={
+                    "Authorization": f"Bearer {self._gateway_secret}",
+                    "Content-Type": "application/json",
+                },
+                timeout=5.0,
+            )
+        return self._async_client
 
     # ============ BaseCheckpointSaver 接口（同步） ============
 
@@ -199,33 +215,10 @@ class D1Checkpointer(BaseCheckpointSaver):
     ) -> None:
         """在后台线程中异步同步到 Gateway"""
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(
-                self._async_sync(thread_id, checkpoint, metadata, config)
-            )
-        except Exception as exc:
-            logger.warning("[checkpoint] Failed to sync to Gateway: %s", exc)
-        finally:
-            loop.close()
-
-    # 执行 async sync 对应的业务逻辑
-    async def _async_sync(
-        self,
-        thread_id: str,
-        checkpoint: Checkpoint,
-        metadata: CheckpointMetadata,
-        config: RunnableConfig,
-    ) -> None:
-        """异步 POST checkpoint 到 Gateway"""
-        try:
-            import httpx
-
             checkpoint_id = checkpoint.get("id", f"ckpt_{datetime.now(UTC).isoformat()}")
             checkpoint_type, checkpoint_bytes = self.serde.dumps_typed(checkpoint)
             metadata_type, metadata_bytes = self.serde.dumps_typed(metadata)
-
-            async with httpx.AsyncClient(
+            with httpx.Client(
                 base_url=self._gateway_base_url,
                 headers={
                     "Authorization": f"Bearer {self._gateway_secret}",
@@ -233,7 +226,7 @@ class D1Checkpointer(BaseCheckpointSaver):
                 },
                 timeout=5.0,
             ) as client:
-                response = await client.post(
+                response = client.post(
                     f"/internal/v1/checkpoints/{thread_id}",
                     json={
                         "checkpoint_id": checkpoint_id,
@@ -249,38 +242,62 @@ class D1Checkpointer(BaseCheckpointSaver):
                 )
                 response.raise_for_status()
         except Exception as exc:
+            logger.warning("[checkpoint] Failed to sync to Gateway: %s", exc)
+
+    # 执行 async sync 对应的业务逻辑
+    async def _async_sync(
+        self,
+        thread_id: str,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        config: RunnableConfig,
+    ) -> None:
+        """异步 POST checkpoint 到 Gateway"""
+        try:
+            checkpoint_id = checkpoint.get("id", f"ckpt_{datetime.now(UTC).isoformat()}")
+            checkpoint_type, checkpoint_bytes = self.serde.dumps_typed(checkpoint)
+            metadata_type, metadata_bytes = self.serde.dumps_typed(metadata)
+
+            client = await self._get_async_client()
+            response = await client.post(
+                f"/internal/v1/checkpoints/{thread_id}",
+                json={
+                    "checkpoint_id": checkpoint_id,
+                    "checkpoint_data": {
+                        "serialization": checkpoint_type,
+                        "payload_base64": base64.b64encode(checkpoint_bytes).decode("ascii"),
+                    },
+                    "metadata": {
+                        "serialization": metadata_type,
+                        "payload_base64": base64.b64encode(metadata_bytes).decode("ascii"),
+                    },
+                },
+            )
+            response.raise_for_status()
+        except Exception as exc:
             logger.warning("[checkpoint] Async sync to Gateway failed: %s", exc)
 
     # 执行 delete from gateway 对应的业务逻辑
     def _delete_from_gateway(self, thread_id: str) -> None:
         """在后台线程中异步删除 Gateway 中的 checkpoint"""
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self._async_delete(thread_id))
+            with httpx.Client(
+                base_url=self._gateway_base_url,
+                headers={"Authorization": f"Bearer {self._gateway_secret}"},
+                timeout=5.0,
+            ) as client:
+                response = client.delete(f"/internal/v1/checkpoints/{thread_id}")
+                response.raise_for_status()
         except Exception as exc:
             logger.warning("[checkpoint] Failed to delete from Gateway: %s", exc)
-        finally:
-            loop.close()
 
     # 执行 async delete 对应的业务逻辑
     async def _async_delete(self, thread_id: str) -> None:
         """异步 DELETE checkpoint 从 Gateway"""
         try:
-            import httpx
-
-            async with httpx.AsyncClient(
-                base_url=self._gateway_base_url,
-                headers={
-                    "Authorization": f"Bearer {self._gateway_secret}",
-                    "Content-Type": "application/json",
-                },
-                timeout=5.0,
-            ) as client:
-                response = await client.delete(
-                    f"/internal/v1/checkpoints/{thread_id}"
-                )
-                response.raise_for_status()
+            client = await self._get_async_client()
+            response = await client.delete(f"/internal/v1/checkpoints/{thread_id}")
+            response.raise_for_status()
         except Exception as exc:
             logger.warning("[checkpoint] Async delete from Gateway failed: %s", exc)
 
@@ -293,59 +310,55 @@ class D1Checkpointer(BaseCheckpointSaver):
             return True
 
         try:
-            import httpx
-
-            async with httpx.AsyncClient(
-                base_url=self._gateway_base_url,
-                headers={
-                    "Authorization": f"Bearer {self._gateway_secret}",
-                    "Content-Type": "application/json",
-                },
-                timeout=5.0,
-            ) as client:
-                response = await client.get(
-                    f"/internal/v1/checkpoints/{thread_id}"
-                )
-                if response.status_code == 404:
-                    logger.debug("[checkpoint] No checkpoint found for thread %s", thread_id)
-                    self._restored.add(thread_id)
-                    return False
-
-                response.raise_for_status()
-                data = response.json().get("data", {})
-
-                checkpoint_data = data.get("checkpoint_data", {})
-                metadata = data.get("metadata", {})
-
-                if "serialization" in checkpoint_data and "payload_base64" in checkpoint_data:
-                    checkpoint_data = self.serde.loads_typed(
-                        (
-                            checkpoint_data["serialization"],
-                            base64.b64decode(checkpoint_data["payload_base64"]),
-                        )
-                    )
-                if "serialization" in metadata and "payload_base64" in metadata:
-                    metadata = self.serde.loads_typed(
-                        (
-                            metadata["serialization"],
-                            base64.b64decode(metadata["payload_base64"]),
-                        )
-                    )
-
-                # 恢复到 MemorySaver
-                config: RunnableConfig = {
-                    "configurable": {"thread_id": thread_id}
-                }
-                self._memory.put(
-                    config,
-                    checkpoint_data,
-                    metadata,
-                    checkpoint_data.get("channel_versions", {}),
-                )
+            client = await self._get_async_client()
+            response = await client.get(f"/internal/v1/checkpoints/{thread_id}")
+            if response.status_code == 404:
+                logger.debug("[checkpoint] No checkpoint found for thread %s", thread_id)
                 self._restored.add(thread_id)
+                return False
 
-                logger.info("[checkpoint] Restored checkpoint for thread %s", thread_id)
-                return True
+            response.raise_for_status()
+            data = response.json().get("data", {})
+
+            checkpoint_data = data.get("checkpoint_data", {})
+            metadata = data.get("metadata", {})
+
+            if "serialization" in checkpoint_data and "payload_base64" in checkpoint_data:
+                checkpoint_data = self.serde.loads_typed(
+                    (
+                        checkpoint_data["serialization"],
+                        base64.b64decode(checkpoint_data["payload_base64"]),
+                    )
+                )
+            if "serialization" in metadata and "payload_base64" in metadata:
+                metadata = self.serde.loads_typed(
+                    (
+                        metadata["serialization"],
+                        base64.b64decode(metadata["payload_base64"]),
+                    )
+                )
+
+            # 恢复到 MemorySaver
+            configurable = {
+                "thread_id": thread_id,
+                "checkpoint_ns": "",
+            }
+            checkpoint_id = data.get("checkpoint_id") or checkpoint_data.get("id")
+            if checkpoint_id:
+                configurable["checkpoint_id"] = checkpoint_id
+            config: RunnableConfig = {
+                "configurable": configurable
+            }
+            self._memory.put(
+                config,
+                checkpoint_data,
+                metadata,
+                checkpoint_data.get("channel_versions", {}),
+            )
+            self._restored.add(thread_id)
+
+            logger.info("[checkpoint] Restored checkpoint for thread %s", thread_id)
+            return True
 
         except Exception as exc:
             logger.warning("[checkpoint] Failed to restore from Gateway: %s", exc)

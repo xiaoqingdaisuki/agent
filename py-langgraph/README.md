@@ -30,12 +30,10 @@ src/
 │   ├── retriever.py       # 检索器
 │   └── rag_agent.py       # RAG Agent
 ├── services/
-│   └── __init__.py        # Service Layer（业务编排、本地知识检索、流式兼容）
+│   └── __init__.py        # 业务编排、Turn、后台任务与流式回退
 ├── clients/
 │   ├── memory_gateway.py  # Cloudflare Service HTTP 客户端
 │   └── schemas.py         # 客户端数据模型
-├── commands/
-│   └── __init__.py        # 命令入口
 ├── config/
 │   └── settings.py        # 环境变量配置（Pydantic Settings）
 ├── memory/
@@ -56,6 +54,7 @@ src/
 │   ├── auth.py            # Bearer 鉴权
 │   ├── request_logging.py # 请求日志
 │   ├── sse.py             # SSE 编码
+│   ├── health.py          # liveness/readiness 状态
 │   └── main.py            # FastAPI 应用入口
 ├── prompts/
 │   └── system.py          # Prompt 模板
@@ -101,11 +100,22 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
 
 # 模型上下文、输出、并发和请求预算
-# Context Window 总上下文 1000000；Input 与 Output 共同占用，不单独限制 Input
-LLM_MAX_OUTPUT_TOKENS=128000
+LLM_MAX_OUTPUT_TOKENS=4096
+HISTORY_CONTEXT_TOKEN_BUDGET=16000
 LLM_MAX_CONCURRENCY=2
+LLM_QUEUE_MAX=100
+LLM_QUEUE_TIMEOUT_MS=5000
+LLM_TIMEOUT_MS=30000
+LLM_MAX_RETRIES=1
 AGENT_DEADLINE_MS=120000
 AGENT_DEADLINE_WITH_TOOLS_MS=300000
+SERVER_REQUEST_TIMEOUT_MS=310000
+REACT_MAX_STEPS=8
+REACT_MAX_TOOL_CALLS=6
+REACT_MAX_SAME_TOOL_CALLS=3
+REACT_MAX_TOTAL_TIME_MS=30000
+BACKGROUND_TASK_CONCURRENCY=4
+BACKGROUND_TASK_QUEUE_MAX=200
 
 # API 服务
 HOST=0.0.0.0
@@ -212,6 +222,8 @@ curl http://localhost:6002/api/v1/health
 
 ```
 GET  /api/v1/health                    健康检查
+GET  /api/v1/health/live               进程存活探针
+GET  /api/v1/health/ready              依赖配置就绪探针
 GET  /api/v1/capabilities              可用能力列表
 
 POST /api/v1/conversations             创建会话
@@ -238,6 +250,8 @@ DELETE /api/v1/memory                  删除记忆
 GET  /api/v1/history                   问答历史
 ```
 
+消息请求可选携带 `client_message_id`（1～128 字符）。客户端重试时应复用同一值；普通响应与 SSE `meta` 都返回 `turn_id`。已完成请求会直接复用结果，处理中、失败/取消或会话已有其他活动 Turn 时返回 `409`。SSE 每 15 秒发送注释心跳，业务事件使用 `turn_id:sequence` 单调 ID，同时保留历史客户端使用的 `[DONE]`。
+
 ### Internal API（QQ Bot 使用）
 
 当前版本不再暴露独立的 `/api/internal/agent/*` 路由。可信服务端使用兼容路由 `POST /chat`、`POST /stream`，并携带 Bearer 密钥和 `X-Agent-User-Id`；`GET /tools` 返回当前可用工具，`POST /images/generations` 提供图片生成。
@@ -249,10 +263,22 @@ GET  /api/v1/history                   问答历史
 | `OPENAI_API_KEY` | OpenAI API 密钥 | - | 是 |
 | `OPENAI_MODEL` | 使用的模型 | `gpt-4o-mini` | 否 |
 | `OPENAI_BASE_URL` | API 地址 | `https://api.openai.com/v1` | 否 |
-| `LLM_MAX_OUTPUT_TOKENS` | 单次模型输出上限 | `128000` | 否 |
+| `LLM_MAX_OUTPUT_TOKENS` | 单次模型输出上限（允许 256～8192） | `4096` | 否 |
+| `HISTORY_CONTEXT_TOKEN_BUDGET` | 注入模型的历史上下文预算 | `16000` | 否 |
 | `LLM_MAX_CONCURRENCY` | 进程内模型并发上限 | `2` | 否 |
+| `LLM_QUEUE_MAX` | 模型等待队列上限 | `100` | 否 |
+| `LLM_QUEUE_TIMEOUT_MS` | 模型排队超时（毫秒） | `5000` | 否 |
+| `LLM_TIMEOUT_MS` | 单次模型调用超时（毫秒） | `30000` | 否 |
+| `LLM_MAX_RETRIES` | 模型临时错误重试次数 | `1` | 否 |
 | `AGENT_DEADLINE_MS` | 普通 Agent 总时限（毫秒） | `120000` | 否 |
 | `AGENT_DEADLINE_WITH_TOOLS_MS` | 工具 Agent 总时限（毫秒） | `300000` | 否 |
+| `SERVER_REQUEST_TIMEOUT_MS` | HTTP 请求总时限（毫秒） | `310000` | 否 |
+| `REACT_MAX_STEPS` | ReAct 最大模型步骤数 | `8` | 否 |
+| `REACT_MAX_TOOL_CALLS` | ReAct 最大工具调用数 | `6` | 否 |
+| `REACT_MAX_SAME_TOOL_CALLS` | 相同工具参数最大调用次数 | `3` | 否 |
+| `REACT_MAX_TOTAL_TIME_MS` | ReAct 内部工具循环预算（毫秒） | `30000` | 否 |
+| `BACKGROUND_TASK_CONCURRENCY` | 后台任务并发上限 | `4` | 否 |
+| `BACKGROUND_TASK_QUEUE_MAX` | 后台任务队列上限 | `200` | 否 |
 | `ANTHROPIC_API_KEY` | Anthropic API 密钥 | - | 否 |
 | `ANTHROPIC_MODEL` | Anthropic 模型 | `claude-3-5-haiku-20241022` | 否 |
 | `HOST` | 服务监听地址 | `0.0.0.0` | 否 |
@@ -277,6 +303,8 @@ GET  /api/v1/history                   问答历史
 
 `MEMORY_ENABLED=false` 时不会调用 Gateway、D1 或 Vectorize；会话、画像、记忆和文档保存在进程内，知识检索使用有界 Top-K 字符倒排索引，LangGraph checkpoint 使用 `MemorySaver`，重启后数据清空。设置为 `true` 后才使用 Cloudflare Service 和 D1 checkpointer。
 
+`MEMORY_ENABLED=true` 时，Turn、用户消息和助手消息通过 Gateway 原子提交，checkpoint 写入会清除旧分片并保持每个 thread 的版本顺序。旧版 Gateway 缺少 Turn API 时会切换进程内兼容存储并记录警告；线上应完成最新 D1 迁移，避免服务重启后丢失幂等状态。
+
 ## 故障排查
 
 ### 端口被占用
@@ -296,17 +324,6 @@ taskkill /PID <PID> /F
 - 检查 `OPENAI_API_KEY` 是否正确
 - 检查 API 余额是否充足
 - 检查 `OPENAI_BASE_URL` 是否正确设置
-
-### Qdrant 连接失败
-
-- 当前公开知识库在 `MEMORY_ENABLED=false` 时不依赖 Qdrant
-- 确保 Qdrant 服务已启动：`docker-compose up qdrant`
-- Docker 环境中使用 `QDRANT_URL=http://qdrant:6333`
-
-### PostgreSQL 连接失败
-
-- 当前实现不读取 `POSTGRES_URI`，checkpoint 根据 `MEMORY_ENABLED` 使用 `MemorySaver` 或 Cloudflare D1 checkpointer。
-- 若旧部署仍注入 PostgreSQL 变量，可以安全移除；它不会影响当前 Agent 服务。
 
 ## 项目脚本
 
@@ -354,43 +371,3 @@ def build_agent():
 
     return builder.compile()
 ```
-
-## QQ 机器人部署
-
-### 前置要求
-
-- LLOneBot（QQ 协议层）或其他 OneBot 客户端
-- 一个负责转发 Bearer 密钥与可信用户标识的独立 Bot 适配服务
-
-### 步骤
-
-**1. 部署 LLOneBot**
-
-参考 [LLOneBot 官方文档](https://llonebot.cn/) 部署协议层。当前仓库不包含 `src/adapters/qq` 或 Bot 常驻进程；QQ 接入方应作为独立服务调用本 Agent API。
-
-**2. 配置环境变量**
-
-Agent 服务与 Bot 适配服务至少需要共享以下配置：
-
-```env
-AGENT_API_BASE_URL=http://localhost:6002
-AGENT_API_SECRET=replace-with-a-long-random-secret
-```
-
-**3. 启动 Bot**
-
-```bash
-curl -X POST http://localhost:6002/chat \
-  -H "Authorization: Bearer replace-with-a-long-random-secret" \
-  -H "X-Agent-User-Id: qq-user-123" \
-  -H "Content-Type: application/json" \
-  -d '{"message":"你好","user_id":"qq-user-123"}'
-```
-
-### 可用指令
-
-| 指令 | 功能 |
-|------|------|
-| `切换大公鸡模式` | 按会话切换内建对话风格；再次发送可关闭 |
-| 普通文本 | 交给轻量对话或完整工具 Agent 处理 |
-| 清空上下文 | 由 Bot 适配服务调用会话消息清空接口实现 |

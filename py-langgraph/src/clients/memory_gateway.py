@@ -269,6 +269,57 @@ class CloudflareMemoryClient:
         raw = result["data"]
         return TurnData.model_validate(raw).model_dump(mode="json"), bool(raw.get("created"))
 
+    # 原子创建 Turn 并保存用户消息。
+    async def begin_turn(
+        self,
+        conversation_id: str,
+        user_id: str,
+        client_message_id: str,
+        content: str,
+        turn_id: str,
+        user_message_id: str,
+    ) -> tuple[dict, dict, bool]:
+        result = await self._request(
+            "POST",
+            f"/internal/v1/conversations/{_path_segment(conversation_id)}/turns:begin",
+            {
+                "id": turn_id,
+                "user_id": user_id,
+                "client_message_id": client_message_id,
+                "user_message_id": user_message_id,
+                "content": content,
+            },
+            idempotency_key=client_message_id,
+        )
+        raw = result["data"]
+        return (
+            TurnData.model_validate(raw).model_dump(mode="json"),
+            MessageData.model_validate(raw["user_message"]).model_dump(mode="json"),
+            bool(raw.get("created")),
+        )
+
+    # 原子保存助手消息并完成 Turn。
+    async def complete_turn(
+        self,
+        turn_id: str,
+        user_id: str,
+        message: dict,
+        assistant_content_json: str,
+    ) -> dict:
+        result = await self._request(
+            "POST",
+            f"/internal/v1/turns/{_path_segment(turn_id)}/complete",
+            {
+                "user_id": user_id,
+                "assistant_message_id": message["id"],
+                "content": message["content_json"],
+                "assistant_content_json": assistant_content_json,
+                "created_at": message["created_at"],
+            },
+            idempotency_key=f"{turn_id}:complete",
+        )
+        return TurnData.model_validate(result["data"]).model_dump(mode="json")
+
     # 按用户读取指定 Turn。
     async def get_turn(self, turn_id: str, user_id: str) -> dict | None:
         try:

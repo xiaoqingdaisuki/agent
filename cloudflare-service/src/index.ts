@@ -93,12 +93,9 @@ registerOpenApiRoute(app);
 // 根路径
 app.get("/", (c) => c.text("Cloudflare Service"));
 
-// 导出
-export default app;
-
 // 定时任务入口
 export async function scheduled(event: ScheduledEvent, env: GatewayEnv) {
-  const { processPendingJobs, retryFailedJobs } = await import("./services/index-job.js");
+  const { processPendingJobs } = await import("./services/index-job.js");
   const { failStaleTurns } = await import("./repositories/turn.js");
 
   try {
@@ -117,10 +114,8 @@ export async function scheduled(event: ScheduledEvent, env: GatewayEnv) {
     console.error("[Cron] Index job processing failed:", err);
   }
 
-  try {
-    const retried = await retryFailedJobs(env.DB, env.MEMORY_INDEX, env.AI);
-    console.log(`[Cron] Retried ${retried.processed} failed, ${retried.failed} still failed`);
-  } catch (err) {
-    console.error("[Cron] Retry failed:", err);
-  }
 }
+
+// 在保留 Hono 测试接口的同时，让默认导出暴露 Cron handler。
+Object.assign(app, { scheduled });
+export default app;

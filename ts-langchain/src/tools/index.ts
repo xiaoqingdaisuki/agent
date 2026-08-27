@@ -30,7 +30,6 @@ import {
   userMemoryListDescriptor,
   userMemoryDeleteDescriptor,
 } from "./memory-user.js";
-import { config } from "../config/index.js";
 import {
   currentTimeTool,
   currentTimeDescriptor,
@@ -74,7 +73,11 @@ export {
   webExtractDescriptor,
 };
 
-// 所有可用工具的聚合列表，供 Agent 使用
+// 所有可用工具的聚合列表，供 Agent 使用。
+// MEMORY_ENABLED 仅影响存储后端（Cloudflare Gateway 持久化 vs 进程内易失），
+// 不改变 Agent 可见的工具与能力集合，因此记忆类读取工具始终注册。
+// 注：memory_user_save / memory_user_delete 为 approval_policy=always 写工具，
+// 按设计规范不进入 Agent 默认可调用列表（仅在 /tools 元数据可见）。
 const directTools = [
   weatherTool,
   webSearchTool,
@@ -86,14 +89,13 @@ const directTools = [
   convertTimezoneTool,
 ];
 
-// 关闭记忆模式时不向 Agent 暴露任何依赖 Cloudflare Gateway 的记忆和文档工具。
-export const tools = config.MEMORY_ENABLED ? [
+export const tools = [
   ...directTools,
   knowledgeSearchTool,
   memorySessionSearchTool,
   memoryUserSearchTool,
   memoryUserListTool,
-] : directTools;
+];
 
 /**
  * 工具名称 → ToolDescriptor 映射，用于 invokeTool 管线的权限/审计检查。

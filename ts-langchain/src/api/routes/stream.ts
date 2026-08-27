@@ -43,16 +43,11 @@ export async function registerStreamRoutes(app: FastifyInstance) {
 
       // 确保会话存在于当前仓储，并校验传入 thread_id 的用户归属。
       await ConversationService.ensure(threadId, trustedUserId);
-      const turnResult = await TurnService.begin(threadId, trustedUserId, client_message_id);
+      const turnResult = await TurnService.begin(threadId, trustedUserId, message, client_message_id);
       const completed = turnResult.created ? null : TurnService.completedMessage(turnResult.turn);
       if (!turnResult.created && !completed) {
         const error = TurnService.duplicateError(turnResult.turn.status);
         return reply.status(error.statusCode).send(error.toJSON());
-      }
-      if (turnResult.created) {
-        await waitForConversationPersistence(threadId);
-        const userMessage = await ConversationService.appendUserMessage(threadId, message);
-        await TurnService.start(turnResult.turn.id, trustedUserId, userMessage.id);
       }
 
       reply.raw.setHeader("Content-Type", "text/event-stream");
@@ -125,8 +120,7 @@ export async function registerStreamRoutes(app: FastifyInstance) {
             );
           }
         }
-        const assistantMessage = (await ConversationService.getMessages(threadId)).reverse().find((item) => item.role === "assistant")
-          ?? { id: crypto.randomUUID(), role: "assistant" as const, content: fullAnswer, createdAt: new Date().toISOString() };
+        const assistantMessage = { id: crypto.randomUUID(), role: "assistant" as const, content: fullAnswer, createdAt: new Date().toISOString() };
         await TurnService.complete(turnResult.turn.id, trustedUserId, assistantMessage);
         turnCompleted = true;
       } catch (error: any) {

@@ -11,6 +11,8 @@ import { getEmbedding, getEmbeddingBatch } from "./embedding.js";
 // 实体类型
 export type EntityType = "memory" | "document_chunk";
 
+const JOB_LEASE_SECONDS = 120;
+
 // 创建索引任务
 export async function createIndexJob(
   db: D1Database,
@@ -35,9 +37,10 @@ export async function processPendingJobs(db: D1Database, index: VectorizeIndex, 
   const batchSize = DEFAULTS.INDEX_JOB_BATCH_SIZE;
   const maxRetries = DEFAULTS.INDEX_JOB_MAX_RETRIES;
 
+  const now = new Date().toISOString();
   const { results } = await db
-    .prepare("SELECT * FROM memory_index_jobs WHERE status = 'pending' AND next_retry_at <= ? ORDER BY created_at ASC LIMIT ?")
-    .bind(new Date().toISOString(), batchSize)
+    .prepare("SELECT * FROM memory_index_jobs WHERE (status = 'pending' AND next_retry_at <= ?) OR (status = 'processing' AND lease_until <= ?) ORDER BY created_at ASC LIMIT ?")
+    .bind(now, now, batchSize)
     .all<any>();
 
   const jobs = (results as any[]) ?? [];
@@ -45,9 +48,14 @@ export async function processPendingJobs(db: D1Database, index: VectorizeIndex, 
   let failed = 0;
 
   for (const job of jobs) {
-    try {
-      await db.prepare("UPDATE memory_index_jobs SET status = 'processing', updated_at = ? WHERE id = ?").bind(new Date().toISOString(), job.id).run();
+    const leaseOwner = crypto.randomUUID();
+    const leaseUntil = new Date(Date.now() + JOB_LEASE_SECONDS * 1000).toISOString();
+    const claim = await db.prepare(
+      "UPDATE memory_index_jobs SET status = 'processing', lease_owner = ?, lease_until = ?, updated_at = ? WHERE id = ? AND ((status = 'pending' AND next_retry_at <= ?) OR (status = 'processing' AND lease_until <= ?))",
+    ).bind(leaseOwner, leaseUntil, new Date().toISOString(), job.id, now, now).run();
+    if (Number(claim.meta?.changes ?? 0) !== 1) continue;
 
+    try {
       const entityType = job.entity_type || "memory";
 
       if (entityType === "document_chunk") {
@@ -56,7 +64,7 @@ export async function processPendingJobs(db: D1Database, index: VectorizeIndex, 
         await processMemoryJob(db, index, ai, job);
       }
 
-      await db.prepare("UPDATE memory_index_jobs SET status = 'done', updated_at = ? WHERE id = ?").bind(new Date().toISOString(), job.id).run();
+      await db.prepare("UPDATE memory_index_jobs SET status = 'done', lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE id = ? AND lease_owner = ?").bind(new Date().toISOString(), job.id, leaseOwner).run();
       processed++;
     } catch (err) {
       const retryCount = job.retry_count + 1;
@@ -64,16 +72,16 @@ export async function processPendingJobs(db: D1Database, index: VectorizeIndex, 
 
       if (retryCount >= maxRetries) {
         await db
-          .prepare("UPDATE memory_index_jobs SET status = 'failed', retry_count = ?, last_error = ?, updated_at = ? WHERE id = ?")
-          .bind(retryCount, errorMsg, new Date().toISOString(), job.id)
+          .prepare("UPDATE memory_index_jobs SET status = 'failed', retry_count = ?, last_error = ?, lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE id = ? AND lease_owner = ?")
+          .bind(retryCount, errorMsg, new Date().toISOString(), job.id, leaseOwner)
           .run();
         failed++;
       } else {
         const backoffIndex = Math.min(retryCount - 1, RETRY_BACKOFF_SECONDS.length - 1);
         const nextRetry = new Date(Date.now() + RETRY_BACKOFF_SECONDS[backoffIndex] * 1000).toISOString();
         await db
-          .prepare("UPDATE memory_index_jobs SET retry_count = ?, next_retry_at = ?, last_error = ?, updated_at = ? WHERE id = ?")
-          .bind(retryCount, nextRetry, errorMsg, new Date().toISOString(), job.id)
+          .prepare("UPDATE memory_index_jobs SET status = 'pending', retry_count = ?, next_retry_at = ?, last_error = ?, lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE id = ? AND lease_owner = ?")
+          .bind(retryCount, nextRetry, errorMsg, new Date().toISOString(), job.id, leaseOwner)
           .run();
       }
     }
@@ -172,20 +180,8 @@ async function processDocumentChunkJob(db: D1Database, index: VectorizeIndex, ai
 
 // 重试失败的任务
 export async function retryFailedJobs(db: D1Database, index: VectorizeIndex, ai: Ai): Promise<{ processed: number; failed: number }> {
-  const { results } = await db
-    .prepare("SELECT * FROM memory_index_jobs WHERE status = 'failed' ORDER BY created_at ASC LIMIT ?")
-    .bind(DEFAULTS.INDEX_JOB_BATCH_SIZE)
-    .all<any>();
-
-  const jobs = (results as any[]) ?? [];
-  const now = new Date().toISOString();
-
-  for (const job of jobs) {
-    await db
-      .prepare("UPDATE memory_index_jobs SET status = 'pending', retry_count = 0, next_retry_at = ?, last_error = NULL, updated_at = ? WHERE id = ?")
-      .bind(now, now, job.id)
-      .run();
-  }
-
-  return processPendingJobs(db, index, ai);
+  void db;
+  void index;
+  void ai;
+  return { processed: 0, failed: 0 };
 }

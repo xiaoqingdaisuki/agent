@@ -40,19 +40,12 @@ async def stream(payload: StreamRequest, request: Request):
     # 确保会话存在于当前仓储，并校验传入 thread_id 的用户归属。
     ConversationService.ensure(thread_id, trusted_user_id)
     turn, created = TurnService.begin(
-        thread_id, trusted_user_id, payload.client_message_id
+        thread_id, trusted_user_id, payload.message, payload.client_message_id
     )
     completed = None if created else TurnService.completed_message(turn)
     if not created and not completed:
         error = TurnService.duplicate_error(turn["status"])
         raise HTTPException(status_code=error.status_code, detail=error.to_dict())
-    if created:
-        await wait_for_conversation_persistence(thread_id)
-        user_message = ConversationService.append_user_message(
-            thread_id, payload.message, trusted_user_id
-        )
-        TurnService.start(turn["id"], trusted_user_id, user_message.id)
-
     # 生成 SSE 事件流，复用 V1 的统一 AgentService 编排
     async def event_generator():
         sse_events = SseEventSequencer(turn["id"])
@@ -107,19 +100,7 @@ async def stream(payload: StreamRequest, request: Request):
                     event_name,
                     response_payload,
                 )
-            persisted = next(
-                (
-                    item
-                    for item in reversed(ConversationService.get_messages(thread_id))
-                    if item["role"] == "assistant"
-                ),
-                None,
-            )
-            assistant = (
-                Message("assistant", persisted["content"], persisted["id"], persisted["created_at"])
-                if persisted
-                else Message("assistant", full_answer)
-            )
+            assistant = Message("assistant", full_answer)
             TurnService.complete(turn["id"], trusted_user_id, assistant)
             turn_completed = True
         except BusinessError as error:

@@ -223,15 +223,12 @@ export async function registerV1Routes(app: FastifyInstance) {
         });
       }
 
-      const turnResult = await TurnService.begin(convId, trustedUserId, client_message_id);
+      const turnResult = await TurnService.begin(convId, trustedUserId, content, client_message_id);
       if (!turnResult.created) {
         const completed = TurnService.completedMessage(turnResult.turn);
         if (completed) return reply.status(200).send({ ...serializeMessage(completed), turn_id: turnResult.turn.id });
         throw TurnService.duplicateError(turnResult.turn.status);
       }
-      await waitForConversationPersistence(convId);
-      const userMessage = await ConversationService.appendUserMessage(convId, content);
-      await TurnService.start(turnResult.turn.id, trustedUserId, userMessage.id);
       activeTurn = { id: turnResult.turn.id, userId: trustedUserId };
       const assistantMessage = await AgentService.chat(
         convId,
@@ -239,7 +236,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         trustedUserId,
         toolIdentity,
       );
-      const persistedAssistant = (await ConversationService.getMessages(convId)).reverse().find((item) => item.role === "assistant") ?? assistantMessage;
+      const persistedAssistant = assistantMessage;
       await TurnService.complete(turnResult.turn.id, trustedUserId, persistedAssistant);
       activeTurn = null;
 
@@ -287,16 +284,11 @@ export async function registerV1Routes(app: FastifyInstance) {
       });
     }
 
-    const turnResult = await TurnService.begin(convId, trustedUserId, client_message_id);
+    const turnResult = await TurnService.begin(convId, trustedUserId, content, client_message_id);
     const completed = turnResult.created ? null : TurnService.completedMessage(turnResult.turn);
     if (!turnResult.created && !completed) {
       const error = TurnService.duplicateError(turnResult.turn.status);
       return reply.status(error.statusCode).send(error.toJSON());
-    }
-    if (turnResult.created) {
-      await waitForConversationPersistence(convId);
-      const userMessage = await ConversationService.appendUserMessage(convId, content);
-      await TurnService.start(turnResult.turn.id, trustedUserId, userMessage.id);
     }
     reply.hijack();
     reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -366,8 +358,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           sseEvents.event(eventName, payload),
         );
       }
-      const assistantMessage = (await ConversationService.getMessages(convId)).reverse().find((item) => item.role === "assistant")
-        ?? { id: crypto.randomUUID(), role: "assistant" as const, content: fullAnswer, createdAt: new Date().toISOString() };
+      const assistantMessage = { id: crypto.randomUUID(), role: "assistant" as const, content: fullAnswer, createdAt: new Date().toISOString() };
       await TurnService.complete(turnResult.turn.id, trustedUserId, assistantMessage);
       turnCompleted = true;
     } catch (error: unknown) {

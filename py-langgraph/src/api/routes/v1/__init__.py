@@ -200,7 +200,7 @@ async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
             pass  # 恢复失败不影响主流程
 
         turn, created = TurnService.begin(
-            conv_id, trusted_user_id, req.client_message_id
+            conv_id, trusted_user_id, req.content, req.client_message_id
         )
         if not created:
             completed = TurnService.completed_message(turn)
@@ -208,24 +208,8 @@ async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
                 return {**completed.to_dict(), "turn_id": turn["id"]}
             raise TurnService.duplicate_error(turn["status"])
 
-        await wait_for_conversation_persistence(conv_id)
-        user_message = ConversationService.append_user_message(
-            conv_id, req.content, trusted_user_id
-        )
-        TurnService.start(turn["id"], trusted_user_id, user_message.id)
         active_turn_id = turn["id"]
         reply = await AgentService.chat(conv_id, req.content, user_id=trusted_user_id, tool_identity=tool_identity)
-        persisted = next(
-            (
-                item
-                for item in reversed(ConversationService.get_messages(conv_id))
-                if item["role"] == "assistant"
-            ),
-            reply.to_dict(),
-        )
-        reply = Message(
-            "assistant", persisted["content"], persisted["id"], persisted["created_at"]
-        )
         TurnService.complete(turn["id"], trusted_user_id, reply)
         active_turn_id = None
 
@@ -274,17 +258,13 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
         pass  # 恢复失败不影响主流程
 
     await wait_for_conversation_persistence(conv_id)
-    turn, created = TurnService.begin(conv_id, trusted_user_id, req.client_message_id)
+    turn, created = TurnService.begin(
+        conv_id, trusted_user_id, req.content, req.client_message_id
+    )
     completed = None if created else TurnService.completed_message(turn)
     if not created and not completed:
         error = TurnService.duplicate_error(turn["status"])
         raise HTTPException(status_code=error.status_code, detail=error.to_dict())
-    if created:
-        user_message = ConversationService.append_user_message(
-            conv_id, req.content, trusted_user_id
-        )
-        TurnService.start(turn["id"], trusted_user_id, user_message.id)
-
     # 执行 event generator 对应的业务逻辑
     async def event_generator():
         sse_events = SseEventSequencer(turn["id"])
@@ -348,19 +328,7 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
                     event_name,
                     json.loads(payload),
                 )
-            persisted = next(
-                (
-                    item
-                    for item in reversed(ConversationService.get_messages(conv_id))
-                    if item["role"] == "assistant"
-                ),
-                None,
-            )
-            assistant = (
-                Message("assistant", persisted["content"], persisted["id"], persisted["created_at"])
-                if persisted
-                else Message("assistant", full_answer)
-            )
+            assistant = Message("assistant", full_answer)
             TurnService.complete(turn["id"], trusted_user_id, assistant)
             turn_completed = True
         except BusinessError as error:

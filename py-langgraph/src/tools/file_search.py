@@ -44,12 +44,11 @@ _DESCRIPTOR = ToolDescriptor(
 def _format_results(results: list[dict[str, Any]], degraded: bool) -> str:
     items = []
     for result in results:
-        metadata = result.get("metadata") or {}
         items.append(
             {
                 "file_id": result.get("document_id", ""),
-                "filename": metadata.get("filename") or metadata.get("document_name") or "",
-                "page": metadata.get("page") if isinstance(metadata.get("page"), int) else None,
+                "filename": result.get("document_name") or "",
+                "page": None,
                 "position": int(result.get("chunk_index", 0)) + 1,
                 "text": result.get("content", ""),
             }
@@ -67,17 +66,16 @@ async def file_search(query: str, file_ids: list[str] | None = None, top_k: int 
         return json.dumps({"results": [], "error": "缺少可信用户上下文，无法搜索用户文件"}, ensure_ascii=False)
 
     try:
-        from src.clients.memory_gateway import CloudflareMemoryClient
+        from src.services import KnowledgeService
 
-        client = CloudflareMemoryClient()
-        result = await client.search_documents(
-            user_id=context.user_id,
-            query=query,
-            limit=top_k,
-            min_score=0.0,
-            document_ids=file_ids or None,
+        results = await KnowledgeService.search(
+            query,
+            top_k,
+            context.user_id,
+            file_ids or None,
         )
-        return _format_results(result.get("results", []), bool(result.get("degraded", False)))
+        degraded = any(bool(r.get("degraded")) for r in results)
+        return _format_results(results, degraded)
     except Exception as exc:
         return json.dumps({"results": [], "error": f"文件搜索暂时不可用：{exc!s}"}, ensure_ascii=False)
 

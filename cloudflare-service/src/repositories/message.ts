@@ -37,8 +37,10 @@ export async function createMessageBatch(db: D1Database, messages: Message[]): P
      ON CONFLICT(id) DO UPDATE SET role = excluded.role, content_json = excluded.content_json`,
   );
 
-  await db.batch(
-    messages.map((msg) =>
+  const conversationId = messages[0].conversation_id;
+  const maxSequence = Math.max(...messages.map((message) => message.sequence_no));
+  await db.batch([
+    ...messages.map((msg) =>
       stmt.bind(
         msg.id,
         msg.conversation_id,
@@ -49,7 +51,43 @@ export async function createMessageBatch(db: D1Database, messages: Message[]): P
         msg.created_at,
       ),
     ),
-  );
+    db.prepare(
+      `UPDATE conversations SET
+       next_sequence_no = MAX(next_sequence_no, ?),
+       message_count = (SELECT COUNT(*) FROM messages WHERE conversation_id = ?),
+       version = version + 1, updated_at = ? WHERE id = ?`,
+    ).bind(maxSequence + 1, conversationId, new Date().toISOString(), conversationId),
+  ]);
+}
+
+// 使用会话计数器为无显式序号的消息批次原子分配连续序号。
+export async function createMessageBatchWithCounter(
+  db: D1Database,
+  conversationId: string,
+  userId: string,
+  messages: Array<Omit<Message, "conversation_id" | "user_id" | "sequence_no">>,
+): Promise<void> {
+  if (messages.length === 0) return;
+  const statements: D1PreparedStatement[] = [];
+  for (const message of messages) {
+    statements.push(
+      db.prepare(
+        `INSERT INTO messages (id, conversation_id, user_id, sequence_no, role, content_json, created_at)
+         SELECT ?, id, user_id, next_sequence_no, ?, ?, ? FROM conversations
+         WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+         ON CONFLICT(id) DO UPDATE SET role = excluded.role, content_json = excluded.content_json`,
+      ).bind(message.id, message.role, message.content_json, message.created_at, conversationId, userId),
+      db.prepare(
+        `UPDATE conversations SET next_sequence_no = next_sequence_no + 1,
+         message_count = message_count + 1, version = version + 1, updated_at = ?
+         WHERE id = ? AND EXISTS (
+           SELECT 1 FROM messages WHERE id = ? AND conversation_id = conversations.id
+             AND sequence_no = conversations.next_sequence_no
+         )`,
+      ).bind(new Date().toISOString(), conversationId, message.id),
+    );
+  }
+  await db.batch(statements);
 }
 
 // 获取会话消息列表
@@ -79,5 +117,9 @@ export async function getMessagesByConversation(
 
 // 清空会话消息
 export async function clearMessages(db: D1Database, conversationId: string): Promise<void> {
-  await db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(conversationId).run();
+  const now = new Date().toISOString();
+  await db.batch([
+    db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(conversationId),
+    db.prepare("UPDATE conversations SET next_sequence_no = 0, message_count = 0, version = version + 1, updated_at = ? WHERE id = ?").bind(now, conversationId),
+  ]);
 }

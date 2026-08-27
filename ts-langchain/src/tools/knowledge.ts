@@ -9,7 +9,6 @@ import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";
-import { CloudflareMemoryClient } from "../clients/memory_gateway.js";
 import { getToolCallContext } from "./runtime/executor.js";
 
 // ============ 检索结果模型 ============
@@ -80,32 +79,23 @@ export const knowledgeSearchTool: DynamicStructuredTool =
     schema: knowledgeSearchInputSchema,
     func: async ({ query, top_k }) => {
       try {
-        const client = new CloudflareMemoryClient({
-          baseUrl: process.env.CLOUDFLARE_MEMORY_BASE_URL || "http://localhost:8787",
-          secret: process.env.CLOUDFLARE_MEMORY_SECRET || "",
-        });
-
         const userId = getToolCallContext()?.user_id;
         if (!userId) return "📚 缺少可信用户上下文，无法检索知识库。";
-        const result = await client.searchDocuments(userId, query, {
-          limit: top_k || 5,
-        });
+        // 延迟加载避免与 services / tools 形成循环依赖。
+        const { KnowledgeService } = await import("../services/index.js");
+        const results = await KnowledgeService.search(query, top_k || 5, userId);
 
-        if (!result.results || result.results.length === 0) {
+        if (!results || results.length === 0) {
           return `📚 知识库中未找到与"${query}"相关的内容。`;
         }
 
-        const hits: KnowledgeHit[] = result.results.map((r) => {
-          const meta = r.metadata || {};
-          const docName = typeof meta.document_name === "string" ? meta.document_name : (typeof meta.filename === "string" ? meta.filename : "未知文档");
-          return {
-            doc_id: r.document_id,
-            doc_name: docName,
-            content: r.content || "",
-            score: r.score || 0,
-            chunk_index: r.chunk_index,
-          };
-        });
+        const hits: KnowledgeHit[] = results.map((r) => ({
+          doc_id: r.document_id,
+          doc_name: r.document_name,
+          content: r.content || "",
+          score: r.score || 0,
+          chunk_index: r.chunk_index,
+        }));
 
         return hitsToText(hits, query);
       } catch (error) {

@@ -42,12 +42,12 @@ describe("配置契约", () => {
     expect(config.LLM_MAX_OUTPUT_TOKENS).toBe(2048);
   });
 
-  it("允许推理模型使用 128000 的输出上限", async () => {
-    vi.stubEnv("LLM_MAX_OUTPUT_TOKENS", "128000");
+  it("将模型输出硬上限限制为 8192", async () => {
+    vi.stubEnv("LLM_MAX_OUTPUT_TOKENS", "8192");
     vi.resetModules();
 
     const { config } = await import("../../src/config/index.js");
 
-    expect(config.LLM_MAX_OUTPUT_TOKENS).toBe(128000);
+    expect(config.LLM_MAX_OUTPUT_TOKENS).toBe(8192);
   });
 });

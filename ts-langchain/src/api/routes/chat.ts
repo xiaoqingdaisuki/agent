@@ -51,15 +51,12 @@ export async function registerChatRoutes(app: FastifyInstance) {
 
         const threadId = thread_id || crypto.randomUUID();
         await ConversationService.ensure(threadId, trustedUserId);
-        const turnResult = await TurnService.begin(threadId, trustedUserId, client_message_id);
+        const turnResult = await TurnService.begin(threadId, trustedUserId, message, client_message_id);
         if (!turnResult.created) {
           const completed = TurnService.completedMessage(turnResult.turn);
           if (completed) return { reply: completed.content, thread_id: threadId, turn_id: turnResult.turn.id };
           throw TurnService.duplicateError(turnResult.turn.status);
         }
-        await waitForConversationPersistence(threadId);
-        const userMessage = await ConversationService.appendUserMessage(threadId, message);
-        await TurnService.start(turnResult.turn.id, trustedUserId, userMessage.id);
         activeTurn = { id: turnResult.turn.id, userId: trustedUserId };
 
         const fastAnswer = getFastPathAnswer(message);
@@ -71,7 +68,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
             fastAnswer,
             trustedUserId,
           );
-          const assistantMessage = (await ConversationService.getMessages(threadId)).reverse().find((item) => item.role === "assistant")!;
+          const assistantMessage = { id: crypto.randomUUID(), role: "assistant" as const, content: fastAnswer, createdAt: new Date().toISOString() };
           await TurnService.complete(turnResult.turn.id, trustedUserId, assistantMessage);
           activeTurn = null;
           return { reply: fastAnswer, thread_id: threadId, turn_id: turnResult.turn.id };
@@ -139,7 +136,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
           replyText,
           trustedUserId,
         );
-        const assistantMessage = (await ConversationService.getMessages(threadId)).reverse().find((item) => item.role === "assistant")!;
+        const assistantMessage = { id: crypto.randomUUID(), role: "assistant" as const, content: replyText, createdAt: new Date().toISOString() };
         await TurnService.complete(turnResult.turn.id, trustedUserId, assistantMessage);
         activeTurn = null;
 

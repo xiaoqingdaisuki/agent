@@ -90,32 +90,22 @@ class KnowledgeSearchInput(BaseModel):
 async def knowledge_search(query: str, top_k: int = 5) -> str:
     """在企业知识库中搜索相关信息。适用于需要从公司文档、产品手册、技术文档等内部资料中查找答案的场景。"""
     try:
-        from src.clients.memory_gateway import CloudflareMemoryClient
-
-        client = CloudflareMemoryClient()
-
         context = get_tool_call_context()
         if context is None or not context.user_id:
             return "📚 缺少可信用户上下文，无法检索知识库。"
-        result = await client.search_documents(
-            user_id=context.user_id,
-            query=query,
-            limit=top_k,
-        )
+        from src.services import KnowledgeService
 
-        results = result.get("results", [])
+        results = await KnowledgeService.search(query, top_k, context.user_id)
 
         if not results:
             return f'📚 知识库中未找到与"{query}"相关的内容。'
 
         hits: list[KnowledgeHit] = []
         for r in results:
-            meta = r.get("metadata", {})
-            doc_name = meta.get("document_name") or meta.get("filename") or "未知文档"
             hits.append(
                 KnowledgeHit(
                     doc_id=r.get("document_id", "unknown"),
-                    doc_name=doc_name,
+                    doc_name=r.get("document_name") or "未知文档",
                     content=r.get("content", ""),
                     score=r.get("score", 0),
                     chunk_index=r.get("chunk_index"),

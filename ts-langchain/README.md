@@ -31,8 +31,6 @@ src/
 ├── clients/
 │   ├── memory_gateway.ts   # Cloudflare Service HTTP 客户端
 │   └── schemas.ts          # 客户端数据模型
-├── commands/
-│   └── index.ts            # 命令入口
 ├── config/
 │   └── index.ts            # 环境变量配置（Zod）
 ├── memory/
@@ -44,7 +42,7 @@ src/
 │   ├── index.ts            # 仓储实现
 │   └── types.ts            # 仓储类型
 ├── services/
-│   └── index.ts            # Service Layer（业务编排、本地知识检索、流式兼容）
+│   └── index.ts            # 业务编排、Turn、缓存、后台任务与流式回退
 ├── api/
 │   ├── routes/
 │   │   ├── v1/             # External API（前端 UI 使用）
@@ -57,6 +55,7 @@ src/
 │   │   ├── auth.ts         # Bearer 鉴权
 │   │   └── error.ts        # 统一错误处理
 │   ├── sse.ts              # SSE 编码
+│   ├── health.ts           # liveness/readiness 状态
 │   └── index.ts            # Fastify 应用入口
 ├── prompts/
 │   └── system.ts           # Prompt 模板
@@ -101,11 +100,22 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
 
 # 模型上下文、输出、并发和请求预算
-# Context Window 总上下文 1000000；Input 与 Output 共同占用，不单独限制 Input
-LLM_MAX_OUTPUT_TOKENS=128000
+LLM_MAX_OUTPUT_TOKENS=4096
+HISTORY_CONTEXT_TOKEN_BUDGET=16000
 LLM_MAX_CONCURRENCY=2
+LLM_QUEUE_MAX=100
+LLM_QUEUE_TIMEOUT_MS=5000
+LLM_TIMEOUT_MS=30000
+LLM_MAX_RETRIES=1
 AGENT_DEADLINE_MS=120000
 AGENT_DEADLINE_WITH_TOOLS_MS=300000
+SERVER_REQUEST_TIMEOUT_MS=310000
+REACT_MAX_STEPS=8
+REACT_MAX_TOOL_CALLS=6
+REACT_MAX_SAME_TOOL_CALLS=3
+REACT_MAX_TOTAL_TIME_MS=30000
+BACKGROUND_TASK_CONCURRENCY=4
+BACKGROUND_TASK_QUEUE_MAX=200
 
 # 服务端口
 PORT=6001
@@ -211,6 +221,8 @@ curl http://localhost:6001/api/v1/health
 
 ```
 GET  /api/v1/health                    健康检查
+GET  /api/v1/health/live               进程存活探针
+GET  /api/v1/health/ready              依赖配置就绪探针
 GET  /api/v1/capabilities              可用能力列表
 
 POST /api/v1/conversations             创建会话
@@ -237,10 +249,6 @@ DELETE /api/v1/memory                  删除记忆
 GET  /api/v1/history                   问答历史
 ```
 
-### Internal API（QQ Bot 使用）
-
-当前版本不再暴露独立的 `/api/internal/agent/*` 路由。可信服务端使用兼容路由 `POST /chat`、`POST /stream`，并携带 Bearer 密钥和 `X-Agent-User-Id`；`GET /tools` 返回当前可用工具，`POST /images/generations` 提供图片生成。
-
 ## 环境变量
 
 | 变量 | 说明 | 默认值 | 必填 |
@@ -248,10 +256,22 @@ GET  /api/v1/history                   问答历史
 | `OPENAI_API_KEY` | OpenAI API 密钥 | - | 是 |
 | `OPENAI_MODEL` | 使用的模型 | `gpt-4o-mini` | 否 |
 | `OPENAI_BASE_URL` | API 地址 | `https://api.openai.com/v1` | 否 |
-| `LLM_MAX_OUTPUT_TOKENS` | 单次模型输出上限 | `128000` | 否 |
+| `LLM_MAX_OUTPUT_TOKENS` | 单次模型输出上限（允许 256～8192） | `4096` | 否 |
+| `HISTORY_CONTEXT_TOKEN_BUDGET` | 注入模型的历史上下文预算 | `16000` | 否 |
 | `LLM_MAX_CONCURRENCY` | 进程内模型并发上限 | `2` | 否 |
+| `LLM_QUEUE_MAX` | 模型等待队列上限 | `100` | 否 |
+| `LLM_QUEUE_TIMEOUT_MS` | 模型排队超时（毫秒） | `5000` | 否 |
+| `LLM_TIMEOUT_MS` | 单次模型调用超时（毫秒） | `30000` | 否 |
+| `LLM_MAX_RETRIES` | 模型临时错误重试次数 | `1` | 否 |
 | `AGENT_DEADLINE_MS` | 普通 Agent 总时限（毫秒） | `120000` | 否 |
 | `AGENT_DEADLINE_WITH_TOOLS_MS` | 工具 Agent 总时限（毫秒） | `300000` | 否 |
+| `SERVER_REQUEST_TIMEOUT_MS` | HTTP 请求总时限（毫秒） | `310000` | 否 |
+| `REACT_MAX_STEPS` | ReAct 最大模型步骤数 | `8` | 否 |
+| `REACT_MAX_TOOL_CALLS` | ReAct 最大工具调用数 | `6` | 否 |
+| `REACT_MAX_SAME_TOOL_CALLS` | 相同工具参数最大调用次数 | `3` | 否 |
+| `REACT_MAX_TOTAL_TIME_MS` | ReAct 内部工具循环预算（毫秒） | `30000` | 否 |
+| `BACKGROUND_TASK_CONCURRENCY` | 后台任务并发上限 | `4` | 否 |
+| `BACKGROUND_TASK_QUEUE_MAX` | 后台任务队列上限 | `200` | 否 |
 | `ANTHROPIC_API_KEY` | Anthropic API 密钥 | - | 否 |
 | `ANTHROPIC_MODEL` | Anthropic 模型 | `claude-3-5-haiku-20241022` | 否 |
 | `PORT` | 服务端口 | `6001` | 否 |
@@ -273,7 +293,9 @@ GET  /api/v1/history                   问答历史
 
 搜索底层只调用 Tavily。服务会对临时网络错误和限流进行一次重试，连续失败时短暂熔断，并在实时调用失败时返回标记清楚的旧缓存；不会回退到其他搜索网站或把模型训练数据伪装成实时结果。
 
-`MEMORY_ENABLED=false` 时不会调用 Gateway、D1 或 Vectorize；会话、画像、记忆和文档保存在进程内，知识检索使用有界 Top-K 字符倒排索引，重启后数据清空。设置为 `true` 后才使用 Cloudflare Service 持久化。
+`MEMORY_ENABLED=false` 时不会调用 Gateway、D1 或 Vectorize；会话、画像、记忆和文档保存在进程内，知识检索使用有界 Top-K 字符倒排索引，重启后数据清空。
+
+`MEMORY_ENABLED=true` 时，使用 Cloudflare Service 持久化，Turn、用户消息和助手消息通过 Gateway 原子提交；旧版 Gateway 缺少 Turn API 时会切换进程内兼容存储并记录警告。
 
 ## 故障排查
 
@@ -294,13 +316,6 @@ taskkill /PID <PID> /F
 - 检查 `OPENAI_API_KEY` 是否正确
 - 检查 API 余额是否充足
 - 检查 `OPENAI_BASE_URL` 是否正确设置
-
-### Qdrant 连接失败
-
-- 当前公开知识库在 `MEMORY_ENABLED=false` 时不依赖 Qdrant
-- 确保 Qdrant 服务已启动：`docker-compose up qdrant`
-- Docker 环境中使用 `QDRANT_URL=http://qdrant:6333`
-- 检查 Qdrant 端口映射：`docker-compose ps qdrant`
 
 ### Docker 构建失败
 

@@ -61,7 +61,7 @@ async def chat(payload: ChatRequest, request: Request):
         thread_id = payload.thread_id or str(uuid4())
         ConversationService.ensure(thread_id, trusted_user_id)
         turn, created = TurnService.begin(
-            thread_id, trusted_user_id, payload.client_message_id
+            thread_id, trusted_user_id, payload.message, payload.client_message_id
         )
         if not created:
             completed = TurnService.completed_message(turn)
@@ -70,13 +70,6 @@ async def chat(payload: ChatRequest, request: Request):
                     reply=completed.content, thread_id=thread_id, turn_id=turn["id"]
                 )
             raise TurnService.duplicate_error(turn["status"])
-        await wait_for_conversation_persistence(thread_id)
-        user_message = ConversationService.append_user_message(
-            thread_id,
-            payload.message,
-            trusted_user_id,
-        )
-        TurnService.start(turn["id"], trusted_user_id, user_message.id)
         active_turn_id = turn["id"]
         fast_answer = get_fast_path_answer(payload.message)
         if fast_answer:
@@ -86,13 +79,7 @@ async def chat(payload: ChatRequest, request: Request):
                 fast_answer,
                 trusted_user_id,
             )
-            persisted = next(
-                item for item in reversed(ConversationService.get_messages(thread_id))
-                if item["role"] == "assistant"
-            )
-            assistant_message = Message(
-                "assistant", persisted["content"], persisted["id"], persisted["created_at"]
-            )
+            assistant_message = Message("assistant", fast_answer)
             TurnService.complete(turn["id"], trusted_user_id, assistant_message)
             active_turn_id = None
             return ChatResponse(
@@ -158,13 +145,7 @@ async def chat(payload: ChatRequest, request: Request):
             reply_text,
             trusted_user_id,
         )
-        persisted = next(
-            item for item in reversed(ConversationService.get_messages(thread_id))
-            if item["role"] == "assistant"
-        )
-        assistant_message = Message(
-            "assistant", persisted["content"], persisted["id"], persisted["created_at"]
-        )
+        assistant_message = Message("assistant", reply_text)
         TurnService.complete(turn["id"], trusted_user_id, assistant_message)
         active_turn_id = None
 

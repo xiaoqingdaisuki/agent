@@ -9,6 +9,7 @@
 import {
   clearMessages,
   createMessageBatch,
+  createMessageBatchWithCounter,
   getMessagesByConversation,
   getNextSequenceNumber,
 } from "../repositories/message.js";
@@ -64,6 +65,22 @@ export function registerMessageRoutes(app: any) {
     }
 
     const hasExplicitSequence = parsed.messages.some((message) => message.sequence_no !== undefined);
+    if (!hasExplicitSequence) {
+      const now = new Date().toISOString();
+      const messages = parsed.messages.map((message) => ({
+        id: message.id || crypto.randomUUID(),
+        role: message.role || "user" as const,
+        content_json: typeof message.content === "string" ? message.content : JSON.stringify(message.content || {}),
+        created_at: message.created_at || now,
+      }));
+      await createMessageBatchWithCounter(c.env.DB, conversationId, parsed.user_id, messages);
+      return c.json({
+        ok: true,
+        data: { count: messages.length },
+        error: null,
+        meta: { request_id: c.get("requestId") },
+      });
+    }
     let formatted = [];
     for (let attempt = 0; attempt < MAX_SEQUENCE_INSERT_ATTEMPTS; attempt += 1) {
       const nextSequence = await getNextSequenceNumber(c.env.DB, conversationId);

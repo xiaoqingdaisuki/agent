@@ -28,7 +28,6 @@ import {
   userMemoryDeleteDescriptor,
 } from "./memory-user.js";
 import type { DynamicStructuredTool } from "@langchain/core/tools";
-import { config } from "../config/index.js";
 import { currentTimeTool, currentTimeDescriptor, convertTimezoneTool, convertTimezoneDescriptor } from "./time.js";
 import { fileSearchTool, fileSearchDescriptor } from "./file-search.js";
 import { webExtractTool, webExtractDescriptor } from "./web-extract.js";
@@ -59,14 +58,12 @@ class ToolRegistry {
     this.register(currentTimeTool, currentTimeDescriptor);
     this.register(convertTimezoneTool, convertTimezoneDescriptor);
     this.register(fileSearchTool, fileSearchDescriptor);
-    if (config.MEMORY_ENABLED) {
-      this.register(knowledgeSearchTool, knowledgeSearchDescriptor);
-      this.register(memorySessionSearchTool, sessionMemoryDescriptor);
-      this.register(memoryUserSearchTool, userMemorySearchDescriptor);
-      this.register(memoryUserSaveTool, userMemorySaveDescriptor);
-      this.register(memoryUserListTool, userMemoryListDescriptor);
-      this.register(memoryUserDeleteTool, userMemoryDeleteDescriptor);
-    }
+    this.register(knowledgeSearchTool, knowledgeSearchDescriptor);
+    this.register(memorySessionSearchTool, sessionMemoryDescriptor);
+    this.register(memoryUserSearchTool, userMemorySearchDescriptor);
+    this.register(memoryUserSaveTool, userMemorySaveDescriptor);
+    this.register(memoryUserListTool, userMemoryListDescriptor);
+    this.register(memoryUserDeleteTool, userMemoryDeleteDescriptor);
   }
 
   // 创建或注册 register 所需的数据

@@ -8,6 +8,7 @@ Repositories — 数据仓储层
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 import uuid
@@ -186,16 +187,19 @@ class InMemoryRepositories:
     def create_message_batch(self, conversation_id: str, user_id: str, messages: list[dict]) -> None:
         stored = self._messages.setdefault(conversation_id, [])
         by_id = {message["id"]: message for message in stored}
+        next_sequence = max((message["sequence_no"] + 1 for message in stored), default=0)
         for message in messages:
             by_id[message["id"]] = {
                 "id": message["id"],
                 "conversation_id": conversation_id,
                 "user_id": user_id,
-                "sequence_no": message["sequence_no"],
+                "sequence_no": message.get("sequence_no", next_sequence),
                 "role": message["role"],
                 "content_json": message.get("content_json", message.get("content", "")),
                 "created_at": message["created_at"],
             }
+            if message.get("sequence_no") is None:
+                next_sequence += 1
         self._messages[conversation_id] = sorted(
             by_id.values(), key=lambda item: item["sequence_no"]
         )
@@ -242,6 +246,106 @@ class InMemoryRepositories:
         self._turn_keys[key] = turn_id
         self._turns[turn_id] = turn
         return dict(turn), True
+
+    # 原子创建进程内 Turn 并追加用户消息。
+    def begin_turn(
+        self,
+        conversation_id: str,
+        user_id: str,
+        client_message_id: str,
+        content: str,
+        turn_id: str | None = None,
+        user_message_id: str | None = None,
+    ) -> tuple[dict, dict, bool]:
+        key = (conversation_id, client_message_id)
+        existing_id = self._turn_keys.get(key)
+        if existing_id:
+            turn = self._turns[existing_id]
+            message = next(
+                item
+                for item in self._messages.get(conversation_id, [])
+                if item["id"] == turn["user_message_id"]
+            )
+            return dict(turn), dict(message), False
+        if any(
+            turn["conversation_id"] == conversation_id
+            and turn["status"] in {"pending", "streaming"}
+            for turn in self._turns.values()
+        ):
+            from src.clients.memory_gateway import MemoryGatewayError
+
+            raise MemoryGatewayError(
+                "MEMORY_CONVERSATION_BUSY", "会话中已有请求正在处理", 409
+            )
+        now = datetime.now().isoformat()
+        turn_id = turn_id or str(uuid.uuid4())
+        user_message_id = user_message_id or str(uuid.uuid4())
+        messages = self._messages.setdefault(conversation_id, [])
+        message = {
+            "id": user_message_id,
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "sequence_no": len(messages),
+            "role": "user",
+            "content_json": content,
+            "created_at": now,
+        }
+        turn = {
+            "id": turn_id,
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "client_message_id": client_message_id,
+            "status": "streaming",
+            "user_message_id": user_message_id,
+            "assistant_message_id": None,
+            "assistant_content_json": None,
+            "error_code": None,
+            "created_at": now,
+            "updated_at": now,
+            "completed_at": None,
+        }
+        messages.append(message)
+        self._turn_keys[key] = turn_id
+        self._turns[turn_id] = turn
+        return dict(turn), dict(message), True
+
+    # 原子追加进程内助手消息并完成 Turn。
+    def complete_turn(self, turn_id: str, user_id: str, message: dict) -> dict:
+        turn = self._turns.get(turn_id)
+        if not turn or turn["user_id"] != user_id:
+            raise RuntimeError("MEMORY_TURN_NOT_FOUND")
+        if turn["status"] == "completed":
+            return dict(turn)
+        if turn["status"] != "streaming":
+            raise RuntimeError("MEMORY_TURN_STATE_CONFLICT")
+        messages = self._messages.setdefault(turn["conversation_id"], [])
+        stored = {
+            **message,
+            "conversation_id": turn["conversation_id"],
+            "user_id": user_id,
+            "sequence_no": len(messages),
+        }
+        if not any(item["id"] == message["id"] for item in messages):
+            messages.append(stored)
+        now = datetime.now().isoformat()
+        turn.update(
+            {
+                "status": "completed",
+                "assistant_message_id": message["id"],
+                "assistant_content_json": json.dumps(
+                    {
+                        "id": message["id"],
+                        "role": "assistant",
+                        "content": message["content_json"],
+                        "created_at": message["created_at"],
+                    },
+                    ensure_ascii=False,
+                ),
+                "updated_at": now,
+                "completed_at": now,
+            }
+        )
+        return dict(turn)
 
     # 按用户读取进程内 Turn。
     def get_turn(self, turn_id: str, user_id: str) -> dict | None:
@@ -479,6 +583,69 @@ class Repositories:
                 conversation_id, user_id, client_message_id, resolved_turn_id
             )
 
+    # 原子创建 Turn 并保存用户消息。
+    def begin_turn(
+        self,
+        conversation_id: str,
+        user_id: str,
+        client_message_id: str,
+        content: str,
+        turn_id: str | None = None,
+        user_message_id: str | None = None,
+    ) -> tuple[dict, dict, bool]:
+        resolved_turn_id = turn_id or str(uuid.uuid4())
+        resolved_message_id = user_message_id or str(uuid.uuid4())
+        if self._use_turn_fallback:
+            return self._turn_fallback.begin_turn(
+                conversation_id,
+                user_id,
+                client_message_id,
+                content,
+                resolved_turn_id,
+                resolved_message_id,
+            )
+        try:
+            return _run_sync(
+                self._client.begin_turn(
+                    conversation_id,
+                    user_id,
+                    client_message_id,
+                    content,
+                    resolved_turn_id,
+                    resolved_message_id,
+                )
+            )
+        except Exception as error:
+            if not self._is_legacy_turn_gateway(error):
+                raise
+            self._enable_turn_fallback()
+            return self._turn_fallback.begin_turn(
+                conversation_id,
+                user_id,
+                client_message_id,
+                content,
+                resolved_turn_id,
+                resolved_message_id,
+            )
+
+    # 原子保存助手消息并完成 Turn。
+    def complete_turn(self, turn_id: str, user_id: str, message: dict) -> dict:
+        if self._use_turn_fallback:
+            return self._turn_fallback.complete_turn(turn_id, user_id, message)
+        assistant_content_json = json.dumps(
+            {
+                "id": message["id"],
+                "role": "assistant",
+                "content": message["content_json"],
+                "created_at": message["created_at"],
+            },
+            ensure_ascii=False,
+        )
+        return _run_sync(
+            self._client.complete_turn(
+                turn_id, user_id, message, assistant_content_json
+            )
+        )
     # 按用户读取 Turn。
     def get_turn(self, turn_id: str, user_id: str) -> dict | None:
         if self._use_turn_fallback:

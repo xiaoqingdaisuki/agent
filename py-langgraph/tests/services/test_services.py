@@ -449,7 +449,7 @@ class TestAgentService:
         assert "".join(
             event["text"] for event in events if event["type"] == "text"
         ) == "当前轮回答"
-        assert ConversationService.get_messages(conversation.id)[-1]["content"] == "当前轮回答"
+        assert ConversationService.get_messages(conversation.id) == []
 
     @pytest.mark.asyncio
     async def test_stream_uses_root_tool_answer_after_nested_history(self, monkeypatch):

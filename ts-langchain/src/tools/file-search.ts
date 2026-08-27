@@ -8,7 +8,6 @@ import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";
-import { CloudflareMemoryClient } from "../clients/memory_gateway.js";
 import { getToolCallContext } from "./runtime/executor.js";
 
 export const fileSearchInputSchema = z.object({
@@ -36,20 +35,15 @@ export const fileSearchDescriptor: ToolDescriptor = {
 
 // 将文档搜索结果转换为 file.search 的稳定 JSON 输出。
 function formatFileSearchResults(
-  results: Array<{ document_id: string; chunk_index: number; content: string; metadata?: Record<string, unknown> }>,
+  results: Array<{ document_id: string; document_name?: string; chunk_index?: number; content: string; degraded?: boolean }>,
   degraded: boolean,
 ): string {
   return JSON.stringify({
     results: results.map((result) => ({
       file_id: result.document_id,
-      filename:
-        typeof result.metadata?.filename === "string"
-          ? result.metadata.filename
-          : typeof result.metadata?.document_name === "string"
-            ? result.metadata.document_name
-            : "",
-      page: typeof result.metadata?.page === "number" ? result.metadata.page : null,
-      position: result.chunk_index + 1,
+      filename: result.document_name ?? "",
+      page: null,
+      position: (result.chunk_index ?? 0) + 1,
       text: result.content,
     })),
     degraded,
@@ -68,13 +62,16 @@ export const fileSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
     }
 
     try {
-      const client = new CloudflareMemoryClient();
-      const result = await client.searchDocuments(userId, query, {
-        limit: top_k || 5,
-        minScore: 0,
-        documentIds: file_ids?.length ? file_ids : undefined,
-      });
-      return formatFileSearchResults(result.results, result.degraded);
+      // 延迟加载避免与 services / tools 形成循环依赖。
+      const { KnowledgeService } = await import("../services/index.js");
+      const results = await KnowledgeService.search(
+        query,
+        top_k || 5,
+        userId,
+        file_ids?.length ? file_ids : undefined,
+      );
+      const degraded = results.some((r) => r.degraded);
+      return formatFileSearchResults(results, degraded);
     } catch (error) {
       return JSON.stringify({
         results: [],
