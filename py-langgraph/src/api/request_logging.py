@@ -39,15 +39,16 @@ def sanitize_log_value(value: Any, field_name: str = "") -> Any:
     return value
 
 
-# 从已缓存的请求体中提取可安全记录的 JSON 数据
+# 从已缓存的请求体中仅提取字段元数据，避免记录用户原文。
 def get_logged_request_body(request: Request) -> Any:
     raw_body = getattr(request, "_body", b"")
     if not raw_body:
         return None
     try:
-        return json.loads(raw_body)
+        parsed = json.loads(raw_body)
+        return {"present": True, "fields": sorted(parsed) if isinstance(parsed, dict) else []}
     except (TypeError, UnicodeDecodeError, json.JSONDecodeError):
-        return {"raw_body": raw_body.decode("utf-8", errors="replace")}
+        return {"present": True, "fields": [], "format": "non-json"}
 
 
 # 获取请求级 ID，优先复用上游 ID，否则为当前请求生成稳定 ID

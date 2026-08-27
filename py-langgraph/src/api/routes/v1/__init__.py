@@ -11,9 +11,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.api.auth import require_agent_user_id
+from src.api.auth import get_agent_tool_identity, require_agent_user_id
 from src.api.request_logging import log_request_error
-from src.api.sse import encode_sse_done, encode_sse_event
+from src.api.sse import SseEventSequencer, encode_sse_heartbeat, with_sse_heartbeats
 from src.services import (
     AgentService,
     BusinessError,
@@ -22,6 +22,7 @@ from src.services import (
     ConversationService,
     KnowledgeService,
     Message,
+    TurnService,
     wait_for_conversation_persistence,
 )
 
@@ -38,8 +39,9 @@ class CreateConversationRequest(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
-    content: str = Field(..., min_length=1)
+    content: str = Field(..., min_length=1, max_length=16_000)
     user_id: str | None = Field(None, description="用户标识，用于记忆和个人化")
+    client_message_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class MessageResponse(BaseModel):
@@ -47,6 +49,7 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     created_at: str
+    turn_id: str
 
 
 class ConversationResponse(BaseModel):
@@ -68,7 +71,7 @@ class DocumentResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    query: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1, max_length=2_000)
     top_k: int = Field(default=5, ge=1, le=20)
 
 
@@ -83,6 +86,22 @@ async def health():
         "version": "0.2.0",
         "timestamp": datetime.now().isoformat(),
     }
+
+
+@router.get("/health/live")
+# 报告进程存活，不依赖外部服务。
+async def live_health():
+    return {"status": "ok", "live": True, "version": "0.2.0"}
+
+
+@router.get("/health/ready")
+# 报告关键依赖配置是否满足接流条件。
+async def ready_health():
+    from fastapi.responses import JSONResponse
+    from src.api.health import get_readiness
+
+    readiness = get_readiness()
+    return JSONResponse(status_code=200 if readiness["ready"] else 503, content=readiness)
 
 
 # ============ 会话管理 ==========
@@ -139,10 +158,7 @@ async def delete_conversation(conv_id: str, request: Request):
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
     from src.memory import get_default_checkpointer
-    from src.commands import get_dark_mode_thread_id
-
     await get_default_checkpointer().adelete_thread(conv_id)
-    await get_default_checkpointer().adelete_thread(get_dark_mode_thread_id(conv_id))
     return {"success": True}
 
 
@@ -163,6 +179,8 @@ async def get_messages(conv_id: str, request: Request):
 # 向会话发送用户消息并获取 AI 回复
 async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
     trusted_user_id = require_agent_user_id(request, req.user_id)
+    tool_identity = get_agent_tool_identity(request, req.user_id)
+    active_turn_id = None
     try:
         # 确保会话存在于当前仓储并校验用户归属。
         ConversationService.ensure(conv_id, trusted_user_id)
@@ -181,16 +199,52 @@ async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
         except Exception:
             pass  # 恢复失败不影响主流程
 
-        await wait_for_conversation_persistence(conv_id)
-        ConversationService.append_user_message(conv_id, req.content, trusted_user_id)
-        reply = await AgentService.chat(conv_id, req.content, user_id=trusted_user_id)
+        turn, created = TurnService.begin(
+            conv_id, trusted_user_id, req.client_message_id
+        )
+        if not created:
+            completed = TurnService.completed_message(turn)
+            if completed:
+                return {**completed.to_dict(), "turn_id": turn["id"]}
+            raise TurnService.duplicate_error(turn["status"])
 
-        return reply.to_dict()
+        await wait_for_conversation_persistence(conv_id)
+        user_message = ConversationService.append_user_message(
+            conv_id, req.content, trusted_user_id
+        )
+        TurnService.start(turn["id"], trusted_user_id, user_message.id)
+        active_turn_id = turn["id"]
+        reply = await AgentService.chat(conv_id, req.content, user_id=trusted_user_id, tool_identity=tool_identity)
+        persisted = next(
+            (
+                item
+                for item in reversed(ConversationService.get_messages(conv_id))
+                if item["role"] == "assistant"
+            ),
+            reply.to_dict(),
+        )
+        reply = Message(
+            "assistant", persisted["content"], persisted["id"], persisted["created_at"]
+        )
+        TurnService.complete(turn["id"], trusted_user_id, reply)
+        active_turn_id = None
+
+        return {**reply.to_dict(), "turn_id": turn["id"]}
     except BusinessError as e:
+        if active_turn_id:
+            try:
+                TurnService.terminate(active_turn_id, trusted_user_id, False, e.code.value)
+            except Exception:
+                pass
         raise HTTPException(status_code=e.status_code, detail=e.to_dict())
     except HTTPException:
         raise
     except Exception:
+        if active_turn_id:
+            try:
+                TurnService.terminate(active_turn_id, trusted_user_id, False, "INTERNAL_ERROR")
+            except Exception:
+                pass
         raise HTTPException(
             status_code=500,
             detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": "发送消息失败"},
@@ -201,6 +255,7 @@ async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
 # 向会话发送消息并流式返回 AI 回复
 async def stream_message(conv_id: str, req: SendMessageRequest, request: Request):
     trusted_user_id = require_agent_user_id(request, req.user_id)
+    tool_identity = get_agent_tool_identity(request, req.user_id)
     # 确保会话存在于当前仓储并校验已有 thread_id 的用户归属。
     ConversationService.ensure(conv_id, trusted_user_id)
 
@@ -219,20 +274,51 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
         pass  # 恢复失败不影响主流程
 
     await wait_for_conversation_persistence(conv_id)
-    ConversationService.append_user_message(conv_id, req.content, trusted_user_id)
+    turn, created = TurnService.begin(conv_id, trusted_user_id, req.client_message_id)
+    completed = None if created else TurnService.completed_message(turn)
+    if not created and not completed:
+        error = TurnService.duplicate_error(turn["status"])
+        raise HTTPException(status_code=error.status_code, detail=error.to_dict())
+    if created:
+        user_message = ConversationService.append_user_message(
+            conv_id, req.content, trusted_user_id
+        )
+        TurnService.start(turn["id"], trusted_user_id, user_message.id)
 
     # 执行 event generator 对应的业务逻辑
     async def event_generator():
-        yield encode_sse_event("meta", {"conversation_id": conv_id})
+        sse_events = SseEventSequencer(turn["id"])
+        full_answer = ""
+        turn_completed = completed is not None
+        yield sse_events.event(
+            "meta", {"conversation_id": conv_id, "thread_id": conv_id, "turn_id": turn["id"]}
+        )
         try:
-            async for event in AgentService.chat_stream(
-                conv_id, req.content, user_id=trusted_user_id
-            ):
+            if completed:
+                yield sse_events.event(
+                    "text",
+                    {"delta": completed.content, "text": completed.content, "partial": False, "replayed": True},
+                )
+                yield sse_events.done()
+                return
+            events = AgentService.chat_stream(
+                conv_id, req.content, user_id=trusted_user_id, tool_identity=tool_identity
+            )
+            async for event in with_sse_heartbeats(events):
                 if await request.is_disconnected():
+                    TurnService.terminate(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
                     return
+                if event is None:
+                    yield encode_sse_heartbeat()
+                    continue
                 if event["type"] == "text":
+                    full_answer += event["text"]
                     payload = json.dumps(
-                        {"delta": event["text"], "text": event["text"]},
+                        {
+                            "delta": event["text"],
+                            "text": event["text"],
+                            "partial": event.get("partial", False),
+                        },
                         ensure_ascii=False,
                     )
                     event_name = "text"
@@ -243,6 +329,7 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
                             "tool_name": event["tool_name"],
                             "status": event["status"],
                             "call_id": event["call_id"],
+                            "duration_ms": event.get("duration_ms"),
                         },
                         ensure_ascii=False,
                     )
@@ -257,20 +344,45 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
                         ensure_ascii=False,
                     )
                     event_name = event.get("event", "agent")
-                yield encode_sse_event(
+                yield sse_events.event(
                     event_name,
                     json.loads(payload),
                 )
+            persisted = next(
+                (
+                    item
+                    for item in reversed(ConversationService.get_messages(conv_id))
+                    if item["role"] == "assistant"
+                ),
+                None,
+            )
+            assistant = (
+                Message("assistant", persisted["content"], persisted["id"], persisted["created_at"])
+                if persisted
+                else Message("assistant", full_answer)
+            )
+            TurnService.complete(turn["id"], trusted_user_id, assistant)
+            turn_completed = True
         except BusinessError as error:
             log_request_error(
                 request,
                 error,
                 {"conversation_id": conv_id, "user_id": trusted_user_id, "stream": True},
             )
-            yield encode_sse_event(
+            yield sse_events.event(
                 "error", {"ok": False, "error": error.to_dict().get("error", error.to_dict())}
             )
+            if not turn_completed:
+                try:
+                    TurnService.terminate(turn["id"], trusted_user_id, False, error.code.value)
+                except Exception:
+                    pass
         except asyncio.CancelledError:
+            if not turn_completed:
+                try:
+                    TurnService.terminate(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
+                except Exception:
+                    pass
             log_request_error(
                 request,
                 RuntimeError("Client disconnected"),
@@ -281,11 +393,16 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
             log_request_error(
                 request, error, {"conversation_id": conv_id, "user_id": trusted_user_id, "stream": True}
             )
-            yield encode_sse_event(
+            yield sse_events.event(
                 "error",
                 {"ok": False, "error": {"code": "INTERNAL_ERROR", "message": "处理请求时发生错误"}},
             )
-        yield encode_sse_done()
+            if not turn_completed:
+                try:
+                    TurnService.terminate(turn["id"], trusted_user_id, False, "INTERNAL_ERROR")
+                except Exception:
+                    pass
+        yield sse_events.done()
 
     return StreamingResponse(
         event_generator(),
@@ -306,10 +423,7 @@ async def clear_messages(conv_id: str, request: Request):
     require_agent_user_id(request, conv.user_id)
     ConversationService.clear_messages(conv_id)
     from src.memory import get_default_checkpointer
-    from src.commands import get_dark_mode_thread_id
-
     await get_default_checkpointer().adelete_thread(conv_id)
-    await get_default_checkpointer().adelete_thread(get_dark_mode_thread_id(conv_id))
     return {"success": True}
 
 
@@ -321,6 +435,7 @@ async def clear_messages(conv_id: str, request: Request):
 async def upload_document(request: Request):
     """上传文档（multipart/form-data）"""
     try:
+        trusted_user_id = require_agent_user_id(request)
         form = await request.form()
         file = form.get("file")
         category = form.get("category", "")
@@ -347,7 +462,7 @@ async def upload_document(request: Request):
                 detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "invalid file"},
             )
 
-        doc = await KnowledgeService.upload_document(content, filename, category or None)
+        doc = await KnowledgeService.upload_document(content, filename, category or None, trusted_user_id)
         return doc.to_dict()
 
     except BusinessError as e:
@@ -366,14 +481,14 @@ async def upload_document(request: Request):
 
 @router.get("/knowledge/documents")
 # 列出所有已索引文档
-async def list_documents():
-    return await KnowledgeService.list_documents()
+async def list_documents(request: Request):
+    return await KnowledgeService.list_documents(require_agent_user_id(request))
 
 
 @router.get("/knowledge/documents/{doc_id}")
 # 获取指定文档详情
-async def get_document(doc_id: str):
-    doc = await KnowledgeService.get_document(doc_id)
+async def get_document(doc_id: str, request: Request):
+    doc = await KnowledgeService.get_document(doc_id, require_agent_user_id(request))
     if not doc:
         raise HTTPException(
             status_code=404,
@@ -384,8 +499,8 @@ async def get_document(doc_id: str):
 
 @router.delete("/knowledge/documents/{doc_id}")
 # 删除指定文档及其向量索引
-async def delete_document(doc_id: str):
-    deleted = await KnowledgeService.delete_document(doc_id)
+async def delete_document(doc_id: str, request: Request):
+    deleted = await KnowledgeService.delete_document(doc_id, require_agent_user_id(request))
     if not deleted:
         raise HTTPException(
             status_code=404,
@@ -396,9 +511,9 @@ async def delete_document(doc_id: str):
 
 @router.post("/knowledge/documents/{doc_id}/reindex")
 # 重新索引指定文档
-async def reindex_document(doc_id: str):
+async def reindex_document(doc_id: str, request: Request):
     try:
-        doc = await KnowledgeService.reindex_document(doc_id)
+        doc = await KnowledgeService.reindex_document(doc_id, require_agent_user_id(request))
         return doc.to_dict()
     except BusinessError as e:
         raise HTTPException(status_code=e.status_code, detail=e.to_dict())
@@ -413,9 +528,9 @@ async def reindex_document(doc_id: str):
 
 @router.post("/knowledge/search")
 # 在知识库中搜索相关内容
-async def search_knowledge(req: SearchRequest):
+async def search_knowledge(req: SearchRequest, request: Request):
     try:
-        results = await KnowledgeService.search(req.query, req.top_k)
+        results = await KnowledgeService.search(req.query, req.top_k, require_agent_user_id(request))
         return {"results": results}
     except BusinessError as e:
         raise HTTPException(status_code=e.status_code, detail=e.to_dict())

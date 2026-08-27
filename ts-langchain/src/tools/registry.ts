@@ -13,7 +13,6 @@ import { webSearchTool, webSearchDescriptor } from "./web-search.js";
 import { webReadTool, webReadDescriptor } from "./web-read.js";
 import { calculatorTool, calculatorDescriptor } from "./calculator.js";
 import { knowledgeSearchTool, knowledgeSearchDescriptor } from "./knowledge.js";
-import { fileReadTool, fileReadDescriptor } from "./file-read.js";
 import {
   memorySessionSearchTool,
   sessionMemoryDescriptor,
@@ -33,6 +32,7 @@ import { config } from "../config/index.js";
 import { currentTimeTool, currentTimeDescriptor, convertTimezoneTool, convertTimezoneDescriptor } from "./time.js";
 import { fileSearchTool, fileSearchDescriptor } from "./file-search.js";
 import { webExtractTool, webExtractDescriptor } from "./web-extract.js";
+import { permissionsForRoles } from "./runtime/authorization.js";
 
 // ============ 工具注册表 ============
 
@@ -58,16 +58,15 @@ class ToolRegistry {
     this.register(calculatorTool, calculatorDescriptor);
     this.register(currentTimeTool, currentTimeDescriptor);
     this.register(convertTimezoneTool, convertTimezoneDescriptor);
-    this.register(fileReadTool, fileReadDescriptor);
     this.register(fileSearchTool, fileSearchDescriptor);
     if (config.MEMORY_ENABLED) {
       this.register(knowledgeSearchTool, knowledgeSearchDescriptor);
+      this.register(memorySessionSearchTool, sessionMemoryDescriptor);
+      this.register(memoryUserSearchTool, userMemorySearchDescriptor);
+      this.register(memoryUserSaveTool, userMemorySaveDescriptor);
+      this.register(memoryUserListTool, userMemoryListDescriptor);
+      this.register(memoryUserDeleteTool, userMemoryDeleteDescriptor);
     }
-    this.register(memorySessionSearchTool, sessionMemoryDescriptor);
-    this.register(memoryUserSearchTool, userMemorySearchDescriptor);
-    this.register(memoryUserSaveTool, userMemorySaveDescriptor);
-    this.register(memoryUserListTool, userMemoryListDescriptor);
-    this.register(memoryUserDeleteTool, userMemoryDeleteDescriptor);
   }
 
   // 创建或注册 register 所需的数据
@@ -101,6 +100,7 @@ class ToolRegistry {
 
     for (const entry of this.tools.values()) {
       const d = entry.descriptor;
+      if (d.approval_policy === "always") continue;
       // R0 工具始终可见
       if (d.risk_level === "R0") {
         visible.push(entry.tool);
@@ -113,8 +113,7 @@ class ToolRegistry {
         continue;
       }
 
-      // 用户拥有任一所需权限
-      if (required.some((p) => userPermissions.includes(p))) {
+      if (userPermissions.includes("*") || required.every((p) => userPermissions.includes(p))) {
         visible.push(entry.tool);
       }
     }
@@ -132,9 +131,11 @@ class ToolRegistry {
       const d = entry.descriptor;
       const required = d.required_permissions ?? [];
       const available =
-        d.risk_level === "R0" ||
-        required.length === 0 ||
-        required.some((p) => userPermissions.includes(p));
+        d.approval_policy !== "always" && (
+          d.risk_level === "R0" ||
+          required.length === 0 ||
+          userPermissions.includes("*") || required.every((p) => userPermissions.includes(p))
+        );
 
       result.push({
         name: d.name,
@@ -180,28 +181,14 @@ export const registry = new ToolRegistry();
 
 // 获取 getToolsForUser 对应的数据
 export function getToolsForUser(
-  userPermissions: string[] = ["*"],
+  userPermissions: string[] = [...permissionsForRoles()],
 ): DynamicStructuredTool[] {
-  // Default: return all tools (no filtering)
-  if (userPermissions.includes("*")) {
-    return registry.getAllTools();
-  }
   return registry.getVisibleTools(userPermissions);
 }
 
 // 获取 getToolMetadata 对应的数据
 export function getToolMetadata(
-  userPermissions: string[] = ["*"],
+  userPermissions: string[] = [...permissionsForRoles()],
 ): Array<Record<string, unknown>> {
-  if (userPermissions.includes("*")) {
-    return registry.getDescriptors().map((d) => ({
-      name: d.name,
-      title: d.title,
-      description: d.description,
-      category: d.category,
-      risk_level: d.risk_level,
-      available: true,
-    }));
-  }
   return registry.getVisibleDescriptors(userPermissions);
 }

@@ -16,7 +16,6 @@ import {
   safeCalculate,
 } from "./calculator.js";
 import { knowledgeSearchTool, knowledgeSearchDescriptor } from "./knowledge.js";
-import { fileReadTool, fileReadDescriptor } from "./file-read.js";
 import {
   memorySessionSearchTool,
   sessionMemoryDescriptor,
@@ -55,8 +54,6 @@ export {
   safeCalculate,
   knowledgeSearchTool,
   knowledgeSearchDescriptor,
-  fileReadTool,
-  fileReadDescriptor,
   memorySessionSearchTool,
   sessionMemoryDescriptor,
   memoryUserSearchTool,
@@ -83,7 +80,6 @@ const directTools = [
   webSearchTool,
   webReadTool,
   webExtractTool,
-  fileReadTool,
   fileSearchTool,
   calculatorTool,
   currentTimeTool,
@@ -96,9 +92,7 @@ export const tools = config.MEMORY_ENABLED ? [
   knowledgeSearchTool,
   memorySessionSearchTool,
   memoryUserSearchTool,
-  memoryUserSaveTool,
   memoryUserListTool,
-  memoryUserDeleteTool,
 ] : directTools;
 
 /**
@@ -116,7 +110,6 @@ export const toolDescriptors: Record<
   [currentTimeTool.name]: currentTimeDescriptor,
   [convertTimezoneTool.name]: convertTimezoneDescriptor,
   [knowledgeSearchTool.name]: knowledgeSearchDescriptor,
-  [fileReadTool.name]: fileReadDescriptor,
   [fileSearchTool.name]: fileSearchDescriptor,
   [memorySessionSearchTool.name]: sessionMemoryDescriptor,
   [memoryUserSearchTool.name]: userMemorySearchDescriptor,
@@ -140,7 +133,6 @@ export const toolSchemas: Record<
   [currentTimeTool.name]: currentTimeTool.schema as any,
   [convertTimezoneTool.name]: convertTimezoneTool.schema as any,
   [knowledgeSearchTool.name]: knowledgeSearchTool.schema as any,
-  [fileReadTool.name]: fileReadTool.schema as any,
   [fileSearchTool.name]: fileSearchTool.schema as any,
   [memorySessionSearchTool.name]: memorySessionSearchTool.schema as any,
   [memoryUserSearchTool.name]: memoryUserSearchTool.schema as any,

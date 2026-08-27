@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";
 import { CloudflareMemoryClient } from "../clients/memory_gateway.js";
+import { getToolCallContext } from "./runtime/executor.js";
 
 // ============ 检索结果模型 ============
 
@@ -84,8 +85,8 @@ export const knowledgeSearchTool: DynamicStructuredTool =
           secret: process.env.CLOUDFLARE_MEMORY_SECRET || "",
         });
 
-        // 使用默认用户搜索（服务间共享知识库）
-        const userId = "default";
+        const userId = getToolCallContext()?.user_id;
+        if (!userId) return "📚 缺少可信用户上下文，无法检索知识库。";
         const result = await client.searchDocuments(userId, query, {
           limit: top_k || 5,
         });

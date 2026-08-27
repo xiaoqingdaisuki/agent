@@ -8,6 +8,7 @@ import { registerImageRoutes } from "./routes/images.js";
 import { registerErrorMiddleware } from "./middleware/error.js";
 import { registerAgentAuthMiddleware } from "./middleware/auth.js";
 import { config } from "../config/index.js";
+import { getReadiness } from "./health.js";
 
 // 构建并配置 Fastify 应用实例，注册所有路由和中间件
 export async function buildApp() {
@@ -39,6 +40,11 @@ export async function buildApp() {
 
   // 旧路由（保留兼容，后续迁移）
   app.get("/health", async () => ({ status: "ok", version: "0.2.0" }));
+  app.get("/health/live", async () => ({ status: "ok", live: true, version: "0.2.0" }));
+  app.get("/health/ready", async (_request, reply) => {
+    const readiness = getReadiness();
+    return reply.status(readiness.ready ? 200 : 503).send(readiness);
+  });
   await registerChatRoutes(app);
   await registerStreamRoutes(app);
   await registerToolRoutes(app);

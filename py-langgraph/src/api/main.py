@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from functools import wraps
 
 from fastapi import FastAPI, HTTPException, Request
@@ -20,6 +21,19 @@ logger = logging.getLogger(__name__)
 
 # 外层服务超时长于 Agent deadline，确保业务层先返回明确的 504。
 DEFAULT_REQUEST_TIMEOUT = settings.server_request_timeout_ms / 1000
+
+
+# 在应用关闭时收敛后台持久化任务并释放共享网关连接。
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    yield
+    from src.repositories import close_repositories
+    from src.services import flush_background_tasks
+
+    try:
+        await asyncio.wait_for(flush_background_tasks(), timeout=10)
+    finally:
+        await close_repositories()
 
 
 # 请求级超时中间件：非流式路由默认超时返回 504
@@ -50,7 +64,7 @@ async def _timeout_middleware(request: Request, call_next):
 
 # 创建并配置 FastAPI 应用，注册所有路由和中间件
 def create_app() -> FastAPI:
-    app = FastAPI(title="py-langgraph-agent", version="0.2.0")
+    app = FastAPI(title="py-langgraph-agent", version="0.2.0", lifespan=_lifespan)
 
     allowed_origins = [
         origin.strip() for origin in settings.cors_origin.split(",") if origin.strip()
@@ -89,11 +103,14 @@ def create_app() -> FastAPI:
                 original_error,
                 {"status_code": exc.status_code, "http_exception": True},
             )
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"detail": exc.detail},
-            headers=exc.headers,
-        )
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        error = {
+            "code": str(detail.get("code") or f"HTTP_{exc.status_code}"),
+            "message": str(detail.get("message") or exc.detail or "请求失败"),
+        }
+        if detail.get("details") is not None:
+            error["details"] = detail["details"]
+        return JSONResponse(status_code=exc.status_code, content={"error": error}, headers=exc.headers)
 
     @app.exception_handler(RequestValidationError)
     # 记录与 TS 全局错误处理器一致的请求校验异常和请求上下文
@@ -104,8 +121,14 @@ def create_app() -> FastAPI:
             {"status_code": 422, "validation_errors": jsonable_encoder(exc.errors())},
         )
         return JSONResponse(
-            status_code=422,
-            content={"detail": jsonable_encoder(exc.errors())},
+            status_code=400,
+            content={
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "请求参数无效",
+                    "details": {"fields": jsonable_encoder(exc.errors())},
+                }
+            },
         )
 
     @app.exception_handler(Exception)
@@ -129,6 +152,20 @@ def create_app() -> FastAPI:
     # 执行 legacy health 对应的业务逻辑
     async def legacy_health():
         return {"status": "ok", "version": "0.2.0"}
+
+    @app.get("/health/live")
+    # 报告进程存活，不依赖外部服务。
+    async def live_health():
+        return {"status": "ok", "live": True, "version": "0.2.0"}
+
+    @app.get("/health/ready")
+    # 报告关键依赖配置是否满足接流条件。
+    async def ready_health():
+        from fastapi.responses import JSONResponse
+        from src.api.health import get_readiness
+
+        readiness = get_readiness()
+        return JSONResponse(status_code=200 if readiness["ready"] else 503, content=readiness)
 
     # 旧路由（保留兼容）
     app.include_router(chat.router, prefix="/chat", tags=["chat"])

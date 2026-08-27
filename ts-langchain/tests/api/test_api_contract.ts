@@ -1,10 +1,64 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { DARK_MODE_COMMAND, DARK_MODE_ENABLED_REPLY } from "../../src/commands/index.js";
 import { buildApp } from "../../src/api/index.js";
+import { config } from "../../src/config/index.js";
 import { KnowledgeService } from "../../src/services/index.js";
 
 describe("完整 API 契约", () => {
+  it("按可信用户身份返回稳定的 429 和 Retry-After", async () => {
+    const app = await buildApp();
+    const originalLimit = config.USER_RATE_LIMIT_RPM;
+    config.USER_RATE_LIMIT_RPM = 1;
+    const headers = {
+      authorization: "Bearer test-agent-secret",
+      "x-agent-user-id": "rate-limit-user",
+    };
+    try {
+      expect((await app.inject({ method: "GET", url: "/tools", headers })).statusCode).toBe(200);
+      const limited = await app.inject({ method: "GET", url: "/tools", headers });
+      expect(limited.statusCode).toBe(429);
+      expect(limited.headers["retry-after"]).toBeTruthy();
+      expect(limited.json().error.code).toBe("RATE_LIMITED");
+    } finally {
+      config.USER_RATE_LIMIT_RPM = originalLimit;
+      await app.close();
+    }
+  });
+
+  it("相同 client_message_id 重试只产生一个完整 Turn", async () => {
+    const app = await buildApp();
+    const userId = "idempotent_user";
+    const headers = {
+      authorization: "Bearer test-agent-secret",
+      "x-agent-user-id": userId,
+    };
+    try {
+      const created = await app.inject({
+        method: "POST", url: "/api/v1/conversations", headers,
+        payload: { title: "幂等会话", user_id: userId },
+      });
+      const conversationId = created.json().id;
+      const request = {
+        method: "POST" as const,
+        url: `/api/v1/conversations/${conversationId}/messages`,
+        headers,
+        payload: { content: "你好", user_id: userId, client_message_id: "client-message-1" },
+      };
+      const first = await app.inject(request);
+      const repeated = await app.inject(request);
+      expect(first.statusCode).toBe(200);
+      expect(repeated.statusCode).toBe(200);
+      expect(repeated.json()).toEqual(first.json());
+
+      const messages = await app.inject({
+        method: "GET", url: `/api/v1/conversations/${conversationId}/messages`, headers,
+      });
+      expect(messages.json()).toHaveLength(2);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("覆盖旧版接口与 v1 持久化业务接口", async () => {
     const document = {
       id: "doc_contract",
@@ -37,7 +91,16 @@ describe("完整 API 契约", () => {
 
     try {
       expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
+      const invalidRequest = await app.inject({ method: "POST", url: "/chat", payload: {} });
+      expect(invalidRequest.statusCode).toBe(400);
+      expect(invalidRequest.json()).toEqual(expect.objectContaining({
+        error: expect.objectContaining({ code: "VALIDATION_ERROR" }),
+      }));
       expect((await app.inject({ method: "GET", url: "/api/v1/health" })).statusCode).toBe(200);
+      expect((await app.inject({ method: "GET", url: "/health/live" })).statusCode).toBe(200);
+      const readiness = await app.inject({ method: "GET", url: "/api/v1/health/ready" });
+      expect([200, 503]).toContain(readiness.statusCode);
+      expect(readiness.json()).toHaveProperty("components");
       expect((await app.inject({ method: "GET", url: "/tools" })).json()).toEqual(
         expect.arrayContaining([expect.objectContaining({ name: "math.calculate" })]),
       );
@@ -48,10 +111,10 @@ describe("完整 API 契约", () => {
       const legacyChat = await app.inject({
         method: "POST",
         url: "/chat",
-        payload: { message: DARK_MODE_COMMAND, user_id: userId },
+        payload: { message: "你好", user_id: userId },
       });
       expect(legacyChat.statusCode).toBe(200);
-      expect(legacyChat.json().reply).toBe(DARK_MODE_ENABLED_REPLY);
+      expect(legacyChat.json().reply).toBe("你好！我是 AI 老情，很高兴为你服务。");
 
       const fastLegacyChat = await app.inject({
         method: "POST",
@@ -64,10 +127,12 @@ describe("完整 API 契约", () => {
       const legacyStream = await app.inject({
         method: "POST",
         url: "/stream",
-        payload: { message: DARK_MODE_COMMAND, user_id: userId },
+        payload: { message: "你好", user_id: userId },
       });
       expect(legacyStream.statusCode).toBe(200);
-      expect(legacyStream.body).toContain(DARK_MODE_ENABLED_REPLY);
+      expect(legacyStream.body).toContain("你好！我是 AI 老情，很高兴为你服务。");
+      expect(legacyStream.body).toContain("id: ");
+      expect(legacyStream.body).toContain('"event_id":');
       expect(legacyStream.body).toContain("data: [DONE]");
 
       const created = await app.inject({
@@ -92,10 +157,10 @@ describe("完整 API 契约", () => {
       const stream = await app.inject({
         method: "POST",
         url: `/api/v1/conversations/${conversationId}/messages/stream`,
-        payload: { content: DARK_MODE_COMMAND, user_id: userId },
+        payload: { content: "你好", user_id: userId },
       });
       expect(stream.statusCode).toBe(200);
-      expect(stream.body).toContain(DARK_MODE_ENABLED_REPLY);
+      expect(stream.body).toContain("你好！我是 AI 老情，很高兴为你服务。");
       expect(stream.body).toContain("data: [DONE]");
 
       const messages = await app.inject({
@@ -103,8 +168,8 @@ describe("完整 API 契约", () => {
         url: `/api/v1/conversations/${conversationId}/messages`,
       });
       expect(messages.json()).toEqual([
-        expect.objectContaining({ role: "user", content: DARK_MODE_COMMAND }),
-        expect.objectContaining({ role: "assistant", content: DARK_MODE_ENABLED_REPLY }),
+        expect.objectContaining({ role: "user", content: "你好" }),
+        expect.objectContaining({ role: "assistant", content: "你好！我是 AI 老情，很高兴为你服务。" }),
       ]);
       expect(
         (
@@ -240,7 +305,7 @@ describe("完整 API 契约", () => {
         url: "/chat",
         headers: otherUserHeaders,
         payload: {
-          message: DARK_MODE_COMMAND,
+          message: "你好",
           thread_id: conversationId,
           user_id: "owner-b",
         },

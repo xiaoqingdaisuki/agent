@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.agents.graph_agents import (
     AGENT_RECURSION_LIMIT,
@@ -14,18 +14,13 @@ from src.agents.react_policy import summarize_react_state
 from src.agents.deadline import AgentDeadline
 from src.config.settings import settings
 from src.agents.response_handler import get_finish_reason, is_likely_truncated, maybe_append_continuation_hint
-from src.commands import (
-    execute_agent_command,
-    get_dark_mode_thread_id,
-    get_agent_prompt_override,
-    restore_agent_command_state,
-)
-from src.api.auth import require_agent_user_id
+from src.api.auth import get_agent_tool_identity, require_agent_user_id
 from src.api.request_logging import log_request_error
 from src.services import (
     BusinessError,
     ConversationService,
     Message,
+    TurnService,
     extract_agent_output_text,
     schedule_answer_persistence,
     wait_for_conversation_persistence,
@@ -36,9 +31,10 @@ router = APIRouter()
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=16_000)
     thread_id: str | None = None
     user_id: str | None = None
+    client_message_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ChatResponse(BaseModel):
@@ -46,6 +42,7 @@ class ChatResponse(BaseModel):
     thread_id: str
     stop_reason: str | None = None
     react: dict | None = None
+    turn_id: str
 
 
 @router.post("", response_model=ChatResponse)
@@ -57,51 +54,56 @@ async def chat(payload: ChatRequest, request: Request):
     使用完整工具图，避免为了降低延迟而丢失工具能力。
     """
     trusted_user_id = require_agent_user_id(request, payload.user_id)
+    tool_identity = get_agent_tool_identity(request, payload.user_id)
     thread_id = payload.thread_id
+    active_turn_id = None
     try:
         thread_id = payload.thread_id or str(uuid4())
         ConversationService.ensure(thread_id, trusted_user_id)
+        turn, created = TurnService.begin(
+            thread_id, trusted_user_id, payload.client_message_id
+        )
+        if not created:
+            completed = TurnService.completed_message(turn)
+            if completed:
+                return ChatResponse(
+                    reply=completed.content, thread_id=thread_id, turn_id=turn["id"]
+                )
+            raise TurnService.duplicate_error(turn["status"])
         await wait_for_conversation_persistence(thread_id)
-        ConversationService.append_user_message(
+        user_message = ConversationService.append_user_message(
             thread_id,
             payload.message,
             trusted_user_id,
         )
-        command = execute_agent_command(payload.message, thread_id)
-        if command:
-            ConversationService.append_assistant_message(
-                thread_id,
-                Message("assistant", command.reply),
-                trusted_user_id,
-            )
-            return ChatResponse(reply=command.reply, thread_id=thread_id)
-
+        TurnService.start(turn["id"], trusted_user_id, user_message.id)
+        active_turn_id = turn["id"]
         fast_answer = get_fast_path_answer(payload.message)
         if fast_answer:
-            schedule_answer_persistence(
+            await schedule_answer_persistence(
                 thread_id,
                 payload.message,
                 fast_answer,
                 trusted_user_id,
             )
-            return ChatResponse(reply=fast_answer, thread_id=thread_id)
+            persisted = next(
+                item for item in reversed(ConversationService.get_messages(thread_id))
+                if item["role"] == "assistant"
+            )
+            assistant_message = Message(
+                "assistant", persisted["content"], persisted["id"], persisted["created_at"]
+            )
+            TurnService.complete(turn["id"], trusted_user_id, assistant_message)
+            active_turn_id = None
+            return ChatResponse(
+                reply=fast_answer, thread_id=thread_id, turn_id=turn["id"]
+            )
 
-        user_messages = [
-            str(message["content"])
-            for message in ConversationService.get_messages(thread_id)
-            if message.get("role") == "user"
-        ]
-        restore_agent_command_state(thread_id, user_messages)
-        prompt_override = get_agent_prompt_override(thread_id, payload.message)
-        agent_thread_id = (
-            get_dark_mode_thread_id(thread_id)
-            if prompt_override
-            else thread_id
-        )
+        agent_thread_id = thread_id
         agent = (
             build_chat_agent()
             if is_direct_chat_message(payload.message)
-            else build_tool_agent(system_prompt_override=prompt_override)
+            else build_tool_agent()
         )
         conversation_history = ConversationService.get_agent_conversation_history(
             thread_id, payload.message
@@ -114,7 +116,12 @@ async def chat(payload: ChatRequest, request: Request):
         if trusted_user_id:
             config["configurable"]["user_id"] = trusted_user_id
 
-        runtime_context = create_tool_call_context(trusted_user_id, thread_id)
+        runtime_context = create_tool_call_context(
+            trusted_user_id,
+            thread_id,
+            tenant_id=str(tool_identity["tenant_id"]),
+            roles=list(tool_identity["roles"]),
+        )
         with tool_call_scope(runtime_context):
             async with AgentDeadline(
                 settings.agent_deadline_ms,
@@ -145,20 +152,35 @@ async def chat(payload: ChatRequest, request: Request):
         if is_likely_truncated(reply_text, finish_reason):
             reply_text = maybe_append_continuation_hint(reply_text, finish_reason)
 
-        schedule_answer_persistence(
+        await schedule_answer_persistence(
             thread_id,
             payload.message,
             reply_text,
             trusted_user_id,
         )
+        persisted = next(
+            item for item in reversed(ConversationService.get_messages(thread_id))
+            if item["role"] == "assistant"
+        )
+        assistant_message = Message(
+            "assistant", persisted["content"], persisted["id"], persisted["created_at"]
+        )
+        TurnService.complete(turn["id"], trusted_user_id, assistant_message)
+        active_turn_id = None
 
         return ChatResponse(
             reply=reply_text,
             thread_id=thread_id,
             stop_reason=react_summary["stop_reason"],
             react=react_summary,
+            turn_id=turn["id"],
         )
     except BusinessError as error:
+        if active_turn_id:
+            try:
+                TurnService.terminate(active_turn_id, trusted_user_id, False, error.code.value)
+            except Exception:
+                pass
         log_request_error(
             request,
             error,
@@ -166,6 +188,11 @@ async def chat(payload: ChatRequest, request: Request):
         )
         raise HTTPException(status_code=error.status_code, detail=error.to_dict())
     except TimeoutError as error:
+        if active_turn_id:
+            try:
+                TurnService.terminate(active_turn_id, trusted_user_id, False, "AGENT_TIMEOUT")
+            except Exception:
+                pass
         log_request_error(
             request,
             error,
@@ -176,6 +203,11 @@ async def chat(payload: ChatRequest, request: Request):
             detail={"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"},
         )
     except Exception as error:
+        if active_turn_id:
+            try:
+                TurnService.terminate(active_turn_id, trusted_user_id, False, "INTERNAL_ERROR")
+            except Exception:
+                pass
         log_request_error(
             request,
             error,

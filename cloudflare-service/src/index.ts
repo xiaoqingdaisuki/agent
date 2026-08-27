@@ -14,6 +14,7 @@ import { healthRoute } from "./routes/health.js";
 import { registerProfileRoutes } from "./routes/profile.js";
 import { registerConversationRoutes } from "./routes/conversation.js";
 import { registerMessageRoutes } from "./routes/message.js";
+import { registerTurnRoutes } from "./routes/turn.js";
 import { registerMemoryRoutes } from "./routes/memory.js";
 import { registerDocumentRoutes } from "./routes/document.js";
 import { registerCheckpointRoutes } from "./routes/checkpoint.js";
@@ -38,6 +39,7 @@ type GatewayEnv = {
   MAX_MEMORIES_PER_USER: string;
   INDEX_JOB_BATCH_SIZE: string;
   INDEX_JOB_MAX_RETRIES: string;
+  TURN_STALE_SECONDS?: string;
 };
 
 type GatewayContext = any; // 简化类型，避免 Hono 泛型复杂性
@@ -80,6 +82,7 @@ healthRoute(app);
 registerProfileRoutes(app);
 registerConversationRoutes(app);
 registerMessageRoutes(app);
+registerTurnRoutes(app);
 registerMemoryRoutes(app);
 registerDocumentRoutes(app);
 registerCheckpointRoutes(app);
@@ -96,6 +99,16 @@ export default app;
 // 定时任务入口
 export async function scheduled(event: ScheduledEvent, env: GatewayEnv) {
   const { processPendingJobs, retryFailedJobs } = await import("./services/index-job.js");
+  const { failStaleTurns } = await import("./repositories/turn.js");
+
+  try {
+    const staleSeconds = Math.max(60, Number(env.TURN_STALE_SECONDS || 900));
+    const staleBefore = new Date(Date.now() - staleSeconds * 1_000).toISOString();
+    const recovered = await failStaleTurns(env.DB, staleBefore);
+    if (recovered > 0) console.warn(`[Cron] Marked ${recovered} stale Turns as failed`);
+  } catch (err) {
+    console.error("[Cron] Turn recovery failed:", err);
+  }
 
   try {
     const pending = await processPendingJobs(env.DB, env.MEMORY_INDEX, env.AI);

@@ -158,6 +158,19 @@ class TestConversationService:
         assert ConversationService.get_messages(conv.id) == []
         assert conv.message_count == 0
 
+    def test_agent_history_reads_the_newest_persisted_page(self):
+        conv = ConversationService.create("Recent history")
+        for index in range(210):
+            ConversationService.append_user_message(conv.id, f"question {index}")
+            ConversationService.append_assistant_message(
+                conv.id, Message("assistant", f"answer {index}")
+            )
+
+        history = ConversationService.get_agent_conversation_history(conv.id)
+
+        assert history[-1]["content"] == "answer 209"
+        assert {item["content"] for item in history}.isdisjoint({"question 0", "answer 0"})
+
 
 class TestAgentService:
     @pytest.mark.asyncio
@@ -179,7 +192,8 @@ class TestAgentService:
             conversation.id,
             Message("assistant", "上一篇回答"),
         )
-        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+        monkeypatch.setattr(graph_agents, "build_chat_agent", lambda **_kwargs: FakeAgent())
+        monkeypatch.setattr(graph_agents, "is_direct_chat_message", lambda _content: True)
 
         reply = await AgentService.chat(conversation.id, "当前问题")
         await flush_background_tasks()
@@ -238,6 +252,35 @@ class TestAgentService:
         ]
 
         assert events == [{"type": "text", "text": "knowledge answer"}]
+
+    @pytest.mark.asyncio
+    async def test_explicit_knowledge_query_skips_model_planning(self, monkeypatch):
+        from src.agents import graph_agents
+
+        conversation = ConversationService.create("explicit knowledge")
+
+        async def fake_knowledge_chat(content, _history=None, user_id=""):
+            assert "知识库" in content
+            assert user_id == "tenant:test"
+            return {"output": "没有检索到"}
+
+        monkeypatch.setattr(KnowledgeService, "chat", fake_knowledge_chat)
+        monkeypatch.setattr(
+            graph_agents,
+            "build_tool_agent",
+            lambda **_kwargs: pytest.fail("explicit knowledge query used model planning"),
+        )
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(
+                conversation.id,
+                "请从知识库查询 Agent 项目整改",
+                tool_identity={"tenant_id": "tenant:test", "roles": ["member"]},
+            )
+        ]
+
+        assert events == [{"type": "text", "text": "没有检索到"}]
 
     @pytest.mark.asyncio
     async def test_tool_only_stream_emits_fallback_answer(self, monkeypatch):
@@ -599,6 +642,35 @@ class TestAgentService:
 
         assert events == [{"type": "text", "text": "AI助手响应超时，请稍后重试。"}]
 
+    @pytest.mark.asyncio
+    async def test_stream_timeout_does_not_resend_streamed_text(self, monkeypatch):
+        """超时事件只追加提示，不能重复已发送的文本增量。"""
+        from langchain_core.messages import AIMessage
+        from src.agents import graph_agents
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": AIMessage(content="已输出内容")},
+                }
+                raise TimeoutError
+
+        conversation = ConversationService.create("partial timeout")
+        monkeypatch.setattr(graph_agents, "build_chat_agent", lambda **_kwargs: FakeAgent())
+        monkeypatch.setattr(graph_agents, "is_direct_chat_message", lambda _content: True)
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(
+                conversation.id, "流式超时测试"
+            )
+        ]
+
+        assert "".join(event["text"] for event in events if event["type"] == "text") == (
+            "已输出内容\n\n---\n⚠️ 以上回答尚未完成。如需继续，请回复「继续」。"
+        )
+
 
 class TestKnowledgeService:
     @pytest.mark.asyncio
@@ -625,3 +697,23 @@ class TestKnowledgeService:
         assert (await KnowledgeService.reindex_document(document.id)).chunks == 1
         assert await KnowledgeService.delete_document(document.id) is True
         assert await KnowledgeService.get_document(document.id) is None
+
+    @pytest.mark.asyncio
+    async def test_local_documents_are_isolated_by_trusted_user_scope(self, monkeypatch):
+        from src.config.settings import settings
+
+        monkeypatch.setattr(settings, "memory_enabled", False)
+        owner_id = "owner-a"
+        other_id = "owner-b"
+        document = await KnowledgeService.upload_document(
+            "仅属于第一个用户的隔离知识。".encode(),
+            "private-note.txt",
+            user_id=owner_id,
+        )
+
+        assert document.id in {item["id"] for item in await KnowledgeService.list_documents(owner_id)}
+        assert await KnowledgeService.get_document(document.id, other_id) is None
+        assert await KnowledgeService.list_documents(other_id) == []
+        assert await KnowledgeService.search("隔离知识", user_id=other_id) == []
+        assert await KnowledgeService.delete_document(document.id, other_id) is False
+        assert await KnowledgeService.delete_document(document.id, owner_id) is True

@@ -47,7 +47,6 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   "time.convert": "convert_timezone",
   "math.calculate": "calculator",
   "knowledge.search": "knowledge_search",
-  "file.read": "file_read",
   "file.search": "file_search",
   "memory.session.search": "memory_session_search",
   "memory.user.search": "memory_user_search",
@@ -214,11 +213,13 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
 const agentCache = new Map<string, Promise<DeclarativeToolAgent>>();
 const directAgentCache = new Map<string, Promise<DeclarativeToolAgent>>();
 const MAX_CACHE_SIZE = 10;
+export const MAX_STREAM_EVENT_BUFFER = 128;
 type ModelWaiter = {
   resolve: () => void;
   reject: (reason: unknown) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
+  timer?: ReturnType<typeof setTimeout>;
 };
 const modelWaiters: ModelWaiter[] = [];
 let activeModelCalls = 0;
@@ -230,14 +231,31 @@ async function runWithModelCapacity<T>(
 ): Promise<T> {
   if (signal?.aborted) throw signal.reason || new DOMException("Aborted", "AbortError");
   if (activeModelCalls >= config.LLM_MAX_CONCURRENCY) {
+    if (modelWaiters.length >= config.LLM_QUEUE_MAX) {
+      throw Object.assign(new Error("Model capacity queue is full"), { code: "RATE_LIMITED" });
+    }
     await new Promise<void>((resolve, reject) => {
-      const waiter: ModelWaiter = { resolve, reject, signal };
+      const waiter: ModelWaiter = {
+        resolve: () => {
+          if (waiter.timer) clearTimeout(waiter.timer);
+          resolve();
+        },
+        reject,
+        signal,
+      };
       const onAbort = () => {
         const index = modelWaiters.indexOf(waiter);
         if (index >= 0) modelWaiters.splice(index, 1);
+        if (waiter.timer) clearTimeout(waiter.timer);
         reject(signal?.reason || new DOMException("Aborted", "AbortError"));
       };
       waiter.onAbort = onAbort;
+      waiter.timer = setTimeout(() => {
+        const index = modelWaiters.indexOf(waiter);
+        if (index >= 0) modelWaiters.splice(index, 1);
+        signal?.removeEventListener("abort", onAbort);
+        reject(Object.assign(new Error("Model capacity queue timed out"), { code: "RATE_LIMITED" }));
+      }, config.LLM_QUEUE_TIMEOUT_MS);
       signal?.addEventListener("abort", onAbort, { once: true });
       modelWaiters.push(waiter);
     });
@@ -251,6 +269,7 @@ async function runWithModelCapacity<T>(
       const waiter = modelWaiters.shift();
       if (!waiter) break;
       waiter.signal?.removeEventListener("abort", waiter.onAbort!);
+      if (waiter.timer) clearTimeout(waiter.timer);
       if (waiter.signal?.aborted) {
         waiter.reject(waiter.signal.reason || new DOMException("Aborted", "AbortError"));
         continue;
@@ -273,7 +292,7 @@ const TOOL_INTENT_PATTERNS = [
   /(?:记住|你记得|我的记忆|我的偏好|忘记我|删除.{0,8}记忆|保存.{0,8}(?:偏好|记忆)|memory_user|\bwho\s+am\s+i\b|\bwhat\s+do\s+you\s+remember)/i,
   /(?:(?:推荐|有什么).{0,12}(?:好吃|好玩|餐厅|酒店|景点|路线|行程)|(?:美食|游玩|餐厅|酒店|景点).{0,8}(?:推荐|攻略)|\brecommend.{0,20}(?:restaurant|hotel|attraction|trip))/i,
   /(?:谁是|何时|哪年|哪一年|哪位|多少人口|成立于|发布于|\bwho\s+is\b|\bwhen\s+did\b|\bwhat\s+year\b)/i,
-  /(?:get_weather|get_current_time|convert_timezone|calculator|knowledge_search|file_read|file_search)/i,
+  /(?:get_weather|get_current_time|convert_timezone|calculator|knowledge_search|file_search)/i,
 ];
 
 // 仅白名单明确的普通生成任务进入无工具路径，未识别请求继续走保守路由。
@@ -376,9 +395,15 @@ class DeclarativeToolAgent {
     const events: unknown[] = [];
     let completed = false;
     let failed: unknown;
-    let notify = () => {};
+    let notifyEvent = () => {};
+    let notifySpace = () => {};
+    // 等待上游产生事件，避免消费者空转轮询。
     const waitForEvent = () => new Promise<void>((resolve) => {
-      notify = resolve;
+      notifyEvent = resolve;
+    });
+    // 缓冲区写满时反压上游模型事件，避免慢客户端导致进程内存无限增长。
+    const waitForBufferSpace = () => new Promise<void>((resolve) => {
+      notifySpace = resolve;
     });
     const pump = async () => {
       try {
@@ -397,17 +422,23 @@ class DeclarativeToolAgent {
       },
         );
         for await (const event of stream) {
+          while (events.length >= MAX_STREAM_EVENT_BUFFER) {
+            await waitForBufferSpace();
+          }
           events.push(event);
-          notify();
+          notifyEvent();
+        }
+        while (events.length >= MAX_STREAM_EVENT_BUFFER) {
+          await waitForBufferSpace();
         }
         events.push({ event: "on_chain_end", data: { output: { react: tracker.summary() } } });
-        notify();
+        notifyEvent();
       } catch (error) {
         tracker.fail(error);
         failed = error;
       } finally {
         completed = true;
-        notify();
+        notifyEvent();
       }
     };
     const runPump = () => runWithReActTracker(tracker, pump);
@@ -415,6 +446,7 @@ class DeclarativeToolAgent {
     while (!completed || events.length > 0) {
       const event = events.shift();
       if (event) {
+        notifySpace();
         yield event;
       } else {
         await waitForEvent();

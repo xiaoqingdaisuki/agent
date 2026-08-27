@@ -48,6 +48,27 @@ import {
   ChunkSchema,
   DocumentSearchResponseSchema,
 } from "./schemas.js";
+import type { TurnData, TurnStatus } from "../repositories/types.js";
+
+const TurnSchema = z.object({
+  id: z.string(),
+  conversation_id: z.string(),
+  user_id: z.string(),
+  client_message_id: z.string(),
+  status: z.enum(["pending", "streaming", "completed", "failed", "cancelled"]),
+  user_message_id: z.string().nullable(),
+  assistant_message_id: z.string().nullable(),
+  assistant_content_json: z.string().nullable(),
+  error_code: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  completed_at: z.string().nullable(),
+});
+
+// 校验 Turn 网关响应数据。
+function validateTurn(data: unknown): TurnData {
+  return TurnSchema.parse(data);
+}
 
 /**
  * 校验 Gateway 统一响应信封
@@ -219,7 +240,7 @@ export class CloudflareMemoryClient {
       if (response.status === 409) {
         const errData = parsed as any;
         throw new MemoryGatewayError(
-          "MEMORY_CONFLICT",
+          errData?.error?.code || "MEMORY_CONFLICT",
           errData?.error?.message || "数据冲突",
           409,
         );
@@ -417,10 +438,11 @@ export class CloudflareMemoryClient {
     conversationId: string,
     limit: number = 50,
     offset: number = 0,
+    direction: "asc" | "desc" = "asc",
   ): Promise<MessagesPageData> {
     const result = validateGatewayResponse(await this.request(
       "GET",
-      `/internal/v1/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}&offset=${offset}`,
+      `/internal/v1/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}&offset=${offset}&direction=${direction}`,
     )) as { data: unknown };
     return validateMessagesPage(result.data);
   }
@@ -434,6 +456,52 @@ export class CloudflareMemoryClient {
       "DELETE",
       `/internal/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
     );
+  }
+
+  // 原子创建或复用客户端消息对应的 Turn。
+  async createOrGetTurn(
+    conversationId: string,
+    userId: string,
+    clientMessageId: string,
+    turnId: string = crypto.randomUUID(),
+  ): Promise<{ turn: TurnData; created: boolean }> {
+    const result = validateGatewayResponse(await this.request(
+      "POST",
+      `/internal/v1/conversations/${encodeURIComponent(conversationId)}/turns`,
+      { id: turnId, user_id: userId, client_message_id: clientMessageId },
+      clientMessageId,
+    )) as { data: unknown };
+    const data = result.data as Record<string, unknown>;
+    return { turn: validateTurn(data), created: data.created === true };
+  }
+
+  // 按用户读取指定 Turn。
+  async getTurn(turnId: string, userId: string): Promise<TurnData | null> {
+    try {
+      const result = validateGatewayResponse(await this.request(
+        "GET",
+        `/internal/v1/turns/${encodeURIComponent(turnId)}?user_id=${encodeURIComponent(userId)}`,
+      )) as { data: unknown };
+      return result.data ? validateTurn(result.data) : null;
+    } catch (error) {
+      if ((error as MemoryGatewayError).code === "MEMORY_TURN_NOT_FOUND") return null;
+      throw error;
+    }
+  }
+
+  // 按合法状态机更新 Turn。
+  async updateTurn(
+    turnId: string,
+    userId: string,
+    changes: Partial<Pick<TurnData, "user_message_id" | "assistant_message_id" | "assistant_content_json" | "error_code">> & { status: TurnStatus },
+  ): Promise<TurnData> {
+    const result = validateGatewayResponse(await this.request(
+      "PATCH",
+      `/internal/v1/turns/${encodeURIComponent(turnId)}`,
+      { user_id: userId, ...changes },
+      `${turnId}:${changes.status}`,
+    )) as { data: unknown };
+    return validateTurn(result.data);
   }
 
   // ============ Memory API ============

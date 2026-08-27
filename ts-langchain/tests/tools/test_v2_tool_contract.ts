@@ -25,11 +25,12 @@ const V2_DESCRIPTOR_NAMES = [
 ];
 
 describe("Agent Tools V2", () => {
-  it("registers all six new descriptors and exposes 15 tools", () => {
+  it("registers all V2 descriptors but hides write tools from the default Agent", () => {
     const descriptors = registry.getDescriptors().map((descriptor) => descriptor.name);
     expect(descriptors).toEqual(expect.arrayContaining(V2_DESCRIPTOR_NAMES));
-    expect(descriptors).toHaveLength(descriptors.includes("knowledge.search") ? 15 : 14);
-    expect(tools).toHaveLength(descriptors.includes("knowledge.search") ? 15 : 14);
+    expect(descriptors).toHaveLength(descriptors.includes("knowledge.search") ? 14 : 13);
+    expect(tools.map((tool) => tool.name)).not.toContain("memory_user_save");
+    expect(tools.map((tool) => tool.name)).not.toContain("memory_user_delete");
   });
 
   it("returns current time in the requested timezone", async () => {
@@ -88,6 +89,7 @@ describe("Agent Tools V2", () => {
       tenant_id: "tenant-test",
       user_id: "v2-memory-user",
       actor_type: "user" as const,
+      roles: ["admin"],
     };
     await memoryUserSaveTool.invoke({ user_id: context.user_id, content: "用户偏好简洁回答", category: "preference" });
     const listed = JSON.parse(await runWithToolCallContext(context, () => memoryUserListTool.invoke({})));

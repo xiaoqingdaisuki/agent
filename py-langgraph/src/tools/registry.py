@@ -22,6 +22,7 @@ from src.tools.runtime.executor import (
     invoke_tool,
     wrap_tool_with_runtime,
 )
+from src.tools.runtime.authorization import permissions_for_roles
 from src.tools.weather import get_weather, _DESCRIPTOR as WEATHER_DESCRIPTOR
 from src.tools.search import web_search, _DESCRIPTOR as SEARCH_DESCRIPTOR
 from src.tools.web_read import web_read, _DESCRIPTOR as READ_DESCRIPTOR
@@ -34,7 +35,6 @@ from src.tools.time import (
 )
 from src.tools.calculator import calculator, DESCRIPTOR as CALC_DESCRIPTOR
 from src.tools.knowledge import knowledge_search, _DESCRIPTOR as KNOWLEDGE_DESCRIPTOR
-from src.tools.file_read import file_read, _DESCRIPTOR as FILE_READ_DESCRIPTOR
 from src.tools.file_search import file_search, _DESCRIPTOR as FILE_SEARCH_DESCRIPTOR
 from src.tools.memory_session import (
     memory_session_search,
@@ -75,7 +75,6 @@ class ToolRegistry:
             (get_current_time, CURRENT_TIME_DESCRIPTOR),
             (convert_timezone, CONVERT_TIME_DESCRIPTOR),
             (calculator, CALC_DESCRIPTOR),
-            (file_read, FILE_READ_DESCRIPTOR),
             (file_search, FILE_SEARCH_DESCRIPTOR),
         ]
         if settings.memory_enabled:
@@ -136,6 +135,8 @@ class ToolRegistry:
         visible = []
         for name, tool_fn in self._tools.items():
             descriptor = self._descriptors[name]
+            if descriptor.approval_policy == "always":
+                continue
             # R0 工具默认可见
             if descriptor.risk_level == "R0":
                 visible.append(tool_fn)
@@ -145,8 +146,7 @@ class ToolRegistry:
             if not required:
                 visible.append(tool_fn)
                 continue
-            # 用户拥有任一所需权限即可
-            if any(perm in user_permissions for perm in required):
+            if "*" in user_permissions or all(perm in user_permissions for perm in required):
                 visible.append(tool_fn)
         return visible
 
@@ -155,6 +155,18 @@ class ToolRegistry:
         """获取当前用户可见的工具元数据列表（用于 API 返回）"""
         result = []
         for descriptor in self._descriptors.values():
+            if descriptor.approval_policy == "always":
+                result.append(
+                    {
+                        "name": descriptor.name,
+                        "title": descriptor.title,
+                        "description": descriptor.description,
+                        "category": descriptor.category,
+                        "risk_level": descriptor.risk_level,
+                        "available": False,
+                    }
+                )
+                continue
             if descriptor.risk_level == "R0":
                 result.append(
                     {
@@ -169,7 +181,7 @@ class ToolRegistry:
                 continue
 
             required = descriptor.required_permissions or []
-            if not required or any(perm in user_permissions for perm in required):
+            if not required or "*" in user_permissions or all(perm in user_permissions for perm in required):
                 result.append(
                     {
                         "name": descriptor.name,
@@ -226,7 +238,7 @@ def get_registry() -> ToolRegistry:
 def get_tools_for_user(user_permissions: list[str] | None = None) -> list[Any]:
     """根据用户权限获取可用工具列表（供 Agent 使用）"""
     if user_permissions is None:
-        return _registry.get_all_tools()
+        user_permissions = list(permissions_for_roles())
     return _registry.get_visible_tools(user_permissions)
 
 
@@ -234,5 +246,5 @@ def get_tools_for_user(user_permissions: list[str] | None = None) -> list[Any]:
 def get_tool_metadata_for_user(user_permissions: list[str] | None = None) -> list[dict[str, Any]]:
     """获取工具元数据（供 /tools API 使用）"""
     if user_permissions is None:
-        user_permissions = []
+        user_permissions = list(permissions_for_roles())
     return _registry.get_visible_descriptors(user_permissions)

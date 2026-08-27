@@ -8,12 +8,6 @@ import {
 import { getHistoryBeforeInput } from "../../memory/conversation.js";
 import { runWithToolCallContext } from "../../tools/runtime/executor.js";
 import {
-  executeAgentCommand,
-  getDarkModeHistoryThreadId,
-  getAgentPromptOverride,
-  restoreAgentCommandState,
-} from "../../commands/index.js";
-import {
   isAgentDeadlineError,
   runWithAgentDeadline,
 } from "../../agents/deadline.js";
@@ -28,54 +22,59 @@ import {
   extractAgentOutputText,
   loadMemoryContext,
   scheduleAnswerPersistence,
+  TurnService,
   waitForConversationPersistence,
 } from "../../services/index.js";
-import { requireAgentUserId } from "../middleware/auth.js";
+import { getAgentToolIdentity, requireAgentUserId } from "../middleware/auth.js";
 import { logRequestError } from "../middleware/error.js";
 import type { ReActRunSummary } from "../../agents/react-policy.js";
 import { config } from "../../config/index.js";
 
 // 注册旧版非流式对话接口，并按消息意图选择本地快答、轻量对话或完整工具 Agent。
 export async function registerChatRoutes(app: FastifyInstance) {
-  app.post<{ Body: { message: string; thread_id?: string; user_id?: string } }>(
+  app.post<{ Body: { message: string; thread_id?: string; user_id?: string; client_message_id?: string } }>(
     "/chat",
     async (
-      request: FastifyRequest<{ Body: { message: string; thread_id?: string; user_id?: string } }>,
+      request: FastifyRequest<{ Body: { message: string; thread_id?: string; user_id?: string; client_message_id?: string } }>,
       reply: FastifyReply,
     ) => {
+      let activeTurn: { id: string; userId: string } | null = null;
       try {
-        const { message, thread_id, user_id } = request.body;
+        const { message, thread_id, user_id, client_message_id } = request.body;
         const trustedUserId = requireAgentUserId(request, user_id);
-        if (!message) {
-          return reply.status(400).send({ error: "message is required" });
+        const toolIdentity = getAgentToolIdentity(request, user_id);
+        if (typeof message !== "string" || message.length < 1 || message.length > 16_000) {
+          return reply.status(400).send({
+            error: { code: "VALIDATION_ERROR", message: "请求参数无效" },
+          });
         }
 
         const threadId = thread_id || crypto.randomUUID();
         await ConversationService.ensure(threadId, trustedUserId);
-        await waitForConversationPersistence(threadId);
-        await ConversationService.appendUserMessage(threadId, message);
-
-        const command = executeAgentCommand(message, threadId);
-        if (command) {
-          await ConversationService.appendAssistantMessage(threadId, {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: command.reply,
-            createdAt: new Date().toISOString(),
-          });
-          return { reply: command.reply, thread_id: threadId };
+        const turnResult = await TurnService.begin(threadId, trustedUserId, client_message_id);
+        if (!turnResult.created) {
+          const completed = TurnService.completedMessage(turnResult.turn);
+          if (completed) return { reply: completed.content, thread_id: threadId, turn_id: turnResult.turn.id };
+          throw TurnService.duplicateError(turnResult.turn.status);
         }
+        await waitForConversationPersistence(threadId);
+        const userMessage = await ConversationService.appendUserMessage(threadId, message);
+        await TurnService.start(turnResult.turn.id, trustedUserId, userMessage.id);
+        activeTurn = { id: turnResult.turn.id, userId: trustedUserId };
 
         const fastAnswer = getFastPathAnswer(message);
         if (fastAnswer) {
-          scheduleAnswerPersistence(
+          await scheduleAnswerPersistence(
             threadId,
             threadId,
             message,
             fastAnswer,
             trustedUserId,
           );
-          return { reply: fastAnswer, thread_id: threadId };
+          const assistantMessage = (await ConversationService.getMessages(threadId)).reverse().find((item) => item.role === "assistant")!;
+          await TurnService.complete(turnResult.turn.id, trustedUserId, assistantMessage);
+          activeTurn = null;
+          return { reply: fastAnswer, thread_id: threadId, turn_id: turnResult.turn.id };
         }
 
         // 注入缓存记忆并异步刷新，避免旧接口被记忆网关阻塞。
@@ -83,30 +82,21 @@ export async function registerChatRoutes(app: FastifyInstance) {
           ? await loadMemoryContext(trustedUserId)
           : [];
 
-        const conversationMessages = await ConversationService.getMessages(threadId);
-        restoreAgentCommandState(
-          threadId,
-          conversationMessages.flatMap((entry) =>
-            entry.role === "user" ? [entry.content] : [],
-          ),
-        );
-        const promptOverride = getAgentPromptOverride(threadId, message);
-        const agentHistoryThreadId = promptOverride
-          ? getDarkModeHistoryThreadId(threadId)
-          : threadId;
+        const agentHistoryThreadId = threadId;
         const history = await getHistoryBeforeInput(agentHistoryThreadId, message);
         const agent = await (isDirectChatMessage(message)
-          ? createDirectChatAgent(promptOverride)
-          : createToolAgent(promptOverride));
+          ? createDirectChatAgent()
+          : createToolAgent());
 
         // 设置工具调用上下文，确保 invokeTool 管线能获取到 user_id 等信息
         const toolContext = {
           request_id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           trace_id: `trace_${Date.now()}`,
           conversation_id: threadId,
-          tenant_id: "",
+          tenant_id: toolIdentity.tenantId,
           user_id: trustedUserId,
           actor_type: "user",
+          roles: toolIdentity.roles,
         } as const;
 
         const result = await runWithAgentDeadline<{
@@ -142,21 +132,28 @@ export async function registerChatRoutes(app: FastifyInstance) {
           replyText = maybeAppendContinuationHint(replyText, finishReason);
         }
 
-        scheduleAnswerPersistence(
+        await scheduleAnswerPersistence(
           threadId,
           agentHistoryThreadId,
           message,
           replyText,
           trustedUserId,
         );
+        const assistantMessage = (await ConversationService.getMessages(threadId)).reverse().find((item) => item.role === "assistant")!;
+        await TurnService.complete(turnResult.turn.id, trustedUserId, assistantMessage);
+        activeTurn = null;
 
         return {
           reply: replyText,
           thread_id: threadId,
+          turn_id: turnResult.turn.id,
           stop_reason: result.react?.stop_reason,
           react: result.react,
         };
       } catch (error: any) {
+        if (activeTurn) {
+          await TurnService.terminate(activeTurn.id, activeTurn.userId, false, error?.code || "INTERNAL_ERROR").catch(() => undefined);
+        }
         logRequestError(request, error);
         if (error instanceof BusinessError) {
           return reply.status(error.statusCode).send(error.toJSON());
@@ -173,10 +170,12 @@ export async function registerChatRoutes(app: FastifyInstance) {
           return reply
             .status(500)
             .send({
-              error: "API key not configured. Set OPENAI_API_KEY in .env",
+              error: { code: "MODEL_NOT_CONFIGURED", message: "AI 服务尚未配置" },
             });
         }
-        return reply.status(500).send({ error: "Internal server error" });
+        return reply.status(500).send({
+          error: { code: "INTERNAL_ERROR", message: "Internal server error" },
+        });
       }
     },
   );

@@ -38,6 +38,25 @@ export interface MessageData {
   created_at: string;
 }
 
+/** 单轮 Agent 执行状态 */
+export type TurnStatus = "pending" | "streaming" | "completed" | "failed" | "cancelled";
+
+/** 单轮 Agent 执行记录 */
+export interface TurnData {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  client_message_id: string;
+  status: TurnStatus;
+  user_message_id: string | null;
+  assistant_message_id: string | null;
+  assistant_content_json: string | null;
+  error_code: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
 /** 长期记忆 */
 export interface MemoryData {
   id: string;
@@ -136,10 +155,32 @@ export interface MessageRepository {
     conversationId: string,
     limit?: number,
     offset?: number,
+    direction?: "asc" | "desc",
   ): Promise<{ messages: MessageData[]; total: number }>;
 
   /** 清空会话消息 */
   clear(conversationId: string): Promise<void>;
+}
+
+/** Turn 仓储接口 */
+export interface TurnRepository {
+  /** 原子创建或复用客户端消息对应的 Turn */
+  createOrGet(
+    conversationId: string,
+    userId: string,
+    clientMessageId: string,
+    turnId?: string,
+  ): Promise<{ turn: TurnData; created: boolean }>;
+
+  /** 按用户读取 Turn */
+  get(turnId: string, userId: string): Promise<TurnData | null>;
+
+  /** 按合法状态机更新 Turn */
+  update(
+    turnId: string,
+    userId: string,
+    changes: Partial<Pick<TurnData, "user_message_id" | "assistant_message_id" | "assistant_content_json" | "error_code">> & { status: TurnStatus },
+  ): Promise<TurnData>;
 }
 
 /**
@@ -192,5 +233,6 @@ export interface Repositories {
   profile: ProfileRepository;
   conversation: ConversationRepository;
   message: MessageRepository;
+  turn: TurnRepository;
   memory: MemoryRepository;
 }

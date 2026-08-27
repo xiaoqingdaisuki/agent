@@ -8,6 +8,7 @@ Repositories — 数据仓储层
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import uuid
 from datetime import datetime
@@ -77,6 +78,22 @@ def get_repositories():
     return _repositories
 
 
+# 关闭共享网关客户端及仓储事件循环，供应用优雅停机使用。
+async def close_repositories() -> None:
+    global _repositories, _sync_loop, _sync_loop_thread
+    repositories = _repositories
+    client = getattr(repositories, "_client", None)
+    if client is not None:
+        await asyncio.to_thread(_run_sync, client.close())
+    if _sync_loop and _sync_loop.is_running():
+        _sync_loop.call_soon_threadsafe(_sync_loop.stop)
+    if _sync_loop_thread and _sync_loop_thread.is_alive():
+        await asyncio.to_thread(_sync_loop_thread.join, 2)
+    _repositories = None
+    _sync_loop = None
+    _sync_loop_thread = None
+
+
 class InMemoryRepositories:
     """关闭 Cloudflare 记忆模式时使用的进程内仓储。"""
 
@@ -85,6 +102,8 @@ class InMemoryRepositories:
         self._profiles: dict[str, dict] = {}
         self._conversations: dict[str, dict] = {}
         self._messages: dict[str, list[dict]] = {}
+        self._turns: dict[str, dict] = {}
+        self._turn_keys: dict[tuple[str, str], str] = {}
         self._memories: dict[str, list[dict]] = {}
 
     # 获取或创建用户画像
@@ -182,13 +201,75 @@ class InMemoryRepositories:
         )
 
     # 获取会话消息
-    def get_messages(self, conversation_id: str, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    def get_messages(
+        self, conversation_id: str, limit: int = 50, offset: int = 0, direction: str = "asc"
+    ) -> tuple[list[dict], int]:
         messages = self._messages.get(conversation_id, [])
-        return [dict(message) for message in messages[offset : offset + limit]], len(messages)
+        ordered = list(reversed(messages)) if direction == "desc" else messages
+        return [dict(message) for message in ordered[offset : offset + limit]], len(messages)
 
     # 清空会话消息
     def clear_messages(self, conversation_id: str) -> None:
         self._messages[conversation_id] = []
+
+    # 原子创建或复用客户端消息对应的进程内 Turn。
+    def create_or_get_turn(
+        self, conversation_id: str, user_id: str, client_message_id: str, turn_id: str | None = None
+    ) -> tuple[dict, bool]:
+        key = (conversation_id, client_message_id)
+        existing_id = self._turn_keys.get(key)
+        if existing_id:
+            return dict(self._turns[existing_id]), False
+        if any(
+            turn["conversation_id"] == conversation_id
+            and turn["status"] in {"pending", "streaming"}
+            for turn in self._turns.values()
+        ):
+            from src.clients.memory_gateway import MemoryGatewayError
+
+            raise MemoryGatewayError(
+                "MEMORY_CONVERSATION_BUSY", "会话中已有请求正在处理", 409
+            )
+        now = datetime.now().isoformat()
+        turn_id = turn_id or str(uuid.uuid4())
+        turn = {
+            "id": turn_id, "conversation_id": conversation_id, "user_id": user_id,
+            "client_message_id": client_message_id, "status": "pending",
+            "user_message_id": None, "assistant_message_id": None,
+            "assistant_content_json": None, "error_code": None,
+            "created_at": now, "updated_at": now, "completed_at": None,
+        }
+        self._turn_keys[key] = turn_id
+        self._turns[turn_id] = turn
+        return dict(turn), True
+
+    # 按用户读取进程内 Turn。
+    def get_turn(self, turn_id: str, user_id: str) -> dict | None:
+        turn = self._turns.get(turn_id)
+        return dict(turn) if turn and turn["user_id"] == user_id else None
+
+    # 按不可逆状态机更新进程内 Turn。
+    def update_turn(self, turn_id: str, user_id: str, **changes) -> dict:
+        turn = self._turns.get(turn_id)
+        if not turn or turn["user_id"] != user_id:
+            raise RuntimeError("MEMORY_TURN_NOT_FOUND")
+        requested = changes["status"]
+        if turn["status"] == requested:
+            return dict(turn)
+        allowed = {
+            "pending": {"streaming", "failed", "cancelled"},
+            "streaming": {"completed", "failed", "cancelled"},
+            "completed": set(), "failed": set(), "cancelled": set(),
+        }
+        if requested not in allowed[turn["status"]]:
+            raise RuntimeError("MEMORY_TURN_STATE_CONFLICT")
+        for field in ("status", "user_message_id", "assistant_message_id", "assistant_content_json", "error_code"):
+            if field in changes and changes[field] is not None:
+                turn[field] = changes[field]
+        turn["updated_at"] = datetime.now().isoformat()
+        if requested in {"completed", "failed", "cancelled"}:
+            turn["completed_at"] = turn["updated_at"]
+        return dict(turn)
 
     # 保存用户长期记忆
     def save_memory(self, user_id: str, content: str, category: str = "fact", importance: int = 3, source: str = "user_explicit", source_conversation_id: str | None = None) -> dict:
@@ -296,6 +377,28 @@ class Repositories:
     # 初始化当前对象
     def __init__(self, client):
         self._client = client
+        self._turn_fallback = InMemoryRepositories()
+        self._use_turn_fallback = False
+
+    # 判断旧版 Gateway 是否尚未提供 Turn API。
+    @staticmethod
+    def _is_legacy_turn_gateway(error: Exception) -> bool:
+        from src.clients.memory_gateway import MemoryGatewayError
+
+        return (
+            isinstance(error, MemoryGatewayError)
+            and error.status_code == 404
+            and error.code == "MEMORY_NOT_FOUND"
+        )
+
+    # 切换到进程内 Turn 兼容层并只记录一次降级告警。
+    def _enable_turn_fallback(self) -> None:
+        if self._use_turn_fallback:
+            return
+        self._use_turn_fallback = True
+        logging.getLogger(__name__).warning(
+            "Gateway does not expose Turn API; using local compatibility storage"
+        )
 
     # Profile
     # 获取 get or create profile 对应的数据
@@ -344,12 +447,49 @@ class Repositories:
         return _run_sync(self._client.create_messages_batch(conversation_id, user_id, messages))
 
     # 获取 get messages 对应的数据
-    def get_messages(self, conversation_id: str, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
-        return _run_sync(self._client.get_messages(conversation_id, limit, offset))
+    def get_messages(
+        self, conversation_id: str, limit: int = 50, offset: int = 0, direction: str = "asc"
+    ) -> tuple[list[dict], int]:
+        return _run_sync(self._client.get_messages(conversation_id, limit, offset, direction))
 
     # 删除或清理 clear messages 对应的数据
     def clear_messages(self, conversation_id: str) -> None:
         return _run_sync(self._client.clear_messages(conversation_id))
+
+    # 原子创建或复用客户端消息对应的 Turn。
+    def create_or_get_turn(
+        self, conversation_id: str, user_id: str, client_message_id: str, turn_id: str | None = None
+    ) -> tuple[dict, bool]:
+        resolved_turn_id = turn_id or str(uuid.uuid4())
+        if self._use_turn_fallback:
+            return self._turn_fallback.create_or_get_turn(
+                conversation_id, user_id, client_message_id, resolved_turn_id
+            )
+        try:
+            return _run_sync(
+                self._client.create_or_get_turn(
+                    conversation_id, user_id, client_message_id, resolved_turn_id
+                )
+            )
+        except Exception as error:
+            if not self._is_legacy_turn_gateway(error):
+                raise
+            self._enable_turn_fallback()
+            return self._turn_fallback.create_or_get_turn(
+                conversation_id, user_id, client_message_id, resolved_turn_id
+            )
+
+    # 按用户读取 Turn。
+    def get_turn(self, turn_id: str, user_id: str) -> dict | None:
+        if self._use_turn_fallback:
+            return self._turn_fallback.get_turn(turn_id, user_id)
+        return _run_sync(self._client.get_turn(turn_id, user_id))
+
+    # 按合法状态机更新 Turn。
+    def update_turn(self, turn_id: str, user_id: str, **changes) -> dict:
+        if self._use_turn_fallback:
+            return self._turn_fallback.update_turn(turn_id, user_id, **changes)
+        return _run_sync(self._client.update_turn(turn_id, user_id, **changes))
 
     # Memory
     # 更新或保存 save memory 对应的数据

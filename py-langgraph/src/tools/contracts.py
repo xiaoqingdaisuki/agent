@@ -79,6 +79,7 @@ class ToolCallContext:
     tenant_id: str
     user_id: str
     actor_type: ActorType
+    roles: list[str] = field(default_factory=lambda: ["member"])
     agent_id: str = ""
     locale: str = "zh-CN"
     deadline: str | None = None

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { logRequestError } from "../../src/api/middleware/error.js";
 
 describe("request error logging", () => {
-  it("records request content while redacting sensitive fields", () => {
+  it("omits request content while retaining safe field metadata", () => {
     let payload: unknown;
     logRequestError(
       {
@@ -31,9 +31,8 @@ describe("request error logging", () => {
       request_context: {
         request_id: "req-log-1",
         body: {
-          content: "触发错误的测试请求",
-          user_id: "user_1",
-          api_key: "[REDACTED]",
+          present: true,
+          fields: ["api_key", "content", "user_id"],
         },
         stream: true,
       },

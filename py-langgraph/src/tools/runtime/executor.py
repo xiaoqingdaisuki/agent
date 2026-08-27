@@ -38,6 +38,7 @@ from src.tools.contracts import (
 )
 from src.tools.observability import record_tool_metric
 from src.tools.runtime.data_redaction import redact_text_content
+from src.tools.runtime.authorization import has_tool_permissions
 from src.config.settings import settings
 
 TInput = TypeVar("TInput")
@@ -46,6 +47,7 @@ TOutput = TypeVar("TOutput")
 # ============ 审计记录 ============
 
 _audit_log: list[dict[str, Any]] = []
+_audit_flush_inflight = False
 
 
 # 返回审计日志的只读副本
@@ -64,38 +66,28 @@ _permission_cache: dict[str, tuple[bool, float]] = {}
 _PERMISSION_CACHE_TTL = 5.0  # seconds
 
 
-# 检查用户是否拥有指定权限（当前为最小 RBAC 实现）
+# 基于可信身份和服务端角色检查工具权限。
 def permission_check(
     context: ToolCallContext,
     descriptor: ToolDescriptor,
 ) -> tuple[bool, str | None]:
-    """
-    检查用户是否拥有指定权限。
-
-    当前为最小可用实现：所有 R0/R1 只读工具默认允许，
-    R2+ 工具需要显式声明 permissions 并通过策略。
-
-    TODO: Phase 0.4 替换为真正的 RBAC 引擎
-    """
-    # R0 工具默认允许
-    if descriptor.risk_level == "R0":
-        return True, None
-
     perms = descriptor.required_permissions or []
 
-    # 无权限要求 → 允许
-    if not perms:
-        return True, None
-
     # 检查缓存
-    cache_key = f"{context.user_id}:{context.tenant_id}:{','.join(perms)}"
+    cache_key = f"{context.user_id}:{context.tenant_id}:{','.join(sorted(context.roles))}:{','.join(perms)}"
     cached = _permission_cache.get(cache_key)
     if cached and (time.time() - cached[1]) < _PERMISSION_CACHE_TTL:
         return cached
 
-    # 最小 RBAC：只要有 user_id 就允许
-    granted = bool(context.user_id)
-    reason = None if granted else "UNAUTHENTICATED: user_id required"
+    requires_identity = descriptor.risk_level != "R0"
+    granted = (not requires_identity or bool(context.user_id)) and has_tool_permissions(context, descriptor)
+    reason = (
+        None
+        if granted
+        else "UNAUTHENTICATED: user_id required"
+        if requires_identity and not context.user_id
+        else "PERMISSION_DENIED: required tool permission is not granted"
+    )
 
     _permission_cache[cache_key] = (granted, time.time())
     return granted, reason
@@ -200,15 +192,21 @@ def _get_budget() -> _BudgetState:
 
 
 # 创建一次 Agent 请求使用的可信工具调用上下文
-def create_tool_call_context(user_id: str, conversation_id: str) -> ToolCallContext:
+def create_tool_call_context(
+    user_id: str,
+    conversation_id: str,
+    tenant_id: str = "",
+    roles: list[str] | None = None,
+) -> ToolCallContext:
     request_id = f"req_{uuid4().hex}"
     return ToolCallContext(
         request_id=request_id,
         trace_id=f"trace_{uuid4().hex}",
         conversation_id=conversation_id,
-        tenant_id="",
+        tenant_id=tenant_id,
         user_id=user_id,
         actor_type="user",
+        roles=roles or ["member"],
     )
 
 
@@ -266,7 +264,7 @@ def budget_guard() -> ToolRuntimeResult[None] | None:
 def record_audit(entry: dict[str, Any]) -> None:
     _audit_log.append(entry)
     # 保留最近 1000 条
-    if len(_audit_log) > 1000:
+    if len(_audit_log) > 1000 and not _audit_flush_inflight:
         del _audit_log[: len(_audit_log) - 1000]
 
     # 达到 500 条时异步刷入 Gateway
@@ -279,10 +277,11 @@ def _flush_audit_logs() -> None:
     """将审计日志批量写入 Gateway D1"""
     if not settings.memory_enabled:
         return
-    if not _audit_log:
+    global _audit_flush_inflight
+    if _audit_flush_inflight or not _audit_log:
         return
-    entries = _audit_log.copy()
-    _audit_log.clear()
+    entries = _audit_log[:500]
+    _audit_flush_inflight = True
     try:
         import asyncio
 
@@ -292,7 +291,15 @@ def _flush_audit_logs() -> None:
 
         # 执行 do flush 对应的业务逻辑
         async def _do_flush():
-            await client.write_audit_logs(entries)
+            global _audit_flush_inflight
+            try:
+                await client.write_audit_logs(entries)
+                del _audit_log[: len(entries)]
+            finally:
+                await client.close()
+                if len(_audit_log) > 1000:
+                    del _audit_log[: len(_audit_log) - 1000]
+                _audit_flush_inflight = False
 
         # 在已有事件循环中提交后台任务
         try:
@@ -302,16 +309,9 @@ def _flush_audit_logs() -> None:
             else:
                 loop.run_until_complete(_do_flush())
         except RuntimeError:
-            # 无事件循环，创建新线程运行
-            import threading
-
-            # 执行 run 对应的业务逻辑
-            def _run():
-                asyncio.run(_do_flush())
-
-            threading.Thread(target=_run, daemon=True).start()
+            asyncio.run(_do_flush())
     except Exception:
-        pass  # 刷入失败静默降级
+        _audit_flush_inflight = False
 
 
 # ============ 核心执行器 ============
@@ -415,6 +415,23 @@ async def invoke_tool(
             ToolError(code=error_code, message=reason or "Permission denied"),
             duration_ms,
         )
+
+    # 高风险工具在确认服务上线前始终拒绝直接执行，防止模型自行批准副作用。
+    if executor.descriptor.approval_policy == "always":
+        duration_ms = int((time.perf_counter() - start_time) * 1000)
+        error = ToolError(code="APPROVAL_REQUIRED", message="该高风险操作需要用户显式确认")
+        _record_audit(
+            tool_name,
+            tool_version,
+            context,
+            executor.descriptor.risk_level,
+            False,
+            error.code,
+            duration_ms,
+            context.request_id,
+            context.trace_id,
+        )
+        return _error_envelope(call_id, tool_name, tool_version, error, duration_ms)
 
     # 4. 执行（带超时）
     raw_output: TOutput

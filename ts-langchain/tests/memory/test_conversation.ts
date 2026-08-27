@@ -2,17 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 
 import {
-  MAX_HISTORY_MESSAGES,
+  MAX_HISTORY_TOKENS,
   appendMessage,
   clearHistory,
   getHistory,
 } from "../../src/memory/conversation.js";
-import {
-  DARK_MODE_COMMAND,
-  DARK_MODE_DISABLED_REPLY,
-  DARK_MODE_ENABLED_REPLY,
-  getDarkModeHistoryThreadId,
-} from "../../src/commands/index.js";
 import {
   AgentService,
   BusinessErrorCode,
@@ -26,15 +20,35 @@ describe("conversation history", () => {
 
   afterEach(async () => await clearHistory(threadId));
 
-  it("bounds retained history and starts on a human message", async () => {
-    for (let index = 0; index < MAX_HISTORY_MESSAGES; index++) {
-      await appendMessage(threadId, new HumanMessage(`question ${index}`));
-      await appendMessage(threadId, new AIMessage(`answer ${index}`));
-    }
+  it("uses a token budget and retains a complete user turn", async () => {
+    await appendMessage(threadId, new HumanMessage(`old ${"中".repeat(MAX_HISTORY_TOKENS)}`));
+    await appendMessage(threadId, new AIMessage("old answer"));
+    await appendMessage(threadId, new HumanMessage("latest question"));
+    await appendMessage(threadId, new AIMessage("latest answer"));
 
     const history = await getHistory(threadId);
-    expect(history.length).toBeLessThanOrEqual(MAX_HISTORY_MESSAGES);
+    expect(history).toHaveLength(2);
     expect(history[0]._getType()).toBe("human");
+    expect(history[0].content).toBe("latest question");
+  });
+
+  it("reloads the newest persisted page instead of the oldest messages", async () => {
+    const conversation = await ConversationService.create("recent-page", "chat", "recent-user");
+    for (let index = 0; index < 210; index += 1) {
+      await ConversationService.appendUserMessage(conversation.id, `question ${index}`);
+      await ConversationService.appendAssistantMessage(conversation.id, {
+        id: `assistant-${index}`,
+        role: "assistant",
+        content: `answer ${index}`,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    await clearHistory(conversation.id);
+
+    const history = await getHistory(conversation.id);
+
+    expect(history.at(-1)?.content).toBe("answer 209");
+    expect(history.some((message) => message.content === "question 0")).toBe(false);
   });
 });
 
@@ -130,47 +144,4 @@ describe("ConversationService message history", () => {
     expect(events).toEqual([{ type: "text", text: "knowledge answer" }]);
   });
 
-  it("keeps dark mode and normal agent histories independent", async () => {
-    const conversation = await ConversationService.create("isolated personas");
-    const darkHistoryId = getDarkModeHistoryThreadId(conversation.id);
-    await ConversationService.appendUserMessage(conversation.id, "普通问题");
-    await ConversationService.appendAssistantMessage(conversation.id, {
-      id: "normal-answer",
-      role: "assistant",
-      content: "普通回答",
-      createdAt: new Date().toISOString(),
-    });
-    await ConversationService.appendUserMessage(conversation.id, DARK_MODE_COMMAND);
-    await ConversationService.appendAssistantMessage(conversation.id, {
-      id: "enable-dark",
-      role: "assistant",
-      content: DARK_MODE_ENABLED_REPLY,
-      createdAt: new Date().toISOString(),
-    });
-    await ConversationService.appendUserMessage(conversation.id, "大公鸡问题");
-    await ConversationService.appendAssistantMessage(conversation.id, {
-      id: "dark-answer",
-      role: "assistant",
-      content: "大公鸡回答",
-      createdAt: new Date().toISOString(),
-    });
-    await ConversationService.appendUserMessage(conversation.id, DARK_MODE_COMMAND);
-    await ConversationService.appendAssistantMessage(conversation.id, {
-      id: "disable-dark",
-      role: "assistant",
-      content: DARK_MODE_DISABLED_REPLY,
-      createdAt: new Date().toISOString(),
-    });
-    await ConversationService.appendUserMessage(conversation.id, "恢复普通问题");
-
-    expect((await getHistory(conversation.id)).map((message) => message.content)).toEqual([
-      "普通问题",
-      "普通回答",
-      "恢复普通问题",
-    ]);
-    expect((await getHistory(darkHistoryId)).map((message) => message.content)).toEqual([
-      "大公鸡问题",
-      "大公鸡回答",
-    ]);
-  });
 });

@@ -31,7 +31,12 @@ class VectorStore:
         return
 
     # 创建或注册 add documents 所需的数据
-    async def add_documents(self, chunks: list[dict], content_field: str = "content") -> None:
+    async def add_documents(
+        self,
+        chunks: list[dict],
+        user_id: str,
+        content_field: str = "content",
+    ) -> None:
         """上传文档到 Cloudflare Service"""
         import base64
         import hashlib
@@ -43,9 +48,12 @@ class VectorStore:
         # 取第一个 chunk 的 metadata 中的 document_id 作为文件名
         doc_id = chunks[0].get("metadata", {}).get("document_id", content_hash[:16])
 
-        # 使用默认用户上传（共享知识库）
+        if not user_id:
+            raise ValueError("知识库操作需要可信用户标识")
+
+        # 用户范围由调用服务端传入，不能退回共享默认命名空间。
         await self._client.upload_document(
-            user_id="default",
+            user_id=user_id,
             filename=f"{self._collection_name}_{doc_id}",
             content=base64.b64encode(full_content.encode()).decode(),
             category="general",
@@ -55,11 +63,14 @@ class VectorStore:
     async def search(
         self,
         query: str,
+        user_id: str,
         top_k: int = 5,
     ) -> list[dict]:
         """向量搜索文档"""
+        if not user_id:
+            raise ValueError("知识库操作需要可信用户标识")
         result = await self._client.search_documents(
-            user_id="default",
+            user_id=user_id,
             query=query,
             limit=top_k,
         )
@@ -73,8 +84,10 @@ class VectorStore:
         ]
 
     # 删除或清理 delete document 对应的数据
-    async def delete_document(self, document_id: str) -> None:
+    async def delete_document(self, document_id: str, user_id: str) -> None:
         """删除一份文档的全部向量"""
+        if not user_id:
+            raise ValueError("知识库操作需要可信用户标识")
         await self._client.delete_document(document_id)
 
     # 删除或清理 delete collection 对应的数据

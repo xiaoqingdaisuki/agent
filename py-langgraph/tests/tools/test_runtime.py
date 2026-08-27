@@ -38,7 +38,7 @@ def reset_state():
     yield
 
 
-def _make_context(user_id: str = "user_1", tenant_id: str = "tenant_1") -> ToolCallContext:
+def _make_context(user_id: str = "user_1", tenant_id: str = "tenant_1", roles: list[str] | None = None) -> ToolCallContext:
     return ToolCallContext(
         request_id="req_test",
         trace_id="trace_test",
@@ -46,6 +46,7 @@ def _make_context(user_id: str = "user_1", tenant_id: str = "tenant_1") -> ToolC
         tenant_id=tenant_id,
         user_id=user_id,
         actor_type="user",
+        roles=roles or ["member"],
     )
 
 
@@ -232,7 +233,7 @@ class TestInvokeTool:
             side_effect="read", timeout_ms=5000, required_permissions=["test.read"],
         )
         executor = ToolExecutor(descriptor=desc, execute_fn=return_secrets)
-        result = await invoke_tool(executor, {}, _make_context(user_id="u1", tenant_id="t1"))
+        result = await invoke_tool(executor, {}, _make_context(user_id="u1", tenant_id="t1", roles=["admin"]))
         assert result.ok is True
         assert result.data["api_key"] == "[REDACTED]"
         assert result.data["result"] == "ok"

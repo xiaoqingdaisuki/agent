@@ -418,6 +418,82 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
+      "/internal/v1/conversations/{conversation_id}/turns": {
+        post: {
+          tags: ["Turn"],
+          summary: "创建或复用幂等 Turn",
+          parameters: [
+            { name: "conversation_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["user_id", "client_message_id"],
+                  properties: {
+                    id: { type: "string", maxLength: 128 },
+                    user_id: { type: "string", maxLength: 128 },
+                    client_message_id: { type: "string", maxLength: 128 },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "已存在的 Turn", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } },
+            "201": { description: "Turn 已创建", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } },
+            "404": { $ref: "#/components/responses/NotFound" },
+            "409": { description: "会话中已有活动 Turn", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } },
+          },
+        },
+      },
+      "/internal/v1/turns/{turn_id}": {
+        get: {
+          tags: ["Turn"],
+          summary: "读取 Turn 状态",
+          parameters: [
+            { name: "turn_id", in: "path", required: true, schema: { type: "string" } },
+            { name: "user_id", in: "query", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": { description: "Turn 状态", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } },
+            "404": { $ref: "#/components/responses/NotFound" },
+          },
+        },
+        patch: {
+          tags: ["Turn"],
+          summary: "更新 Turn 状态",
+          parameters: [
+            { name: "turn_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["user_id", "status"],
+                  properties: {
+                    user_id: { type: "string", maxLength: 128 },
+                    status: { type: "string", enum: ["pending", "streaming", "completed", "failed", "cancelled"] },
+                    user_message_id: { type: "string", maxLength: 128 },
+                    assistant_message_id: { type: "string", maxLength: 128 },
+                    assistant_content_json: { type: "string", maxLength: 1000000 },
+                    error_code: { type: "string", maxLength: 128 },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Turn 已更新", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } },
+            "404": { $ref: "#/components/responses/NotFound" },
+            "409": { description: "非法状态迁移", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } },
+          },
+        },
+      },
       "/internal/v1/conversations/{conversation_id}/messages:batch": {
         post: {
           tags: ["Message"],
@@ -450,6 +526,7 @@ function getOpenApiSpec(): Record<string, unknown> {
             { name: "conversation_id", in: "path", required: true, schema: { type: "string" } },
             { name: "limit", in: "query", schema: { type: "integer", default: 50 } },
             { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+            { name: "direction", in: "query", schema: { type: "string", enum: ["asc", "desc"], default: "asc" } },
           ],
           responses: {
             "200": {

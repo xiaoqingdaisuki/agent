@@ -6,7 +6,7 @@ from starlette.requests import Request
 from src.api.request_logging import log_request_error, sanitize_log_value
 
 
-def test_request_log_preserves_content_and_redacts_sensitive_fields():
+def test_request_log_redacts_sensitive_fields_without_transforming_safe_values():
     payload = sanitize_log_value(
         {
             "content": "触发错误的测试请求",
@@ -60,7 +60,7 @@ def test_request_log_contains_ts_compatible_error_and_request_context(caplog):
         "url": "http://testserver/api/v1/conversations/conv_1/messages/stream?debug=true",
         "params": {},
         "query": {"debug": "true"},
-        "body": {"content": "trigger", "api_key": "[REDACTED]"},
+        "body": {"present": True, "fields": ["api_key", "content"]},
         "stream": True,
     }
     assert record.exc_info is not None

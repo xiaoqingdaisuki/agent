@@ -15,7 +15,9 @@ import {
   CapabilitiesService,
   BusinessError,
   BusinessErrorCode,
+  invalidateMemoryContext,
   waitForConversationPersistence,
+  TurnService,
 } from "../../../services/index.js";
 import {
   ProfileService,
@@ -27,9 +29,10 @@ import type {
   Document,
   Message,
 } from "../../../services/index.js";
-import { requireAgentUserId } from "../../middleware/auth.js";
+import { getAgentToolIdentity, requireAgentUserId } from "../../middleware/auth.js";
 import { logRequestError } from "../../middleware/error.js";
-import { encodeSseDone, encodeSseEvent } from "../../sse.js";
+import { SseEventSequencer, encodeSseHeartbeat } from "../../sse.js";
+import { getReadiness } from "../../health.js";
 
 // 向 SSE 客户端写入一条事件，并在内核背压时等待 drain。
 async function writeSse(raw: any, data: string): Promise<void> {
@@ -89,6 +92,11 @@ export async function registerV1Routes(app: FastifyInstance) {
     version: "0.2.0",
     timestamp: new Date().toISOString(),
   }));
+  app.get("/health/live", async () => ({ status: "ok", live: true, version: "0.2.0" }));
+  app.get("/health/ready", async (_request, reply) => {
+    const readiness = getReadiness();
+    return reply.status(readiness.ready ? 200 : 503).send(readiness);
+  });
 
   // ============ 会话管理 ==========
 
@@ -187,12 +195,14 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string };
-    Body: { content: string; user_id?: string };
+    Body: { content: string; user_id?: string; client_message_id?: string };
   }>("/conversations/:id/messages", async (request, reply) => {
+    let activeTurn: { id: string; userId: string } | null = null;
     try {
-      const { content, user_id } = request.body;
+      const { content, user_id, client_message_id } = request.body;
       const convId = request.params.id;
       const trustedUserId = requireAgentUserId(request, user_id);
+      const toolIdentity = getAgentToolIdentity(request, user_id);
 
       // 确保会话存在于当前仓储并校验用户归属。
       await ConversationService.ensure(convId, trustedUserId);
@@ -204,7 +214,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
         });
       }
-      if (typeof content !== "string" || content.length < 1) {
+      if (typeof content !== "string" || content.length < 1 || content.length > 16_000) {
         return reply.status(400).send({
           error: {
             code: BusinessErrorCode.INVALID_REQUEST,
@@ -213,16 +223,31 @@ export async function registerV1Routes(app: FastifyInstance) {
         });
       }
 
+      const turnResult = await TurnService.begin(convId, trustedUserId, client_message_id);
+      if (!turnResult.created) {
+        const completed = TurnService.completedMessage(turnResult.turn);
+        if (completed) return reply.status(200).send({ ...serializeMessage(completed), turn_id: turnResult.turn.id });
+        throw TurnService.duplicateError(turnResult.turn.status);
+      }
       await waitForConversationPersistence(convId);
-      await ConversationService.appendUserMessage(convId, content);
+      const userMessage = await ConversationService.appendUserMessage(convId, content);
+      await TurnService.start(turnResult.turn.id, trustedUserId, userMessage.id);
+      activeTurn = { id: turnResult.turn.id, userId: trustedUserId };
       const assistantMessage = await AgentService.chat(
         convId,
         content,
         trustedUserId,
+        toolIdentity,
       );
+      const persistedAssistant = (await ConversationService.getMessages(convId)).reverse().find((item) => item.role === "assistant") ?? assistantMessage;
+      await TurnService.complete(turnResult.turn.id, trustedUserId, persistedAssistant);
+      activeTurn = null;
 
-      return reply.status(200).send(serializeMessage(assistantMessage));
+      return reply.status(200).send({ ...serializeMessage(persistedAssistant), turn_id: turnResult.turn.id });
     } catch (error: any) {
+      if (activeTurn) {
+        await TurnService.terminate(activeTurn.id, activeTurn.userId, false, error?.code || "INTERNAL_ERROR").catch(() => undefined);
+      }
       if (error instanceof BusinessError) {
         return reply.status(error.statusCode).send(error.toJSON());
       }
@@ -237,11 +262,12 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string };
-    Body: { content: string; user_id?: string };
+    Body: { content: string; user_id?: string; client_message_id?: string };
   }>("/conversations/:id/messages/stream", async (request, reply) => {
-    const { content, user_id } = request.body;
+    const { content, user_id, client_message_id } = request.body;
     const convId = request.params.id;
     const trustedUserId = requireAgentUserId(request, user_id);
+    const toolIdentity = getAgentToolIdentity(request, user_id);
 
     // 确保会话存在于当前仓储并校验已有 thread_id 的用户归属。
     await ConversationService.ensure(convId, trustedUserId);
@@ -252,7 +278,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
       });
     }
-    if (typeof content !== "string" || content.length < 1) {
+    if (typeof content !== "string" || content.length < 1 || content.length > 16_000) {
       return reply.status(400).send({
         error: {
           code: BusinessErrorCode.INVALID_REQUEST,
@@ -261,8 +287,17 @@ export async function registerV1Routes(app: FastifyInstance) {
       });
     }
 
-    await waitForConversationPersistence(convId);
-    await ConversationService.appendUserMessage(convId, content);
+    const turnResult = await TurnService.begin(convId, trustedUserId, client_message_id);
+    const completed = turnResult.created ? null : TurnService.completedMessage(turnResult.turn);
+    if (!turnResult.created && !completed) {
+      const error = TurnService.duplicateError(turnResult.turn.status);
+      return reply.status(error.statusCode).send(error.toJSON());
+    }
+    if (turnResult.created) {
+      await waitForConversationPersistence(convId);
+      const userMessage = await ConversationService.appendUserMessage(convId, content);
+      await TurnService.start(turnResult.turn.id, trustedUserId, userMessage.id);
+    }
     reply.hijack();
     reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
@@ -277,21 +312,34 @@ export async function registerV1Routes(app: FastifyInstance) {
     };
     request.raw.once("aborted", abortOnDisconnect);
     reply.raw.once("close", abortOnDisconnect);
+    const heartbeat = setInterval(() => {
+      void writeSse(reply.raw, encodeSseHeartbeat());
+    }, 15_000);
+    heartbeat.unref();
+    const sseEvents = new SseEventSequencer(turnResult.turn.id);
+    let fullAnswer = "";
+    let turnCompleted = Boolean(completed);
 
     try {
       await writeSse(
         reply.raw,
-        encodeSseEvent("meta", { conversation_id: convId }),
+        sseEvents.event("meta", { conversation_id: convId, thread_id: convId, turn_id: turnResult.turn.id }),
       );
+      if (completed) {
+        await writeSse(reply.raw, sseEvents.event("text", { delta: completed.content, text: completed.content, partial: false, replayed: true }));
+        return;
+      }
       for await (const event of AgentService.chatStream(
         convId,
         content,
         trustedUserId,
         requestController.signal,
+        toolIdentity,
       )) {
         let eventName: string;
         let payload: Record<string, unknown>;
         if (event.type === "text") {
+          fullAnswer += event.text;
           eventName = "text";
           payload = event.partial === undefined
             ? { delta: event.text, text: event.text }
@@ -315,9 +363,13 @@ export async function registerV1Routes(app: FastifyInstance) {
         }
         await writeSse(
           reply.raw,
-          encodeSseEvent(eventName, payload),
+          sseEvents.event(eventName, payload),
         );
       }
+      const assistantMessage = (await ConversationService.getMessages(convId)).reverse().find((item) => item.role === "assistant")
+        ?? { id: crypto.randomUUID(), role: "assistant" as const, content: fullAnswer, createdAt: new Date().toISOString() };
+      await TurnService.complete(turnResult.turn.id, trustedUserId, assistantMessage);
+      turnCompleted = true;
     } catch (error: unknown) {
       logRequestError(request, error, {
         conversation_id: convId,
@@ -335,7 +387,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       try {
         await writeSse(
           reply.raw,
-          encodeSseEvent("error", {
+          sseEvents.event("error", {
             ok: false,
             error: businessError.toJSON().error,
           }),
@@ -343,11 +395,20 @@ export async function registerV1Routes(app: FastifyInstance) {
       } catch {
         // raw response already closed / unreachable — nothing to write
       }
+      if (!turnCompleted) {
+        await TurnService.terminate(
+          turnResult.turn.id,
+          trustedUserId,
+          requestController.signal.aborted,
+          requestController.signal.aborted ? "CLIENT_CANCELLED" : (error as any)?.code || "INTERNAL_ERROR",
+        ).catch(() => undefined);
+      }
     } finally {
+      clearInterval(heartbeat);
       request.raw.removeListener("aborted", abortOnDisconnect);
       reply.raw.removeListener("close", abortOnDisconnect);
       try {
-        await writeSse(reply.raw, encodeSseDone());
+        await writeSse(reply.raw, sseEvents.done());
       } catch {
         // raw response already closed / unreachable — nothing to write
       } finally {
@@ -375,6 +436,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.post("/knowledge/documents", async (request, reply) => {
     try {
+      const userId = requireAgentUserId(request);
       const file = await request.file();
 
       if (!file) {
@@ -397,6 +459,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         categoryField?.type === "field"
           ? String(categoryField.value)
           : undefined,
+        userId,
       );
 
       return reply.status(201).send(serializeDocument(doc));
@@ -413,15 +476,15 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   });
 
-  app.get("/knowledge/documents", async () => {
-    const docs = await KnowledgeService.listDocuments();
+  app.get("/knowledge/documents", async (request) => {
+    const docs = await KnowledgeService.listDocuments(requireAgentUserId(request));
     return docs.map(serializeDocument);
   });
 
   app.get<{ Params: { id: string } }>(
     "/knowledge/documents/:id",
     async (request, reply) => {
-      const doc = await KnowledgeService.getDocument(request.params.id);
+      const doc = await KnowledgeService.getDocument(request.params.id, requireAgentUserId(request));
       if (!doc) {
         return reply.status(404).send({
           error: { code: BusinessErrorCode.NOT_FOUND, message: "文档不存在" },
@@ -434,7 +497,7 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>(
     "/knowledge/documents/:id",
     async (request, reply) => {
-      const deleted = await KnowledgeService.deleteDocument(request.params.id);
+      const deleted = await KnowledgeService.deleteDocument(request.params.id, requireAgentUserId(request));
       if (!deleted) {
         return reply.status(404).send({
           error: { code: BusinessErrorCode.NOT_FOUND, message: "文档不存在" },
@@ -448,7 +511,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     "/knowledge/documents/:id/reindex",
     async (request, reply) => {
       try {
-        const doc = await KnowledgeService.reindexDocument(request.params.id);
+        const doc = await KnowledgeService.reindexDocument(request.params.id, requireAgentUserId(request));
         return serializeDocument(doc);
       } catch (error: any) {
         if (error instanceof BusinessError) {
@@ -468,6 +531,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     "/knowledge/search",
     async (request, reply) => {
       try {
+        const userId = requireAgentUserId(request);
         const { query, top_k = 5 } = request.body;
         if (typeof query !== "string" || query.length < 1) {
           return reply.status(400).send({
@@ -486,7 +550,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           });
         }
 
-        const results = await KnowledgeService.search(query, top_k);
+        const results = await KnowledgeService.search(query, top_k, userId);
         return { results };
       } catch (error: any) {
         if (error instanceof BusinessError) {
@@ -621,6 +685,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         category,
         importance,
       );
+      invalidateMemoryContext(trustedUserId);
       return reply.status(201).send(memory);
     } catch (error: any) {
       if (error instanceof BusinessError) {
@@ -653,6 +718,7 @@ export async function registerV1Routes(app: FastifyInstance) {
           error: { code: BusinessErrorCode.NOT_FOUND, message: "记忆不存在" },
         });
       }
+      invalidateMemoryContext(trustedUserId);
       return { success: true };
     } catch (error: any) {
       if (error instanceof BusinessError) {

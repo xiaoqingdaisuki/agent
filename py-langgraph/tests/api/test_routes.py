@@ -44,6 +44,15 @@ class TestHealthEndpoint:
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
 
+    @pytest.mark.asyncio
+    async def test_liveness_and_readiness_are_separate(self, client: AsyncClient):
+        live = await client.get("/api/v1/health/live")
+        ready = await client.get("/api/v1/health/ready")
+        assert live.status_code == 200
+        assert live.json()["live"] is True
+        assert ready.status_code in {200, 503}
+        assert "components" in ready.json()
+
 
 class TestCors:
     @pytest.mark.asyncio
@@ -67,30 +76,38 @@ class TestCors:
 
 class TestChatEndpoint:
     @pytest.mark.asyncio
+    async def test_same_client_message_id_reuses_completed_turn(self, client: AsyncClient):
+        conversation = await client.post(
+            "/api/v1/conversations",
+            json={"title": "idempotent", "user_id": "test-user"},
+        )
+        conversation_id = conversation.json()["id"]
+        payload = {
+            "content": "你好",
+            "user_id": "test-user",
+            "client_message_id": "client-message-1",
+        }
+        first = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages", json=payload
+        )
+        repeated = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages", json=payload
+        )
+
+        assert first.status_code == 200
+        assert repeated.status_code == 200
+        assert repeated.json() == first.json()
+        messages = await client.get(
+            f"/api/v1/conversations/{conversation_id}/messages"
+        )
+        assert len(messages.json()) == 2
+
+    @pytest.mark.asyncio
     async def test_chat_requires_message(self, client: AsyncClient):
         """Chat endpoint should reject empty message"""
         response = await client.post("/chat", json={})
-        assert response.status_code == 422  # Validation error
-
-    @pytest.mark.asyncio
-    async def test_chat_handles_dark_mode_command_without_calling_model(
-        self, client: AsyncClient
-    ):
-        from src.commands import (
-            DARK_MODE_COMMAND,
-            DARK_MODE_ENABLED_REPLY,
-            clear_agent_command_state,
-        )
-
-        response = await client.post(
-            "/chat",
-            json={"message": f"user: {DARK_MODE_COMMAND}"},
-        )
-
-        assert response.status_code == 200
-        assert response.json()["reply"] == DARK_MODE_ENABLED_REPLY
-        assert response.json()["thread_id"]
-        clear_agent_command_state(response.json()["thread_id"])
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_chat_uses_local_fast_answer_for_greeting(self, client: AsyncClient):
@@ -120,6 +137,24 @@ class TestChatEndpoint:
 
 
 class TestToolsEndpoint:
+    @pytest.mark.asyncio
+    async def test_trusted_user_rate_limit_returns_retry_after(self, monkeypatch):
+        monkeypatch.setattr(settings, "user_rate_limit_rpm", 1)
+        transport = ASGITransport(app=create_app())
+        headers = {
+            "Authorization": "Bearer test-agent-secret",
+            "X-Agent-User-Id": "rate-limit-user",
+        }
+        async with AsyncClient(
+            transport=transport, base_url="http://test", headers=headers
+        ) as rate_client:
+            first = await rate_client.get("/tools")
+            limited = await rate_client.get("/tools")
+        assert first.status_code == 200
+        assert limited.status_code == 429
+        assert limited.headers["Retry-After"]
+        assert limited.json()["error"]["code"] == "RATE_LIMITED"
+
     @pytest.mark.asyncio
     async def test_list_tools(self, client: AsyncClient):
         """Tools endpoint should list available tools"""
@@ -183,13 +218,11 @@ class TestConversationEndpoints:
                 f"/api/v1/conversations/{conversation_id}",
                 headers=other_user_headers,
             )
-            from src.commands import DARK_MODE_COMMAND
-
             cross_user_chat = await raw_client.post(
                 "/chat",
                 headers=other_user_headers,
                 json={
-                    "message": DARK_MODE_COMMAND,
+                    "message": "你好",
                     "thread_id": conversation_id,
                     "user_id": "owner-b",
                 },
@@ -214,7 +247,7 @@ class TestConversationEndpoints:
     async def test_create_conversation_requires_title(self, client: AsyncClient):
         """Should reject conversation without title"""
         response = await client.post("/api/v1/conversations", json={})
-        assert response.status_code == 422
+        assert response.status_code == 400
 
     @pytest.mark.asyncio
     async def test_list_conversations(self, client: AsyncClient):
@@ -237,18 +270,16 @@ class TestConversationEndpoints:
 
     @pytest.mark.asyncio
     async def test_stream_message_uses_v1_conversation_protocol(self, client: AsyncClient):
-        from src.commands import DARK_MODE_COMMAND, DARK_MODE_ENABLED_REPLY
-
         created = await client.post("/api/v1/conversations", json={"title": "stream test"})
         conversation_id = created.json()["id"]
         response = await client.post(
             f"/api/v1/conversations/{conversation_id}/messages/stream",
-            json={"content": DARK_MODE_COMMAND},
+            json={"content": "你好"},
         )
 
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/event-stream")
-        assert DARK_MODE_ENABLED_REPLY in response.text
+        assert "你好！我是 AI 老情，很高兴为你服务。" in response.text
         assert "data: [DONE]" in response.text
 
 
@@ -257,9 +288,15 @@ class TestKnowledgeEndpoints:
     async def test_upload_accepts_multipart(self, client: AsyncClient, monkeypatch):
         from src.services import Document, KnowledgeService
 
-        async def fake_upload(buffer: bytes, filename: str, category: str | None = None):
+        async def fake_upload(
+            buffer: bytes,
+            filename: str,
+            category: str | None = None,
+            user_id: str | None = None,
+        ):
             assert buffer == b"hello"
             assert filename == "note.txt"
+            assert user_id == "test-user"
             return Document(filename, len(buffer), chunks=1, category=category)
 
         monkeypatch.setattr(KnowledgeService, "upload_document", fake_upload)
@@ -274,7 +311,6 @@ class TestKnowledgeEndpoints:
 class TestCompleteApiContract:
     @pytest.mark.asyncio
     async def test_legacy_and_v1_business_routes(self, client: AsyncClient, monkeypatch):
-        from src.commands import DARK_MODE_COMMAND, DARK_MODE_ENABLED_REPLY
         from src.services import Document, KnowledgeService
 
         document = Document(
@@ -285,19 +321,19 @@ class TestCompleteApiContract:
             document_id="doc_contract",
         )
 
-        async def fake_list_documents():
+        async def fake_list_documents(_user_id: str):
             return [document.to_dict()]
 
-        async def fake_get_document(_doc_id: str):
+        async def fake_get_document(_doc_id: str, _user_id: str):
             return document
 
-        async def fake_reindex_document(_doc_id: str):
+        async def fake_reindex_document(_doc_id: str, _user_id: str):
             return document
 
-        async def fake_delete_document(_doc_id: str):
+        async def fake_delete_document(_doc_id: str, _user_id: str):
             return True
 
-        async def fake_search(_query: str, _top_k: int = 5):
+        async def fake_search(_query: str, _top_k: int, _user_id: str):
             return [{"document_id": document.id, "content": "契约内容", "score": 0.9}]
 
         monkeypatch.setattr(KnowledgeService, "list_documents", fake_list_documents)
@@ -310,17 +346,17 @@ class TestCompleteApiContract:
         client.headers["X-Agent-User-Id"] = user_id
         legacy_chat = await client.post(
             "/chat",
-            json={"message": DARK_MODE_COMMAND, "user_id": user_id},
+            json={"message": "你好", "user_id": user_id},
         )
         assert legacy_chat.status_code == 200
-        assert legacy_chat.json()["reply"] == DARK_MODE_ENABLED_REPLY
+        assert legacy_chat.json()["reply"] == "你好！我是 AI 老情，很高兴为你服务。"
 
         legacy_stream = await client.post(
             "/stream",
-            json={"message": DARK_MODE_COMMAND, "user_id": user_id},
+            json={"message": "你好", "user_id": user_id},
         )
         assert legacy_stream.status_code == 200
-        assert DARK_MODE_ENABLED_REPLY in legacy_stream.text
+        assert "你好！我是 AI 老情，很高兴为你服务。" in legacy_stream.text
         assert "data: [DONE]" in legacy_stream.text
 
         created = await client.post(
@@ -336,16 +372,16 @@ class TestCompleteApiContract:
 
         stream = await client.post(
             f"/api/v1/conversations/{conversation_id}/messages/stream",
-            json={"content": DARK_MODE_COMMAND, "user_id": user_id},
+            json={"content": "你好", "user_id": user_id},
         )
         assert stream.status_code == 200
-        assert DARK_MODE_ENABLED_REPLY in stream.text
+        assert "你好！我是 AI 老情，很高兴为你服务。" in stream.text
         assert "data: [DONE]" in stream.text
 
         messages = await client.get(f"/api/v1/conversations/{conversation_id}/messages")
         assert [(item["role"], item["content"]) for item in messages.json()] == [
-            ("user", DARK_MODE_COMMAND),
-            ("assistant", DARK_MODE_ENABLED_REPLY),
+            ("user", "你好"),
+            ("assistant", "你好！我是 AI 老情，很高兴为你服务。"),
         ]
         cleared = await client.delete(f"/api/v1/conversations/{conversation_id}/messages")
         assert cleared.json() == {"success": True}
@@ -393,7 +429,7 @@ class TestCompleteApiContract:
             await client.delete(f"/api/v1/knowledge/documents/{document.id}")
         ).json() == {"success": True}
 
-        assert (await client.post("/images/generations", json={})).status_code == 422
+        assert (await client.post("/images/generations", json={})).status_code == 400
         assert (
             await client.delete(f"/api/v1/conversations/{conversation_id}")
         ).json() == {"success": True}

@@ -83,6 +83,8 @@ export interface ToolCallContext {
   tenant_id: string;
   user_id: string;
   actor_type: ActorType;
+  /** 仅由受信网关注入的角色，模型和请求体不能覆盖。 */
+  roles?: string[];
   agent_id?: string;
   locale?: string;
   deadline?: string;

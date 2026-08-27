@@ -11,8 +11,10 @@ Service Layer — 业务逻辑编排
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+import uuid
 from datetime import datetime
 from enum import Enum
 from typing import Optional
@@ -225,6 +227,27 @@ def extract_agent_output_text(output) -> str:
     )
 
 
+# 判断异常链中是否包含模型或网络读取超时。
+def is_model_timeout_error(error: BaseException) -> bool:
+    current: BaseException | None = error
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if current.__class__.__name__ in {"APITimeoutError", "ReadTimeout"}:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+# 判断用户是否明确要求查询知识库，以绕过不稳定的模型工具规划。
+def is_explicit_knowledge_query(content: str) -> bool:
+    normalized = re.sub(r"\s+", "", content)
+    return bool(
+        re.search(r"(?:从|在|查询|搜索|检索|查找).{0,10}(?:知识库|资料库)", normalized)
+        or re.search(r"(?:知识库|资料库).{0,10}(?:查询|搜索|检索|查找)", normalized)
+    )
+
+
 XML_TOOL_STREAM_MARKERS = ("<invoke", "<function=", "<dots_function_call")
 
 
@@ -274,14 +297,14 @@ def strip_xml_tool_stream(text: str) -> str:
     return drain_xml_tool_stream(text, final=True)[0].strip()
 
 
-# 在回答生成后异步保存会话、历史和记忆，保证失败不影响已发送内容。
+# 串行持久化一个完整回答，保证流结束前会话与历史已经一致。
 def schedule_answer_persistence(
     conversation_id: str,
     content: str,
     answer: str,
     user_id: str = "",
-) -> None:
-    # 在后台任务中顺序落库回答、问答历史、抽取记忆并刷新画像。
+) -> asyncio.Task[None]:
+    # 同步写入会话、问答历史、记忆和画像。
     def persist() -> None:
         ConversationService.append_assistant_message(
             conversation_id,
@@ -292,10 +315,34 @@ def schedule_answer_persistence(
             from src.profile.service import HistoryService, MemoryService, ProfileService
 
             HistoryService.record(user_id, conversation_id, content, answer)
-            MemoryService.extract_memories_from_conversation(user_id, content, answer)
+            if settings.memory_auto_extract:
+                MemoryService.extract_memories_from_conversation(user_id, content, answer)
             ProfileService.update(user_id)
 
-    schedule_background_task(f"answer:{conversation_id}", persist)
+    label = f"answer:{conversation_id}"
+    previous = _background_chains.get(label)
+
+    # 串行执行同一会话的回答落库，失败交给当前请求转换为统一错误。
+    async def runner() -> None:
+        if previous:
+            try:
+                await asyncio.shield(previous)
+            except Exception:
+                pass
+        await asyncio.to_thread(persist)
+
+    task = asyncio.create_task(runner(), name=f"agent-answer-{conversation_id}")
+    _background_tasks.add(task)
+    _background_chains[label] = task
+
+    # 清理已完成的回答任务，避免进程内状态无限增长。
+    def cleanup(done_task: asyncio.Task) -> None:
+        _background_tasks.discard(done_task)
+        if _background_chains.get(label) is done_task:
+            _background_chains.pop(label, None)
+
+    task.add_done_callback(cleanup)
+    return task
 
 
 # 将模型完整回答按可见字符拆成平滑的 SSE 分片，避免依赖厂商工具流格式
@@ -304,18 +351,6 @@ async def stream_text_chunks(text: str):
         yield text[index : index + STREAM_FALLBACK_CHUNK_SIZE]
         if index + STREAM_FALLBACK_CHUNK_SIZE < len(text):
             await asyncio.sleep(STREAM_FALLBACK_INTERVAL_SECONDS)
-
-
-# 从会话记录恢复大公鸡模式，避免进程内状态丢失后人设失效
-def restore_command_state_from_conversation(conversation_id: str) -> None:
-    from src.commands import restore_agent_command_state
-
-    user_messages = [
-        str(message["content"])
-        for message in ConversationService.get_messages(conversation_id)
-        if message.get("role") == "user"
-    ]
-    restore_agent_command_state(conversation_id, user_messages)
 
 
 # ============ 错误码 ============
@@ -331,6 +366,8 @@ class BusinessErrorCode(str, Enum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
     AGENT_TIMEOUT = "AGENT_TIMEOUT"
+    TURN_IN_PROGRESS = "TURN_IN_PROGRESS"
+    TURN_ALREADY_FINISHED = "TURN_ALREADY_FINISHED"
 
 
 class BusinessError(Exception):
@@ -622,15 +659,13 @@ class ConversationService:
             )
 
     @staticmethod
-    # 删除会话及其关联的消息和命令状态，同时从 D1 删除
+    # 删除会话及其关联消息，同时从 D1 删除
     def delete(conv_id: str) -> bool:
-        from src.commands import clear_agent_command_state
         from src.repositories import get_repositories
 
         deleted = get_repositories().delete_conversation(conv_id)
         if not deleted:
             return False
-        clear_agent_command_state(conv_id)
         _conversations.pop(conv_id, None)
         return True
 
@@ -763,12 +798,19 @@ class ConversationService:
     def get_agent_conversation_history(
         conv_id: str, current_content: str | None = None
     ) -> list[dict[str, str]]:
+        try:
+            from src.repositories import get_repositories
+
+            recent, _total = get_repositories().get_messages(conv_id, 200, 0, "desc")
+            source_messages = list(reversed(recent))
+        except Exception:
+            source_messages = ConversationService.get_messages(conv_id)
         history = [
             {
                 "role": str(message.get("role", "")),
                 "content": str(message.get("content", "")),
             }
-            for message in ConversationService.get_messages(conv_id)
+            for message in source_messages
             if message.get("role") in {"user", "assistant"}
             and str(message.get("content", "")).strip()
         ]
@@ -786,9 +828,6 @@ class ConversationService:
     def clear_messages(conv_id: str) -> None:
         conv = _conversations.get(conv_id)
         if conv:
-            from src.commands import clear_agent_command_state
-
-            clear_agent_command_state(conv_id)
             conv.messages.clear()
             conv.message_count = 0
         from src.repositories import get_repositories
@@ -802,6 +841,8 @@ class ConversationService:
 _documents: dict[str, Document] = {}
 _document_contents: dict[str, tuple[bytes, str]] = {}
 _document_chunks: dict[str, list[str]] = {}
+_document_owners: dict[str, str] = {}
+_LOCAL_KNOWLEDGE_SCOPE = "local"
 _local_search_entries: dict[str, dict] = {}
 _local_search_postings: dict[str, set[str]] = {}
 _local_document_search_keys: dict[str, set[str]] = {}
@@ -859,7 +900,7 @@ def _replace_local_document_search_index(document_id: str, chunks: list[str]) ->
 
 
 # 在关闭 Cloudflare Memory 时通过倒排索引执行有界 Top-K 词法检索。
-def _search_local_documents(query: str, top_k: int) -> list[dict]:
+def _search_local_documents(query: str, top_k: int, user_id: str) -> list[dict]:
     normalized_query = query.strip().lower()
     query_characters = {character for character in normalized_query if not character.isspace()}
     if not normalized_query or not query_characters:
@@ -873,7 +914,7 @@ def _search_local_documents(query: str, top_k: int) -> list[dict]:
     for key in candidate_keys:
         entry = _local_search_entries.get(key)
         document = _documents.get(entry["document_id"]) if entry else None
-        if not entry or not document:
+        if not entry or not document or _document_owners.get(document.id) != user_id:
             continue
         exact_match = normalized_query in entry["normalized_content"]
         matched_characters = (
@@ -905,7 +946,12 @@ class KnowledgeService:
 
     @staticmethod
     # 创建或注册 upload document 所需的数据
-    async def upload_document(buffer: bytes, filename: str, category: str = None) -> Document:
+    async def upload_document(
+        buffer: bytes,
+        filename: str,
+        category: str = None,
+        user_id: str = _LOCAL_KNOWLEDGE_SCOPE,
+    ) -> Document:
         """上传并索引文档"""
         try:
             chunks = _split_local_document(buffer, filename)
@@ -917,6 +963,7 @@ class KnowledgeService:
                     category=category,
                 )
                 _documents[document.id] = document
+                _document_owners[document.id] = user_id
                 _document_contents[document.id] = (buffer, filename)
                 _document_chunks[document.id] = chunks
                 _replace_local_document_search_index(document.id, chunks)
@@ -929,7 +976,7 @@ class KnowledgeService:
             client = CloudflareMemoryClient()
             # 使用默认用户上传（共享知识库）
             result = await client.upload_document(
-                user_id="default",
+                user_id=user_id,
                 filename=filename,
                 content=base64.b64encode(buffer).decode(),
                 category=category or "general",
@@ -946,6 +993,7 @@ class KnowledgeService:
             )
 
             _documents[document.id] = document
+            _document_owners[document.id] = user_id
             _document_contents[document.id] = (buffer, filename)
             _document_chunks[document.id] = chunks
             _replace_local_document_search_index(document.id, chunks)
@@ -960,18 +1008,18 @@ class KnowledgeService:
 
     @staticmethod
     # 获取 list documents 对应的数据
-    async def list_documents() -> list[dict]:
+    async def list_documents(user_id: str = _LOCAL_KNOWLEDGE_SCOPE) -> list[dict]:
         """列出文档；本地模式读取进程内索引，网关模式以远端仓储为权威"""
         if not settings.memory_enabled:
             return sorted(
-                [document.to_dict() for document in _documents.values()],
+                [document.to_dict() for document in _documents.values() if _document_owners.get(document.id) == user_id],
                 key=lambda document: document["created_at"],
                 reverse=True,
             )
         try:
             from src.clients.memory_gateway import CloudflareMemoryClient
             client = CloudflareMemoryClient()
-            result = await client.list_documents("default", limit=100)
+            result = await client.list_documents(user_id, limit=100)
             docs = [
                 {
                     "id": d["id"],
@@ -1001,6 +1049,7 @@ class KnowledgeService:
                         created_at=d["created_at"],
                     )
                     _documents[d["id"]] = doc
+                _document_owners[d["id"]] = user_id
 
                 # 缓存原始内容用于 reindex
                 content_text = d.get("content_text", "")
@@ -1009,19 +1058,23 @@ class KnowledgeService:
             return sorted(docs, key=lambda d: d["created_at"], reverse=True)
         except Exception:
             return sorted(
-                [d.to_dict() for d in _documents.values()],
+                [d.to_dict() for d in _documents.values() if _document_owners.get(d.id) == user_id],
                 key=lambda d: d["created_at"],
                 reverse=True,
             )
 
     @staticmethod
     # 获取 get document 对应的数据
-    async def get_document(doc_id: str) -> Document | None:
+    async def get_document(doc_id: str, user_id: str = _LOCAL_KNOWLEDGE_SCOPE) -> Document | None:
         """获取文档详情；本地模式只读进程内数据，网关模式允许远端回源"""
         cached = _documents.get(doc_id)
         if cached:
-            return cached
+            return cached if _document_owners.get(doc_id) == user_id else None
         if not settings.memory_enabled:
+            return None
+
+        scoped_documents = await KnowledgeService.list_documents(user_id)
+        if not any(document["id"] == doc_id for document in scoped_documents):
             return None
 
         # 从当前仓储回源并刷新服务缓存。
@@ -1042,6 +1095,7 @@ class KnowledgeService:
                 created_at=doc_data.get("created_at", datetime.now().isoformat()),
             )
             _documents[doc_id] = doc
+            _document_owners[doc_id] = user_id
 
             # 缓存原始内容用于 reindex
             content_text = doc_data.get("content_text", "")
@@ -1058,13 +1112,16 @@ class KnowledgeService:
 
     @staticmethod
     # 删除或清理 delete document 对应的数据
-    async def delete_document(doc_id: str) -> bool:
+    async def delete_document(doc_id: str, user_id: str = _LOCAL_KNOWLEDGE_SCOPE) -> bool:
         """删除指定文档及其向量索引"""
+        if not await KnowledgeService.get_document(doc_id, user_id):
+            return False
         if not settings.memory_enabled:
             _remove_local_document_search_index(doc_id)
             deleted = _documents.pop(doc_id, None) is not None
             _document_contents.pop(doc_id, None)
             _document_chunks.pop(doc_id, None)
+            _document_owners.pop(doc_id, None)
             return deleted
         try:
             from src.clients.memory_gateway import CloudflareMemoryClient
@@ -1081,6 +1138,7 @@ class KnowledgeService:
             ) from exc
 
         _documents.pop(doc_id, None)
+        _document_owners.pop(doc_id, None)
         _document_contents.pop(doc_id, None)
         _document_chunks.pop(doc_id, None)
         _remove_local_document_search_index(doc_id)
@@ -1088,8 +1146,10 @@ class KnowledgeService:
 
     @staticmethod
     # 执行 reindex document 对应的业务逻辑
-    async def reindex_document(doc_id: str) -> Document:
+    async def reindex_document(doc_id: str, user_id: str = _LOCAL_KNOWLEDGE_SCOPE) -> Document:
         """重新索引；本地模式重切进程内原文，网关模式允许远端回源"""
+        if not await KnowledgeService.get_document(doc_id, user_id):
+            raise BusinessError(BusinessErrorCode.NOT_FOUND, "Document not found", 404)
         if not settings.memory_enabled:
             document = _documents.get(doc_id)
             stored = _document_contents.get(doc_id)
@@ -1107,7 +1167,7 @@ class KnowledgeService:
             client = CloudflareMemoryClient()
             await client.reindex_document(doc_id)
             _documents.pop(doc_id, None)
-            document = await KnowledgeService.get_document(doc_id)
+            document = await KnowledgeService.get_document(doc_id, user_id)
             if not document:
                 raise BusinessError(BusinessErrorCode.NOT_FOUND, "Document not found", 404)
             return document
@@ -1128,16 +1188,20 @@ class KnowledgeService:
 
     @staticmethod
     # 查询 search 对应的结果
-    async def search(query: str, top_k: int = 5) -> list[dict]:
+    async def search(
+        query: str,
+        top_k: int = 5,
+        user_id: str = _LOCAL_KNOWLEDGE_SCOPE,
+    ) -> list[dict]:
         """知识检索"""
         if not settings.memory_enabled:
-            return _search_local_documents(query, top_k)
+            return _search_local_documents(query, top_k, user_id)
         try:
             from src.clients.memory_gateway import CloudflareMemoryClient
 
             client = CloudflareMemoryClient()
             result = await client.search_documents(
-                user_id="default",
+                user_id=user_id,
                 query=query,
                 limit=top_k,
             )
@@ -1159,6 +1223,112 @@ class KnowledgeService:
                 503,
             )
 
+    @staticmethod
+    # 直接格式化知识库检索结果，避免再次调用模型造成超时。
+    async def chat(
+        content: str,
+        _history: list | None = None,
+        user_id: str = _LOCAL_KNOWLEDGE_SCOPE,
+    ) -> dict:
+        results = await KnowledgeService.search(content, 5, user_id)
+        if not results:
+            return {
+                "output": "📚 知识库中未找到与您问题相关的内容。请尝试换一种方式提问，或联系管理员更新知识库。"
+            }
+        context = "\n\n".join(
+            f"[文档 {index}] {result['document_name']} (相关度: {float(result['score']):.2f})\n{result['content']}"
+            for index, result in enumerate(results, start=1)
+        )
+        return {"output": f"📚 根据知识库检索结果：\n\n{context}"}
+
+
+# ============ Turn Service ============
+
+
+class TurnService:
+    # 创建或复用客户端消息对应的持久化 Turn。
+    @staticmethod
+    def begin(conversation_id: str, user_id: str, client_message_id: str | None = None) -> tuple[dict, bool]:
+        from src.repositories import get_repositories
+        from src.clients.memory_gateway import MemoryGatewayError
+
+        try:
+            return get_repositories().create_or_get_turn(
+                conversation_id, user_id, client_message_id or str(uuid.uuid4())
+            )
+        except MemoryGatewayError as error:
+            if error.code == "MEMORY_CONVERSATION_BUSY":
+                raise BusinessError(
+                    BusinessErrorCode.TURN_IN_PROGRESS,
+                    "该会话已有请求正在处理中",
+                    409,
+                ) from error
+            raise
+
+    # 将新 Turn 标记为执行中并关联已落库的用户消息。
+    @staticmethod
+    def start(turn_id: str, user_id: str, user_message_id: str) -> dict:
+        from src.repositories import get_repositories
+
+        return get_repositories().update_turn(
+            turn_id, user_id, status="streaming", user_message_id=user_message_id
+        )
+
+    # 将 Turn 完成并保存可直接复用的助手响应。
+    @staticmethod
+    def complete(turn_id: str, user_id: str, message: Message) -> dict:
+        from src.repositories import get_repositories
+
+        return get_repositories().update_turn(
+            turn_id,
+            user_id,
+            status="completed",
+            assistant_message_id=message.id,
+            assistant_content_json=json.dumps(message.to_dict(), ensure_ascii=False),
+        )
+
+    # 将执行异常或客户端取消记录为终态。
+    @staticmethod
+    def terminate(turn_id: str, user_id: str, cancelled: bool, error_code: str) -> dict:
+        from src.repositories import get_repositories
+
+        return get_repositories().update_turn(
+            turn_id,
+            user_id,
+            status="cancelled" if cancelled else "failed",
+            error_code=error_code,
+        )
+
+    # 从已完成 Turn 中恢复助手响应。
+    @staticmethod
+    def completed_message(turn: dict) -> Message | None:
+        if turn.get("status") != "completed" or not turn.get("assistant_content_json"):
+            return None
+        try:
+            parsed = json.loads(turn["assistant_content_json"])
+            if parsed.get("role") != "assistant" or not isinstance(parsed.get("content"), str):
+                return None
+            return Message(
+                "assistant", parsed["content"], parsed.get("id"), parsed.get("created_at")
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+    # 将重复的非终态或失败 Turn 转换为稳定业务错误。
+    @staticmethod
+    def duplicate_error(status: str) -> BusinessError:
+        if status in {"pending", "streaming"}:
+            return BusinessError(
+                BusinessErrorCode.TURN_IN_PROGRESS,
+                "相同 client_message_id 的请求正在处理中",
+                409,
+            )
+        return BusinessError(
+            BusinessErrorCode.TURN_ALREADY_FINISHED,
+            f"该 Turn 已处于 {status} 状态，请使用新的 client_message_id",
+            409,
+        )
+
 
 # ============ Agent Service ============
 
@@ -1167,7 +1337,12 @@ class AgentService:
     # 执行对话，调用 Agent 并处理错误转换
     @staticmethod
     # 执行 chat 对应的业务逻辑
-    async def chat(conversation_id: str, content: str, user_id: str = None) -> Message:
+    async def chat(
+        conversation_id: str,
+        content: str,
+        user_id: str = None,
+        tool_identity: dict[str, str | list[str]] | None = None,
+    ) -> Message:
         try:
             await wait_for_conversation_persistence(conversation_id)
             from src.agents.graph_agents import (
@@ -1183,38 +1358,31 @@ class AgentService:
                 is_likely_truncated,
                 maybe_append_continuation_hint,
             )
-            from src.commands import (
-                execute_agent_command,
-                get_agent_prompt_override,
-                get_dark_mode_thread_id,
-            )
             from src.profile.service import HistoryService, MemoryService, ProfileService
-
-            command = execute_agent_command(content, conversation_id)
-            if command:
-                reply = Message("assistant", command.reply)
-                ConversationService.append_assistant_message(conversation_id, reply, user_id or "")
-                return reply
 
             fast_answer = get_fast_path_answer(content)
             if fast_answer:
-                schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
+                await schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
                 return Message("assistant", fast_answer)
 
-
             conversation = ConversationService.get(conversation_id)
-            restore_command_state_from_conversation(conversation_id)
-            prompt_override = get_agent_prompt_override(conversation_id, content)
-            agent_thread_id = (
-                get_dark_mode_thread_id(conversation_id)
-                if prompt_override
-                else conversation_id
-            )
+            if is_explicit_knowledge_query(content):
+                knowledge_scope = str(
+                    (tool_identity or {}).get("tenant_id", f"user:{user_id or 'anonymous'}")
+                )
+                result = await KnowledgeService.chat(content, user_id=knowledge_scope)
+                reply_content = str(result["output"])
+                await schedule_answer_persistence(
+                    conversation_id, content, reply_content, user_id or ""
+                )
+                return Message("assistant", reply_content)
+
+            agent_thread_id = conversation_id
             agent = (
                 (
                     build_chat_agent()
                     if is_direct_chat_message(content)
-                    else build_tool_agent(system_prompt_override=prompt_override)
+                    else build_tool_agent()
                 )
                 if not conversation or conversation.mode != "knowledge"
                 else None
@@ -1229,7 +1397,12 @@ class AgentService:
             if user_id:
                 config["configurable"]["user_id"] = user_id
 
-            runtime_context = create_tool_call_context(user_id or "", conversation_id)
+            runtime_context = create_tool_call_context(
+                user_id or "",
+                conversation_id,
+                tenant_id=str((tool_identity or {}).get("tenant_id", f"user:{user_id or 'anonymous'}")),
+                roles=list((tool_identity or {}).get("roles", ["member"])),
+            )
             deadline_args = (
                 (
                     settings.agent_deadline_ms,
@@ -1270,7 +1443,7 @@ class AgentService:
                 reply_content = maybe_append_continuation_hint(reply_content, finish_reason)
 
             reply = Message("assistant", reply_content)
-            schedule_answer_persistence(conversation_id, content, reply_content, user_id or "")
+            await schedule_answer_persistence(conversation_id, content, reply_content, user_id or "")
 
             return reply
 
@@ -1283,13 +1456,13 @@ class AgentService:
         except BusinessError:
             raise
         except Exception as error:
-            logger.exception(
-                "Agent chat failed | conversation_id=%s user_id=%s content=%r",
-                conversation_id,
-                user_id,
-                content,
-            )
             error_msg = str(error)
+            if error.__class__.__name__ == "ModelCapacityError":
+                raise BusinessError(
+                    BusinessErrorCode.RATE_LIMITED,
+                    "AI 服务并发已满，请稍后重试",
+                    429,
+                ) from error
             if "rate limit" in error_msg.lower() or "429" in error_msg:
                 raise BusinessError(
                     BusinessErrorCode.SERVICE_UNAVAILABLE,
@@ -1302,6 +1475,12 @@ class AgentService:
                     "AI 服务配置异常，请联系管理员",
                     503,
                 )
+            logger.exception(
+                "Agent chat failed | conversation_id=%s user_id=%s content=%r",
+                conversation_id,
+                user_id,
+                content,
+            )
             raise BusinessError(
                 BusinessErrorCode.INTERNAL_ERROR,
                 "处理请求时发生错误，请稍后重试",
@@ -1311,11 +1490,17 @@ class AgentService:
     # 流式对话，逐字返回 AI 回复和工具调用事件
     @staticmethod
     # 执行 chat stream 对应的业务逻辑
-    async def chat_stream(conversation_id: str, content: str, user_id: str = None):
+    async def chat_stream(
+        conversation_id: str,
+        content: str,
+        user_id: str = None,
+        tool_identity: dict[str, str | list[str]] | None = None,
+    ):
         full_answer = ""
         stream_text_buffer = ""
         emitted_text = False
         observed_tool_event = False
+        last_tool_output = ""
         react_summary = None
         root_answer = ""
         stream_finish_reason = None
@@ -1334,39 +1519,34 @@ class AgentService:
                 get_finish_reason_from_output,
                 maybe_append_continuation_hint,
             )
-            from src.commands import (
-                execute_agent_command,
-                get_agent_prompt_override,
-                get_dark_mode_thread_id,
-            )
             from src.profile.service import HistoryService, MemoryService, ProfileService
-
-            command = execute_agent_command(content, conversation_id)
-            if command:
-                ConversationService.append_assistant_message(
-                    conversation_id,
-                    Message("assistant", command.reply),
-                    user_id or "",
-                )
-                yield {"type": "text", "text": command.reply}
-                return
 
             fast_answer = get_fast_path_answer(content)
             if fast_answer:
-                schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
+                await schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
                 yield {"type": "text", "text": fast_answer}
                 return
 
-
             conversation = ConversationService.get(conversation_id)
-            restore_command_state_from_conversation(conversation_id)
-            prompt_override = get_agent_prompt_override(conversation_id, content)
-            agent_thread_id = (
-                get_dark_mode_thread_id(conversation_id)
-                if prompt_override
-                else conversation_id
+            if is_explicit_knowledge_query(content):
+                knowledge_scope = str(
+                    (tool_identity or {}).get("tenant_id", f"user:{user_id or 'anonymous'}")
+                )
+                result = await KnowledgeService.chat(content, user_id=knowledge_scope)
+                full_answer = str(result["output"])
+                await schedule_answer_persistence(
+                    conversation_id, content, full_answer, user_id or ""
+                )
+                yield {"type": "text", "text": full_answer}
+                return
+
+            agent_thread_id = conversation_id
+            runtime_context = create_tool_call_context(
+                user_id or "",
+                conversation_id,
+                tenant_id=str((tool_identity or {}).get("tenant_id", f"user:{user_id or 'anonymous'}")),
+                roles=list((tool_identity or {}).get("roles", ["member"])),
             )
-            runtime_context = create_tool_call_context(user_id or "", conversation_id)
             conversation_history = ConversationService.get_agent_conversation_history(
                 conversation_id, content
             )
@@ -1383,6 +1563,7 @@ class AgentService:
                             "conversation_history": conversation_history,
                             "context": [],
                             "should_retrieve": True,
+                            "user_id": user_id or "",
                         }
                         rag_stream_api = hasattr(rag_agent, "astream_events")
                         if rag_stream_api:
@@ -1428,7 +1609,7 @@ class AgentService:
                 )
                 if final_answer != raw_answer:
                     yield {"type": "text", "text": final_answer[len(raw_answer):]}
-                schedule_answer_persistence(
+                await schedule_answer_persistence(
                     conversation_id, content, final_answer, user_id or ""
                 )
                 return
@@ -1437,7 +1618,7 @@ class AgentService:
             agent = (
                 build_chat_agent()
                 if direct_chat
-                else build_tool_agent(system_prompt_override=prompt_override)
+                else build_tool_agent()
             )
             config = {
                 "configurable": {"thread_id": agent_thread_id},
@@ -1538,6 +1719,11 @@ class AgentService:
                                 ):
                                     continue
                                 observed_tool_event = True
+                                tool_output = get_stream_text(
+                                    event.get("data", {}).get("output")
+                                ).strip()
+                                if tool_output:
+                                    last_tool_output = tool_output
                                 yield {
                                     "type": "tool",
                                     "tool_name": event.get("name") or "tool",
@@ -1665,7 +1851,7 @@ class AgentService:
             final_answer = maybe_append_continuation_hint(full_answer, stream_finish_reason)
             if final_answer != full_answer:
                 yield {"type": "text", "text": final_answer[len(full_answer):]}
-            schedule_answer_persistence(
+            await schedule_answer_persistence(
                 conversation_id, content, final_answer, user_id or ""
             )
             if react_summary:
@@ -1680,32 +1866,57 @@ class AgentService:
         except TimeoutError:
             if full_answer.strip():
                 partial = append_continuation_hint(full_answer)
-                schedule_answer_persistence(
+                await schedule_answer_persistence(
                     conversation_id, content, partial, user_id or ""
                 )
-                yield {"type": "text", "text": partial, "partial": True}
+                yield {
+                    "type": "text",
+                    "text": partial[len(full_answer) :],
+                    "partial": True,
+                }
             else:
                 timeout_answer = "AI助手响应超时，请稍后重试。"
-                schedule_answer_persistence(
+                await schedule_answer_persistence(
                     conversation_id, content, timeout_answer, user_id or ""
                 )
                 yield {"type": "text", "text": timeout_answer}
         except BusinessError:
             raise
         except Exception as error:
-            logger.exception(
-                "Agent stream failed | conversation_id=%s user_id=%s content=%r",
-                conversation_id,
-                user_id,
-                content,
-            )
             error_msg = str(error)
+            if error.__class__.__name__ == "ModelCapacityError":
+                raise BusinessError(
+                    BusinessErrorCode.RATE_LIMITED,
+                    "AI 服务并发已满，请稍后重试",
+                    429,
+                ) from error
+            if is_model_timeout_error(error):
+                if full_answer.strip():
+                    timeout_answer = append_continuation_hint(full_answer)
+                    suffix = timeout_answer[len(full_answer) :]
+                elif last_tool_output:
+                    timeout_answer = last_tool_output
+                    suffix = timeout_answer
+                else:
+                    timeout_answer = "AI助手响应超时，请稍后重试。"
+                    suffix = timeout_answer
+                await schedule_answer_persistence(
+                    conversation_id, content, timeout_answer, user_id or ""
+                )
+                if suffix:
+                    yield {"type": "text", "text": suffix, "partial": True}
+                return
             if "rate limit" in error_msg.lower():
                 raise BusinessError(
                     BusinessErrorCode.SERVICE_UNAVAILABLE,
                     "AI 服务暂时繁忙，请稍后重试",
                     503,
                 )
+            logger.exception(
+                "Agent stream failed | conversation_id=%s user_id=%s",
+                conversation_id,
+                user_id,
+            )
             raise BusinessError(
                 BusinessErrorCode.INTERNAL_ERROR,
                 "处理请求时发生错误",
@@ -1723,5 +1934,6 @@ __all__ = [
     "Document",
     "KnowledgeService",
     "Message",
+    "TurnService",
     "wait_for_conversation_persistence",
 ]

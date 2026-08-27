@@ -19,6 +19,7 @@ from src.tools.contracts import (
     ToolResultMeta,
     SideEffect,
 )
+from src.tools.runtime.executor import get_tool_call_context
 
 from dataclasses import dataclass, field
 
@@ -93,9 +94,11 @@ async def knowledge_search(query: str, top_k: int = 5) -> str:
 
         client = CloudflareMemoryClient()
 
-        # 使用默认用户搜索（服务间共享知识库）
+        context = get_tool_call_context()
+        if context is None or not context.user_id:
+            return "📚 缺少可信用户上下文，无法检索知识库。"
         result = await client.search_documents(
-            user_id="default",
+            user_id=context.user_id,
             query=query,
             limit=top_k,
         )

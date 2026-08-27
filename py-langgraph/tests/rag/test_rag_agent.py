@@ -12,12 +12,16 @@ async def test_rag_graph_retrieves_before_generation(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        async def retrieve(self, query):
+        async def retrieve(self, query, user_id):
             queries.append(query)
+            assert user_id == "rag-user"
             return [{"content": "retrieved context"}]
+
+    prompts = []
 
     class FakeLLM:
         async def ainvoke(self, prompt):
+            prompts.append(prompt)
             return AIMessage(content="grounded answer")
 
     monkeypatch.setattr(module, "Retriever", FakeRetriever)
@@ -28,7 +32,10 @@ async def test_rag_graph_retrieves_before_generation(monkeypatch):
         "messages": [HumanMessage(content="question")],
         "context": [],
         "should_retrieve": True,
+        "user_id": "rag-user",
     })
 
     assert queries == ["question"]
     assert result["messages"][-1].content == "grounded answer"
+    assert "untrusted data" in prompts[0]
+    assert "不可信检索文档" in prompts[0]

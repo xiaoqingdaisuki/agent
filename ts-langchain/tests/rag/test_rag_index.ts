@@ -37,4 +37,27 @@ describe("RAG document indexing", () => {
       (config as { MEMORY_ENABLED: boolean }).MEMORY_ENABLED = originalMemoryEnabled;
     }
   });
+
+  it("isolates local documents by trusted user scope", async () => {
+    const originalMemoryEnabled = config.MEMORY_ENABLED;
+    (config as { MEMORY_ENABLED: boolean }).MEMORY_ENABLED = false;
+    try {
+      const document = await KnowledgeService.uploadDocument(
+        Buffer.from("仅属于用户 A 的隔离文档"),
+        "owner-a.txt",
+        "tech",
+        "owner-a",
+      );
+
+      expect(await KnowledgeService.getDocument(document.id, "owner-b")).toBeUndefined();
+      expect(await KnowledgeService.listDocuments("owner-b")).not.toContainEqual(
+        expect.objectContaining({ id: document.id }),
+      );
+      expect(await KnowledgeService.search("隔离文档", 3, "owner-b")).toEqual([]);
+      expect(await KnowledgeService.deleteDocument(document.id, "owner-b")).toBe(false);
+      expect(await KnowledgeService.deleteDocument(document.id, "owner-a")).toBe(true);
+    } finally {
+      (config as { MEMORY_ENABLED: boolean }).MEMORY_ENABLED = originalMemoryEnabled;
+    }
+  });
 });

@@ -23,6 +23,8 @@ import type {
 import { recordToolMetric } from "../observability.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { config } from "../../config/index.js";
+import { hasToolPermissions } from "./authorization.js";
+import { CloudflareMemoryClient } from "../../clients/memory_gateway.js";
 
 // ============ 审计记录 ============
 
@@ -42,12 +44,12 @@ interface AuditEntry {
 }
 
 const auditLog: AuditEntry[] = [];
-let gatewayClient: any = null;
+let gatewayClient: CloudflareMemoryClient | null = null;
+let auditFlush: Promise<void> | null = null;
 
 // 获取 getGatewayClient 对应的数据
 function getGatewayClient() {
   if (!gatewayClient) {
-    const { CloudflareMemoryClient } = require("../../clients/memory_gateway.js");
     gatewayClient = new CloudflareMemoryClient({
       baseUrl: process.env.CLOUDFLARE_MEMORY_BASE_URL || "http://localhost:8787",
       secret: process.env.CLOUDFLARE_MEMORY_SECRET || "",
@@ -57,30 +59,31 @@ function getGatewayClient() {
 }
 
 // 批量写入审计日志到 Gateway（异步，不阻塞）
-async function flushAuditLogs(): Promise<void> {
+export async function flushAuditLogs(): Promise<void> {
   if (!config.MEMORY_ENABLED) return;
+  if (auditFlush) return auditFlush;
   if (auditLog.length === 0) return;
-  const entries = auditLog.splice(0, auditLog.length);
-  try {
-    const client = getGatewayClient();
-    await client.writeAuditLogs(
-      entries.map((e) => ({
-        user_id: e.user_id,
-        tenant_id: e.tenant_id,
-        conversation_id: e.conversation_id,
-        tool_name: e.tool_name,
-        tool_version: e.tool_version,
-        risk_level: e.risk_level,
-        ok: e.ok,
-        error_code: e.error_code,
-        duration_ms: e.duration_ms,
-        request_id: e.request_id,
-        trace_id: e.trace_id,
-      })),
-    );
-  } catch (err) {
-    console.warn("[executor] Failed to flush audit logs to Gateway:", err);
-  }
+  const entries = auditLog.splice(0, 500);
+  auditFlush = (async () => {
+    try {
+      await getGatewayClient().writeAuditLogs(
+        entries.map((e) => ({
+          user_id: e.user_id, tenant_id: e.tenant_id,
+          conversation_id: e.conversation_id, tool_name: e.tool_name,
+          tool_version: e.tool_version, risk_level: e.risk_level, ok: e.ok,
+          error_code: e.error_code, duration_ms: e.duration_ms,
+          request_id: e.request_id, trace_id: e.trace_id,
+        })),
+      );
+    } catch (err) {
+      auditLog.unshift(...entries);
+      if (auditLog.length > 1_000) auditLog.length = 1_000;
+      console.warn("[executor] Failed to flush audit logs to Gateway:", err);
+    } finally {
+      auditFlush = null;
+    }
+  })();
+  return auditFlush;
 }
 
 // 获取 getAuditLog 对应的数据
@@ -101,41 +104,27 @@ const permissionCache = new Map<
 >();
 const PERMISSION_CACHE_TTL_MS = 5_000;
 
-/**
- * 检查用户是否拥有指定权限
- *
- * 当前为最小可用实现：所有 R0/R1 只读工具默认允许，
- * R2+ 工具需要显式声明 permissions 并通过策略。
- *
- * TODO: Phase 0.4 替换为真正的 RBAC 引擎
- */
-// 执行 permissionCheck 对应的业务逻辑
+// 基于可信身份和服务端角色检查工具权限。
 export function permissionCheck(
   context: ToolCallContext,
   descriptor: ToolDescriptor,
 ): { granted: boolean; reason?: string } {
-  // R0 工具默认允许
-  if (descriptor.risk_level === "R0") {
-    return { granted: true };
-  }
-
   const perms = descriptor.required_permissions ?? [];
 
-  // 无权限要求 → 允许
-  if (perms.length === 0) {
-    return { granted: true };
-  }
-
   // 检查缓存
-  const cacheKey = `${context.user_id}:${context.tenant_id}:${perms.join(",")}`;
+  const cacheKey = `${context.user_id}:${context.tenant_id}:${(context.roles ?? []).sort().join(",")}:${perms.join(",")}`;
   const cached = permissionCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) {
     return { granted: cached.granted };
   }
 
-  // 最小 RBAC：只要有 user_id 就允许（Phase 0.4 会替换为真正的策略）
-  const granted = !!context.user_id;
-  const reason = granted ? undefined : "UNAUTHENTICATED: user_id required";
+  const requiresIdentity = descriptor.risk_level !== "R0";
+  const granted = (!requiresIdentity || !!context.user_id) && hasToolPermissions(context, descriptor);
+  const reason = requiresIdentity && !context.user_id
+    ? "UNAUTHENTICATED: user_id required"
+    : granted
+      ? undefined
+      : "PERMISSION_DENIED: required tool permission is not granted";
 
   permissionCache.set(cacheKey, {
     granted,
@@ -458,6 +447,19 @@ export async function invokeTool<TInput, TOutput>(
         duration_ms: Date.now() - startTime,
       },
     };
+  }
+
+  // 高风险工具在确认服务上线前始终拒绝直接执行，防止模型自行批准副作用。
+  if (executor.descriptor.approval_policy === "always") {
+    const error = { code: "APPROVAL_REQUIRED" as const, message: "该高风险操作需要用户显式确认" };
+    recordAudit({
+      tool_name: toolName, tool_version: toolVersion, user_id: context.user_id,
+      tenant_id: context.tenant_id, conversation_id: context.conversation_id,
+      risk_level: executor.descriptor.risk_level, ok: false,
+      error_code: error.code, duration_ms: Date.now() - startTime,
+      request_id: context.request_id, trace_id: context.trace_id,
+    });
+    return { ok: false, data: null, error, meta: { tool_call_id: callId, tool_name: toolName, tool_version: toolVersion, duration_ms: Date.now() - startTime } };
   }
 
   // 4. 执行（带超时）

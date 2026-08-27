@@ -8,48 +8,47 @@
 
 import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 import { getRepositories } from "../repositories/index.js";
-import {
-  DARK_MODE_COMMAND,
-  DARK_MODE_DISABLED_REPLY,
-  DARK_MODE_ENABLED_REPLY,
-  getConversationThreadIdFromHistoryThreadId,
-  isDarkModeHistoryThreadId,
-} from "../commands/index.js";
+import { config } from "../config/index.js";
 
-export const MAX_HISTORY_MESSAGES = 50;
+export const MAX_HISTORY_TOKENS = config.HISTORY_CONTEXT_TOKEN_BUDGET;
 const HISTORY_LOAD_PAGE_SIZE = 200;
 
 // 进程内对话历史（仅当前运行上下文使用）
 const conversations = new Map<string, BaseMessage[]>();
 
-// 按大公鸡开关将同一 UI 会话记录拆分为普通与独立人设历史
-function filterMessagesForAgentHistory(
-  messages: Array<{ role: string; content_json: string }>,
-  isDarkModeHistory: boolean,
-): Array<{ role: string; content_json: string }> {
-  const filtered: Array<{ role: string; content_json: string }> = [];
-  let darkModeEnabled = false;
-  let skipCommandReply = false;
+// 将多种 LangChain 消息内容归一化为可估算 token 的文本。
+function messageContentToText(content: BaseMessage["content"]): string {
+  return typeof content === "string" ? content : JSON.stringify(content);
+}
 
-  for (const message of messages) {
-    if (message.role === "user" && message.content_json.trim() === DARK_MODE_COMMAND) {
-      darkModeEnabled = !darkModeEnabled;
-      skipCommandReply = true;
-      continue;
-    }
-    if (
-      skipCommandReply &&
-      message.role === "assistant" &&
-      (message.content_json === DARK_MODE_ENABLED_REPLY ||
-        message.content_json === DARK_MODE_DISABLED_REPLY)
-    ) {
-      skipCommandReply = false;
-      continue;
-    }
-    if (darkModeEnabled === isDarkModeHistory) filtered.push(message);
+// 估算中英文混合内容的 token 数，用于没有模型专用 tokenizer 时的保守预算控制。
+export function estimateMessageTokens(message: BaseMessage): number {
+  const text = messageContentToText(message.content);
+  const cjkCharacters = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/g) || []).length;
+  return Math.max(1, cjkCharacters + Math.ceil((text.length - cjkCharacters) / 4) + 4);
+}
+
+// 以完整用户轮次为原子单位保留最新历史，绝不拆开 assistant 工具调用及其结果。
+export function trimHistoryToTokenBudget(
+  messages: BaseMessage[],
+  tokenBudget = MAX_HISTORY_TOKENS,
+): BaseMessage[] {
+  const turnStarts = messages
+    .map((message, index) => (message._getType() === "human" ? index : -1))
+    .filter((index) => index >= 0);
+  if (turnStarts.length === 0) return [...messages];
+
+  let keepFrom = messages.length;
+  let usedTokens = 0;
+  for (let turn = turnStarts.length - 1; turn >= 0; turn -= 1) {
+    const start = turnStarts[turn];
+    const end = turn + 1 < turnStarts.length ? turnStarts[turn + 1] : messages.length;
+    const turnTokens = messages.slice(start, end).reduce((total, message) => total + estimateMessageTokens(message), 0);
+    if (keepFrom !== messages.length && usedTokens + turnTokens > tokenBudget) break;
+    usedTokens += turnTokens;
+    keepFrom = start;
   }
-
-  return filtered;
+  return messages.slice(keepFrom);
 }
 
 /**
@@ -62,29 +61,17 @@ export async function getHistory(threadId: string): Promise<BaseMessage[]> {
   // 每次从仓储刷新，确保多请求实例和上一轮异步持久化的消息都能被读取。
   try {
     const repos = getRepositories();
-    const historyThreadId = getConversationThreadIdFromHistoryThreadId(threadId);
-    const messages = [];
-    let offset = 0;
-    let total = 0;
-    while (true) {
-      const page = await repos.message.getMessages(
-        historyThreadId,
-        HISTORY_LOAD_PAGE_SIZE,
-        offset,
-      );
-      if (page.messages.length === 0) break;
-      messages.push(...page.messages);
-      offset += page.messages.length;
-      total = page.total;
-      if (messages.length >= total) break;
-    }
-    if (messages.length === 0 && cached && cached.length > 0) return [...cached];
-    const agentMessages = filterMessagesForAgentHistory(
-      messages,
-      isDarkModeHistoryThreadId(threadId),
+    // 倒序只读取最近一页，随后恢复正序；token 裁剪会移除开头的不完整轮次。
+    const page = await repos.message.getMessages(
+      threadId,
+      HISTORY_LOAD_PAGE_SIZE,
+      0,
+      "desc",
     );
+    const messages = [...page.messages].reverse();
+    if (messages.length === 0 && cached && cached.length > 0) return [...cached];
     const loaded: BaseMessage[] = [];
-    for (const m of agentMessages) {
+    for (const m of messages) {
       const content = m.content_json;
       if (m.role === "user") {
         loaded.push(new HumanMessage(content));
@@ -94,8 +81,9 @@ export async function getHistory(threadId: string): Promise<BaseMessage[]> {
         loaded.push(new SystemMessage(content));
       }
     }
-    conversations.set(threadId, loaded);
-    return [...loaded];
+    const bounded = trimHistoryToTokenBudget(loaded);
+    conversations.set(threadId, bounded);
+    return [...bounded];
   } catch (err) {
     console.warn(`[memory] D1 load messages failed for thread ${threadId}: ${err}`);
     return cached ? [...cached] : [];
@@ -124,17 +112,8 @@ export async function appendMessage(threadId: string, message: BaseMessage): Pro
   const history = conversations.get(threadId) ?? (await getHistory(threadId));
   history.push(message);
 
-  // 裁剪超出上限的旧消息
-  if (history.length > MAX_HISTORY_MESSAGES) {
-    let keepFrom = history.length - MAX_HISTORY_MESSAGES;
-    while (
-      keepFrom < history.length &&
-      history[keepFrom]._getType() !== "human"
-    ) {
-      keepFrom++;
-    }
-    history.splice(0, keepFrom);
-  }
+  const bounded = trimHistoryToTokenBudget(history);
+  history.splice(0, history.length, ...bounded);
 }
 
 /**

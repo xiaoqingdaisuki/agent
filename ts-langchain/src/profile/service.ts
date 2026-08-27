@@ -247,11 +247,9 @@ export class MemoryService {
     }
 
     // 第二层：LLM 异步提取（不阻塞主流程）
-    if (config.MEMORY_AUTO_EXTRACT) {
-      MemoryService._extractWithLLM(userId, question, answer).catch(() => {
-        // LLM 提取失败静默降级
-      });
-    }
+    MemoryService._extractWithLLM(userId, question, answer).catch(() => {
+      // LLM 提取失败静默降级
+    });
   }
 
   /**
@@ -313,7 +311,7 @@ export class MemoryService {
   private static async _extractWithLLM(
     userId: string,
     question: string,
-    answer: string,
+    _answer: string,
   ): Promise<void> {
     if (!config.OPENAI_API_KEY) return;
 
@@ -335,8 +333,7 @@ export class MemoryService {
 4. 如果没有任何值得记住的信息，返回空数组
 5. 返回 JSON 数组，每项包含 category（preference/fact/decision/context）和 content 字段
 
-用户问题：${question}
-助手回答：${answer}
+用户原文：${question}
 
 JSON 输出（无其他内容）：`;
 

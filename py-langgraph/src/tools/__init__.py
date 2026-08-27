@@ -7,6 +7,7 @@ tools — 工具 barrel 导出
 3. 对外统一导出 `get_tools_for_user` / `get_tool_metadata_for_user`（供 API 使用）
 """
 
+from src.tools.runtime.authorization import permissions_for_roles
 from src.tools.registry import (
     ToolRegistry,
     get_registry,
@@ -18,7 +19,6 @@ from .calculator import calculator
 from .file_search import file_search
 from .web_read import web_read
 from .web_extract import web_extract
-from .file_read import file_read
 from .knowledge import knowledge_search
 from .memory_session import memory_session_search
 from .memory_user import memory_user_search, memory_user_save, memory_user_list, memory_user_delete
@@ -26,13 +26,12 @@ from .search import web_search
 from .time import get_current_time, convert_timezone
 from .weather import get_weather
 
-tools = get_registry().get_all_tools()
+tools = get_registry().get_visible_tools(list(permissions_for_roles()))
 
 __all__ = [
     "ToolRegistry",
     "calculator",
     "convert_timezone",
-    "file_read",
     "file_search",
     "get_current_time",
     "get_registry",

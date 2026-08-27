@@ -14,6 +14,8 @@ process.env.MEMORY_ENABLED = "true";
 const mockProfiles = new Map<string, any>();
 const mockConversations = new Map<string, any>();
 const mockMessages = new Map<string, any[]>();
+const mockTurns = new Map<string, any>();
+const mockTurnKeys = new Map<string, string>();
 const mockMemories = new Map<string, any[]>();
 const mockSavedContents = new Map<string, Set<string>>();
 
@@ -21,6 +23,8 @@ export function resetMocks() {
   mockProfiles.clear();
   mockConversations.clear();
   mockMessages.clear();
+  mockTurns.clear();
+  mockTurnKeys.clear();
   mockMemories.clear();
   mockSavedContents.clear();
 }
@@ -30,7 +34,8 @@ export function resetMocks() {
 export const mockCloudflareClient = {
   // Profile
   putProfile: vi.fn(async (userId: string, name: string = "", preferences?: any) => {
-    const now = new Date().toISOString();
+    const existing = mockProfiles.get(userId);
+    const now = new Date(Math.max(Date.now(), existing ? Date.parse(existing.updated_at) + 1 : 0)).toISOString();
     if (!mockProfiles.has(userId)) {
       mockProfiles.set(userId, {
         user_id: userId,
@@ -104,13 +109,47 @@ export const mockCloudflareClient = {
     mockMessages.set(convId, existing);
   }),
 
-  getMessages: vi.fn(async (convId: string, limit: number = 50, offset: number = 0) => {
+  getMessages: vi.fn(async (
+    convId: string,
+    limit: number = 50,
+    offset: number = 0,
+    direction: "asc" | "desc" = "asc",
+  ) => {
     const all = (mockMessages.get(convId) || []).sort((a: any, b: any) => a.sequence_no - b.sequence_no);
-    return { messages: all.slice(offset, offset + limit), total: all.length };
+    const ordered = direction === "desc" ? [...all].reverse() : all;
+    return { messages: ordered.slice(offset, offset + limit), total: all.length };
   }),
 
   clearMessages: vi.fn(async (convId: string) => {
     mockMessages.delete(convId);
+  }),
+
+  createOrGetTurn: vi.fn(async (convId: string, userId: string, clientMessageId: string, turnId = crypto.randomUUID()) => {
+    const key = `${convId}\u0000${clientMessageId}`;
+    const existingId = mockTurnKeys.get(key);
+    if (existingId) return { turn: { ...mockTurns.get(existingId) }, created: false };
+    const now = new Date().toISOString();
+    const turn = {
+      id: turnId, conversation_id: convId, user_id: userId, client_message_id: clientMessageId,
+      status: "pending", user_message_id: null, assistant_message_id: null,
+      assistant_content_json: null, error_code: null, created_at: now, updated_at: now, completed_at: null,
+    };
+    mockTurns.set(turnId, turn);
+    mockTurnKeys.set(key, turnId);
+    return { turn: { ...turn }, created: true };
+  }),
+
+  getTurn: vi.fn(async (turnId: string, userId: string) => {
+    const turn = mockTurns.get(turnId);
+    return turn?.user_id === userId ? { ...turn } : null;
+  }),
+
+  updateTurn: vi.fn(async (turnId: string, userId: string, changes: any) => {
+    const turn = mockTurns.get(turnId);
+    if (!turn || turn.user_id !== userId) throw new Error("MEMORY_TURN_NOT_FOUND");
+    Object.assign(turn, changes, { updated_at: new Date().toISOString() });
+    if (["completed", "failed", "cancelled"].includes(changes.status)) turn.completed_at = turn.updated_at;
+    return { ...turn };
   }),
 
   // Memory

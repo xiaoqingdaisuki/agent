@@ -49,10 +49,10 @@ export async function listConversationsByUser(db: D1Database, userId: string, li
 // 软删除会话
 export async function deleteConversation(db: D1Database, id: string): Promise<boolean> {
   const now = new Date().toISOString();
-  const result = await db
-    .prepare("UPDATE conversations SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
-    .bind(now, id)
-    .run();
+  const [result] = await db.batch([
+    db.prepare("UPDATE conversations SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL").bind(now, id),
+    db.prepare("DELETE FROM checkpoints WHERE thread_id = ?").bind(id),
+  ]);
 
   return (result.meta?.rows_written ?? 0) > 0;
 }

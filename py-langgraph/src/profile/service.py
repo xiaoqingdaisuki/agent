@@ -194,13 +194,12 @@ class MemoryService:
                 pass
 
         # 第二层：LLM 异步提取（不阻塞主流程）
-        if settings.memory_auto_extract:
-            thread = threading.Thread(
-                target=MemoryService._extract_with_llm,
-                args=(user_id, question, answer),
-                daemon=True,
-            )
-            thread.start()
+        thread = threading.Thread(
+            target=MemoryService._extract_with_llm,
+            args=(user_id, question, answer),
+            daemon=True,
+        )
+        thread.start()
 
         return regex_memories
 
@@ -260,7 +259,7 @@ class MemoryService:
 
     @staticmethod
     # 执行 extract with llm 对应的业务逻辑
-    def _extract_with_llm(user_id: str, question: str, answer: str) -> None:
+    def _extract_with_llm(user_id: str, question: str, _answer: str) -> None:
         """LLM-based 记忆提取"""
         if not settings.openai_api_key:
             return
@@ -280,8 +279,7 @@ class MemoryService:
                 "3. 每条记忆控制在 30 字以内，简洁明确\n"
                 "4. 如果没有任何值得记住的信息，返回空数组\n"
                 "5. 返回 JSON 数组，每项包含 category（preference/fact/decision/context）和 content 字段\n\n"
-                f"用户问题：{question}\n"
-                f"助手回答：{answer}\n\n"
+                f"用户原文：{question}\n\n"
                 "JSON 输出（无其他内容）："
             )
 

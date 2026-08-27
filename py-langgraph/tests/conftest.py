@@ -114,13 +114,53 @@ class FakeMessageRepository:
                 self._messages[conversation_id].append(dict(msg))
                 existing_keys.add(msg["sequence_no"])
 
-    def get_messages(self, conversation_id: str, limit: int = 50, offset: int = 0):
+    def get_messages(
+        self, conversation_id: str, limit: int = 50, offset: int = 0, direction: str = "asc"
+    ):
         all_msgs = self._messages.get(conversation_id, [])
         all_msgs = sorted(all_msgs, key=lambda m: m["sequence_no"])
-        return all_msgs[offset:offset + limit], len(all_msgs)
+        ordered = list(reversed(all_msgs)) if direction == "desc" else all_msgs
+        return ordered[offset:offset + limit], len(all_msgs)
 
     def clear(self, conversation_id: str):
         self._messages.pop(conversation_id, None)
+
+
+class FakeTurnRepository:
+    """模拟 Turn 仓储"""
+
+    def __init__(self):
+        self._turns = {}
+        self._keys = {}
+
+    def create_or_get(self, conversation_id, user_id, client_message_id, turn_id):
+        key = (conversation_id, client_message_id)
+        if key in self._keys:
+            return dict(self._turns[self._keys[key]]), False
+        now = __import__("datetime").datetime.now().isoformat()
+        turn = {
+            "id": turn_id, "conversation_id": conversation_id, "user_id": user_id,
+            "client_message_id": client_message_id, "status": "pending",
+            "user_message_id": None, "assistant_message_id": None,
+            "assistant_content_json": None, "error_code": None,
+            "created_at": now, "updated_at": now, "completed_at": None,
+        }
+        self._keys[key] = turn_id
+        self._turns[turn_id] = turn
+        return dict(turn), True
+
+    def get(self, turn_id, user_id):
+        turn = self._turns.get(turn_id)
+        return dict(turn) if turn and turn["user_id"] == user_id else None
+
+    def update(self, turn_id, user_id, **changes):
+        turn = self._turns[turn_id]
+        assert turn["user_id"] == user_id
+        turn.update({key: value for key, value in changes.items() if value is not None})
+        turn["updated_at"] = __import__("datetime").datetime.now().isoformat()
+        if changes["status"] in {"completed", "failed", "cancelled"}:
+            turn["completed_at"] = turn["updated_at"]
+        return dict(turn)
 
 
 class FakeMemoryRepository:
@@ -248,6 +288,7 @@ class FakeRepositories:
         self.profile = FakeProfileRepository()
         self.conversation = FakeConversationRepository()
         self.message = FakeMessageRepository()
+        self.turn = FakeTurnRepository()
         self.memory = FakeMemoryRepository()
 
 
@@ -328,11 +369,22 @@ class FakeCloudflareMemoryClient:
         ]
         return self._repos.message.create_batch(conversation_id, user_id, formatted)
 
-    async def get_messages(self, conversation_id: str, limit: int = 50, offset: int = 0):
-        return self._repos.message.get_messages(conversation_id, limit, offset)
+    async def get_messages(
+        self, conversation_id: str, limit: int = 50, offset: int = 0, direction: str = "asc"
+    ):
+        return self._repos.message.get_messages(conversation_id, limit, offset, direction)
 
     async def clear_messages(self, conversation_id: str):
         return self._repos.message.clear(conversation_id)
+
+    async def create_or_get_turn(self, conversation_id, user_id, client_message_id, turn_id):
+        return self._repos.turn.create_or_get(conversation_id, user_id, client_message_id, turn_id)
+
+    async def get_turn(self, turn_id, user_id):
+        return self._repos.turn.get(turn_id, user_id)
+
+    async def update_turn(self, turn_id, user_id, **changes):
+        return self._repos.turn.update(turn_id, user_id, **changes)
 
     # Memory
     async def save_memory(self, user_id: str, memory_id: str, content: str,

@@ -68,8 +68,10 @@ describe("Tool Registry", () => {
     expect(cats).toHaveProperty("SEARCH");
   });
 
-  it("global getToolsForUser returns all by default", () => {
+  it("global getToolsForUser hides write tools by default", () => {
     const tools = getToolsForUser();
     expect(tools.length).toBeGreaterThanOrEqual(4);
+    expect(tools.map((tool) => tool.name)).not.toContain("memory_user_save");
+    expect(tools.map((tool) => tool.name)).not.toContain("memory_user_delete");
   });
 });

@@ -4,8 +4,10 @@ import app from "../src/index.js";
 import { updateMemory, type Memory } from "../src/repositories/memory.js";
 import {
   createMessageBatch,
+  getMessagesByConversation,
   getNextSequenceNumber,
 } from "../src/repositories/message.js";
+import { createOrGetTurn } from "../src/repositories/turn.js";
 import {
   createDocument,
   deleteDocument,
@@ -240,6 +242,7 @@ describe("Persistent identifiers and ordering", () => {
         preparedSql = sql;
         return { bind: () => ({ run: async () => ({}) }) };
       },
+      batch: async () => [],
     };
 
     await createMessageBatch(database as unknown as D1Database, [{
@@ -254,6 +257,60 @@ describe("Persistent identifiers and ordering", () => {
 
     expect(preparedSql).not.toContain("OR REPLACE");
     expect(preparedSql).toContain("ON CONFLICT(id)");
+  });
+
+  it("queries the newest message page in descending sequence order when requested", async () => {
+    const statements: string[] = [];
+    const database = {
+      prepare: (sql: string) => {
+        statements.push(sql);
+        return {
+          bind: () => ({
+            all: async () => ({ results: [] }),
+            first: async () => ({ cnt: 210 }),
+          }),
+        };
+      },
+    };
+
+    await getMessagesByConversation(
+      database as unknown as D1Database,
+      "conv-1",
+      200,
+      0,
+      "desc",
+    );
+
+    expect(statements[0]).toContain("ORDER BY sequence_no DESC");
+  });
+
+  it("reuses the existing Turn for the same conversation idempotency key", async () => {
+    const existing = {
+      id: "turn-existing",
+      conversation_id: "conv-1",
+      user_id: "user-1",
+      client_message_id: "client-message-1",
+      status: "completed",
+      user_message_id: "message-1",
+      assistant_message_id: "message-2",
+      assistant_content_json: "answer",
+      error_code: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+      completed_at: "2026-01-01T00:00:00.000Z",
+    };
+    const database = {
+      prepare: () => ({ bind: () => ({ first: async () => existing }) }),
+    };
+
+    const result = await createOrGetTurn(database as unknown as D1Database, {
+      id: "turn-new",
+      conversation_id: "conv-1",
+      user_id: "user-1",
+      client_message_id: "client-message-1",
+    });
+
+    expect(result).toEqual({ turn: existing, created: false });
   });
 });
 

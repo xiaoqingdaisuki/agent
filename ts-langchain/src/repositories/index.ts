@@ -9,11 +9,14 @@ import {
   type ProfileRepository,
   type ConversationRepository,
   type MessageRepository,
+  type TurnRepository,
   type MemoryRepository,
   type Repositories,
   type UserProfileData,
   type ConversationData,
   type MessageData,
+  type TurnData,
+  type TurnStatus,
   type MemoryData,
   type SearchResponse,
   type MemorySearchResultData,
@@ -23,23 +26,31 @@ import { config } from "../config/index.js";
 
 // ============ 工厂函数 ============
 
+let cachedCloudflareRepositories: { key: string; value: Repositories } | undefined;
+
 /**
  * 根据配置创建进程内或 Cloudflare 仓储实例
  */
 // 返回当前配置对应的仓储集合，关闭记忆网关时不创建远端客户端。
 export function getRepositories(): Repositories {
   if (!config.MEMORY_ENABLED) return inMemoryRepositories;
+  const key = `${config.CLOUDFLARE_MEMORY_BASE_URL}\u0000${config.CLOUDFLARE_MEMORY_SECRET}\u0000${config.MEMORY_REQUEST_TIMEOUT_MS}`;
+  if (cachedCloudflareRepositories?.key === key) return cachedCloudflareRepositories.value;
   const client = new CloudflareMemoryClient({
     baseUrl: config.CLOUDFLARE_MEMORY_BASE_URL,
     secret: config.CLOUDFLARE_MEMORY_SECRET,
     timeoutMs: config.MEMORY_REQUEST_TIMEOUT_MS,
   });
-  return new CloudflareRepositories(client);
+  const value = new CloudflareRepositories(client);
+  cachedCloudflareRepositories = { key, value };
+  return value;
 }
 
 const inMemoryProfiles = new Map<string, UserProfileData>();
 const inMemoryConversations = new Map<string, ConversationData>();
 const inMemoryMessages = new Map<string, MessageData[]>();
+const inMemoryTurns = new Map<string, TurnData>();
+const inMemoryTurnKeys = new Map<string, string>();
 const inMemoryMemories = new Map<string, MemoryData[]>();
 
 // 生成单调递增的 ISO 时间戳，避免同一毫秒内更新被误判为未变化。
@@ -124,13 +135,64 @@ const inMemoryRepositories: Repositories = {
       inMemoryMessages.set(conversationId, Array.from(byId.values()).sort((a, b) => a.sequence_no - b.sequence_no));
     },
     // 分页获取进程内会话消息。
-    async getMessages(conversationId, limit = 50, offset = 0) {
+    async getMessages(conversationId, limit = 50, offset = 0, direction = "asc") {
       const all = inMemoryMessages.get(conversationId) ?? [];
-      return { messages: all.slice(offset, offset + limit), total: all.length };
+      const ordered = direction === "desc" ? [...all].reverse() : all;
+      return { messages: ordered.slice(offset, offset + limit), total: all.length };
     },
     // 清空进程内会话消息。
     async clear(conversationId) {
       inMemoryMessages.set(conversationId, []);
+    },
+  },
+  turn: {
+    // 原子创建或复用进程内 Turn。
+    async createOrGet(conversationId, userId, clientMessageId, turnId = crypto.randomUUID()) {
+      const key = `${conversationId}\u0000${clientMessageId}`;
+      const existingId = inMemoryTurnKeys.get(key);
+      const existing = existingId ? inMemoryTurns.get(existingId) : undefined;
+      if (existing) return { turn: { ...existing }, created: false };
+      if (Array.from(inMemoryTurns.values()).some((turn) => turn.conversation_id === conversationId && (turn.status === "pending" || turn.status === "streaming"))) {
+        throw new MemoryGatewayError("MEMORY_CONVERSATION_BUSY", "会话中已有请求正在处理", 409);
+      }
+      const now = new Date().toISOString();
+      const turn: TurnData = {
+        id: turnId, conversation_id: conversationId, user_id: userId,
+        client_message_id: clientMessageId, status: "pending",
+        user_message_id: null, assistant_message_id: null,
+        assistant_content_json: null, error_code: null,
+        created_at: now, updated_at: now, completed_at: null,
+      };
+      inMemoryTurnKeys.set(key, turnId);
+      inMemoryTurns.set(turnId, turn);
+      return { turn: { ...turn }, created: true };
+    },
+    // 按用户读取进程内 Turn。
+    async get(turnId, userId) {
+      const turn = inMemoryTurns.get(turnId);
+      return turn?.user_id === userId ? { ...turn } : null;
+    },
+    // 按不可逆状态机更新进程内 Turn。
+    async update(turnId, userId, changes) {
+      const turn = inMemoryTurns.get(turnId);
+      if (!turn || turn.user_id !== userId) throw new MemoryGatewayError("MEMORY_TURN_NOT_FOUND", "Turn 不存在或无权访问", 404);
+      if (turn.status === changes.status) return { ...turn };
+      const allowed: Record<TurnStatus, TurnStatus[]> = {
+        pending: ["streaming", "failed", "cancelled"], streaming: ["completed", "failed", "cancelled"],
+        completed: [], failed: [], cancelled: [],
+      };
+      if (!allowed[turn.status].includes(changes.status)) {
+        throw new MemoryGatewayError("MEMORY_TURN_STATE_CONFLICT", `Cannot transition Turn from ${turn.status} to ${changes.status}`, 409);
+      }
+      const terminal = ["completed", "failed", "cancelled"].includes(changes.status);
+      const updated: TurnData = {
+        ...turn,
+        ...Object.fromEntries(Object.entries(changes).filter(([, value]) => value !== undefined)),
+        updated_at: nextIsoTimestamp(turn.updated_at),
+        completed_at: terminal ? nextIsoTimestamp(turn.updated_at) : turn.completed_at,
+      };
+      inMemoryTurns.set(turnId, updated);
+      return { ...updated };
     },
   },
   memory: {
@@ -237,6 +299,7 @@ class CloudflareRepositories implements Repositories {
   readonly profile: ProfileRepository;
   readonly conversation: ConversationRepository;
   readonly message: MessageRepository;
+  readonly turn: TurnRepository;
   readonly memory: MemoryRepository;
 
   // 初始化当前对象
@@ -244,7 +307,57 @@ class CloudflareRepositories implements Repositories {
     this.profile = new CloudflareProfileRepository(client);
     this.conversation = new CloudflareConversationRepository(client);
     this.message = new CloudflareMessageRepository(client);
+    this.turn = new CloudflareTurnRepository(client);
     this.memory = new CloudflareMemoryRepository(client);
+  }
+}
+
+class CloudflareTurnRepository implements TurnRepository {
+  private useLocalFallback = false;
+
+  // 初始化 Turn 仓储。
+  constructor(private readonly _client: CloudflareMemoryClient) {}
+
+  // 判断旧版 Gateway 是否尚未提供 Turn API。
+  private isLegacyGateway(error: unknown): boolean {
+    return error instanceof MemoryGatewayError && error.statusCode === 404 && error.code === "MEMORY_NOT_FOUND";
+  }
+
+  // 切换到进程内 Turn 兼容层并只记录一次降级告警。
+  private enableLocalFallback(): void {
+    if (this.useLocalFallback) return;
+    this.useLocalFallback = true;
+    console.warn("[turn] Gateway does not expose Turn API; using local compatibility storage");
+  }
+
+  // 原子创建或复用客户端消息对应的 Turn。
+  async createOrGet(conversationId: string, userId: string, clientMessageId: string, turnId?: string) {
+    if (this.useLocalFallback) {
+      return inMemoryRepositories.turn.createOrGet(conversationId, userId, clientMessageId, turnId);
+    }
+    try {
+      return await this._client.createOrGetTurn(conversationId, userId, clientMessageId, turnId);
+    } catch (error) {
+      if (!this.isLegacyGateway(error)) throw error;
+      this.enableLocalFallback();
+      return inMemoryRepositories.turn.createOrGet(conversationId, userId, clientMessageId, turnId);
+    }
+  }
+
+  // 按用户读取 Turn。
+  async get(turnId: string, userId: string): Promise<TurnData | null> {
+    if (this.useLocalFallback) return inMemoryRepositories.turn.get(turnId, userId);
+    return this._client.getTurn(turnId, userId);
+  }
+
+  // 按合法状态机更新 Turn。
+  async update(
+    turnId: string,
+    userId: string,
+    changes: Partial<Pick<TurnData, "user_message_id" | "assistant_message_id" | "assistant_content_json" | "error_code">> & { status: TurnStatus },
+  ): Promise<TurnData> {
+    if (this.useLocalFallback) return inMemoryRepositories.turn.update(turnId, userId, changes);
+    return this._client.updateTurn(turnId, userId, changes);
   }
 }
 
@@ -350,8 +463,9 @@ class CloudflareMessageRepository implements MessageRepository {
     conversationId: string,
     limit: number = 50,
     offset: number = 0,
+    direction: "asc" | "desc" = "asc",
   ): Promise<{ messages: MessageData[]; total: number }> {
-    const result = await this._client.getMessages(conversationId, limit, offset);
+    const result = await this._client.getMessages(conversationId, limit, offset, direction);
     return result as unknown as { messages: MessageData[]; total: number };
   }
 

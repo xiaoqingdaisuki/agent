@@ -54,7 +54,10 @@ const envSchema = z.object({
     .default(30_000),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(2).default(1),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(128_000).default(128_000),
+  HISTORY_CONTEXT_TOKEN_BUDGET: z.coerce.number().int().min(1_024).max(128_000).default(16_000),
   LLM_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
+  LLM_QUEUE_MAX: z.coerce.number().int().min(1).max(1_000).default(100),
+  LLM_QUEUE_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(5_000),
   MAX_AGENT_ITERATIONS: z.coerce.number().int().min(1).max(8).default(6),
   REACT_MAX_STEPS: z.coerce.number().int().min(1).max(8).default(8),
   REACT_MAX_TOOL_CALLS: z.coerce.number().int().min(1).max(6).default(6),
@@ -93,6 +96,8 @@ const envSchema = z.object({
 
   PORT: z.coerce.number().default(6001),
   AGENT_API_SECRET: z.string().default(""),
+  USER_RATE_LIMIT_RPM: z.coerce.number().int().min(1).max(100_000).default(120),
+  TENANT_RATE_LIMIT_RPM: z.coerce.number().int().min(1).max(1_000_000).default(1_200),
   CORS_ORIGIN: z
     .string()
     .default("")
@@ -116,7 +121,7 @@ const envSchema = z.object({
       (v) => v === "hybrid" || v === "sql",
       { message: "MEMORY_SEARCH_MODE must be 'hybrid' or 'sql'" },
     ),
-  MEMORY_AUTO_EXTRACT: z.preprocess(parseBooleanEnv, z.boolean()).default(true),
+  MEMORY_AUTO_EXTRACT: z.preprocess(parseBooleanEnv, z.boolean()).default(false),
   MEMORY_MAX_ACTIVE_PER_USER: z.coerce.number().int().min(1).max(200).default(50),
   MEMORY_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(15_000),
   BACKGROUND_TASK_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),

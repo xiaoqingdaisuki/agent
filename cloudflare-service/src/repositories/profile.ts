@@ -13,9 +13,14 @@ export interface UserProfile {
   updated_at: string;
 }
 
+// 基于前值生成单调递增的 ISO 时间戳，避免同一毫秒更新被排序或同步逻辑忽略。
+function nextIsoTimestamp(previous?: string): string {
+  return new Date(Math.max(Date.now(), previous ? Date.parse(previous) + 1 : 0)).toISOString();
+}
+
 // 创建用户画像
 export async function createProfile(db: D1Database, profile: Omit<UserProfile, "created_at" | "updated_at">): Promise<UserProfile> {
-  const now = new Date().toISOString();
+  const now = nextIsoTimestamp();
   await db
     .prepare("INSERT INTO profiles (user_id, name, preferences_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
     .bind(profile.user_id, profile.name, profile.preferences_json || "{}", now, now)
@@ -44,7 +49,7 @@ export async function getOrCreateProfile(db: D1Database, userId: string, name: s
   const existing = await getProfile(db, userId);
   if (existing) {
     // 更新 last_active_at 等价字段
-    const now = new Date().toISOString();
+    const now = nextIsoTimestamp(existing.updated_at);
     await db
       .prepare("UPDATE profiles SET updated_at = ? WHERE user_id = ?")
       .bind(now, userId)
@@ -62,7 +67,7 @@ export async function updateProfile(db: D1Database, userId: string, changes: Par
 
   const newName = changes.name !== undefined ? changes.name : existing.name;
   const newPrefs = changes.preferences_json !== undefined ? changes.preferences_json : existing.preferences_json;
-  const now = new Date().toISOString();
+  const now = nextIsoTimestamp(existing.updated_at);
 
   await db
     .prepare("UPDATE profiles SET name = ?, preferences_json = ?, updated_at = ? WHERE user_id = ?")

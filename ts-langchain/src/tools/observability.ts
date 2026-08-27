@@ -9,6 +9,9 @@
  * 生产环境可替换为 OpenTelemetry + Prometheus。
  */
 
+import { CloudflareMemoryClient } from "../clients/memory_gateway.js";
+import { config } from "../config/index.js";
+
 // ============ 指标模型 ============
 
 interface ToolCallMetric {
@@ -94,6 +97,16 @@ class MetricsCollector {
     return this.metrics.slice(-limit);
   }
 
+  // 原子取出最早一批待上传指标。
+  drain(limit = 100): ToolCallMetric[] {
+    return this.metrics.splice(0, limit);
+  }
+
+  // 上传失败时把指标恢复到队首并维持容量上限。
+  restore(events: ToolCallMetric[]): void {
+    this.metrics = [...events, ...this.metrics].slice(0, this.maxEvents);
+  }
+
   // 删除或清理 clear 对应的数据
   clear(): void {
     this.metrics = [];
@@ -103,12 +116,12 @@ class MetricsCollector {
 // ============ 全局单例 ============
 
 const metricsCollector = new MetricsCollector();
-let gatewayClient: any = null;
+let gatewayClient: CloudflareMemoryClient | null = null;
+let metricsFlush: Promise<void> | null = null;
 
 // 获取 getGatewayClient 对应的数据
 function getGatewayClient() {
   if (!gatewayClient) {
-    const { CloudflareMemoryClient } = require("../../clients/memory_gateway.js");
     gatewayClient = new CloudflareMemoryClient({
       baseUrl: process.env.CLOUDFLARE_MEMORY_BASE_URL || "http://localhost:8787",
       secret: process.env.CLOUDFLARE_MEMORY_SECRET || "",
@@ -118,28 +131,28 @@ function getGatewayClient() {
 }
 
 // 批量刷新指标到 Gateway（异步，不阻塞）
-async function flushToolMetrics(): Promise<void> {
-  if (process.env.MEMORY_ENABLED?.toLowerCase() === "false") return;
-  const events = metricsCollector.getEvents(metricsCollector["maxEvents"]);
-  if (events.length === 0) return;
-  const toFlush = events.splice(0, events.length);
-  try {
-    const client = getGatewayClient();
-    await client.writeToolMetrics(
-      toFlush.map((m) => ({
-        tool_name: m.tool_name,
-        tool_version: m.tool_version,
-        ok: m.ok,
-        error_code: m.error_code,
-        duration_ms: m.duration_ms,
-        risk_level: m.risk_level,
-        user_id: m.user_id,
-        tenant_id: m.tenant_id,
-      })),
-    );
-  } catch (err) {
-    console.warn("[metrics] Failed to flush tool metrics to Gateway:", err);
-  }
+export async function flushToolMetrics(): Promise<void> {
+  if (!config.MEMORY_ENABLED) return;
+  if (metricsFlush) return metricsFlush;
+  const toFlush = metricsCollector.drain(500);
+  if (toFlush.length === 0) return;
+  metricsFlush = (async () => {
+    try {
+      await getGatewayClient().writeToolMetrics(
+        toFlush.map((m) => ({
+          tool_name: m.tool_name, tool_version: m.tool_version, ok: m.ok,
+          error_code: m.error_code, duration_ms: m.duration_ms,
+          risk_level: m.risk_level, user_id: m.user_id, tenant_id: m.tenant_id,
+        })),
+      );
+    } catch (err) {
+      metricsCollector.restore(toFlush);
+      console.warn("[metrics] Failed to flush tool metrics to Gateway:", err);
+    } finally {
+      metricsFlush = null;
+    }
+  })();
+  return metricsFlush;
 }
 
 // 获取 getMetricsCollector 对应的数据

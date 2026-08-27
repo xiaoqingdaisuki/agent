@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import {
   MAX_AGENT_ITERATIONS,
+  MAX_STREAM_EVENT_BUFFER,
   convertXmlToolCalls,
   getFastPathAnswer,
   isDirectChatMessage,
@@ -201,6 +202,29 @@ describe("tool agent", () => {
     expect(second).toBe(first);
     expect(first.maxIterations).toBe(MAX_AGENT_ITERATIONS);
     expect(typeof first.agent.streamEvents).toBe("function");
+  });
+
+  it("applies backpressure instead of buffering an unbounded model event stream", async () => {
+    const wrapped = await createToolAgent();
+    let produced = 0;
+    const total = MAX_STREAM_EVENT_BUFFER * 2;
+    vi.spyOn(wrapped.agent, "streamEvents").mockImplementation(async function* () {
+      for (let index = 0; index < total; index += 1) {
+        produced += 1;
+        yield { event: "on_chat_model_stream", data: { index } } as any;
+      }
+    } as any);
+
+    const iterator = wrapped.streamEvents({ input: "slow consumer" });
+    await iterator.next();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    // 队列容量之外允许一个已交付和一个等待入队的在途事件。
+    expect(produced).toBeLessThanOrEqual(MAX_STREAM_EVENT_BUFFER + 2);
+    for await (const _event of iterator) {
+      // 消费完事件以释放异步泵和测试资源。
+    }
+    expect(produced).toBe(total);
   });
 
   it("returns a runtime AIMessage through the ReAct middleware", async () => {

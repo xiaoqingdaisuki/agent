@@ -11,7 +11,7 @@ import {
   wrapToolWithRuntime,
 } from "../../../src/tools/runtime/executor.js";
 
-function context(userId: string): ToolCallContext {
+function context(userId: string, roles: string[] = ["member"]): ToolCallContext {
   return {
     request_id: `request-${userId}`,
     trace_id: `trace-${userId}`,
@@ -19,6 +19,7 @@ function context(userId: string): ToolCallContext {
     tenant_id: "tenant",
     user_id: userId,
     actor_type: "user",
+    roles,
   };
 }
 
@@ -64,7 +65,7 @@ describe("per-request tool runtime", () => {
       required_permissions: ["memory.user.write"], input_schema: {},
     };
     const wrapped = wrapToolWithRuntime(rawTool, descriptor, schema);
-    await runWithToolCallContext(context("owner"), () =>
+    await runWithToolCallContext(context("owner", ["admin"]), () =>
       wrapped.invoke({ user_id: "victim", content: "secret" }),
     );
     expect(executedUserId).toBe("owner");
@@ -84,7 +85,7 @@ describe("per-request tool runtime", () => {
       required_permissions: ["memory.user.write"], input_schema: {},
     };
     const wrapped = wrapToolWithRuntime(rawTool, descriptor, schema);
-    const results = await runWithToolCallContext(context("u1"), async () => [
+    const results = await runWithToolCallContext(context("u1", ["admin"]), async () => [
       await wrapped.invoke({ user_id: "u1", content: "same content" }),
       await wrapped.invoke({ user_id: "u1", content: "same content" }),
       await wrapped.invoke({ user_id: "u1", content: "different content" }),
@@ -109,10 +110,10 @@ describe("per-request tool runtime", () => {
     };
     const wrapped = wrapToolWithRuntime(rawTool, descriptor, schema);
     const [r1, r2] = await Promise.all([
-      runWithToolCallContext(context("user-a"), () =>
+      runWithToolCallContext(context("user-a", ["admin"]), () =>
         wrapped.invoke({ user_id: "user-a", content: "shared content" }),
       ),
-      runWithToolCallContext(context("user-b"), () =>
+      runWithToolCallContext(context("user-b", ["admin"]), () =>
         wrapped.invoke({ user_id: "user-b", content: "shared content" }),
       ),
     ]);

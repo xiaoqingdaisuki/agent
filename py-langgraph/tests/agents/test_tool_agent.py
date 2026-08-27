@@ -209,18 +209,29 @@ def test_tool_limit_is_counted_once_per_requested_tool():
 
 
 def test_history_trimming_keeps_a_human_turn_boundary():
-    messages = []
-    for index in range(graph_agents.MAX_HISTORY_MESSAGES):
-        messages.extend(
-            [
-                HumanMessage(content=f"question {index}", id=f"human-{index}"),
-                AIMessage(content=f"answer {index}", id=f"ai-{index}"),
-            ]
-        )
+    messages = [
+        HumanMessage(content="中" * graph_agents.MAX_HISTORY_TOKENS, id="human-old"),
+        AIMessage(content="old answer", id="ai-old"),
+        HumanMessage(content="latest question", id="human-latest"),
+        AIMessage(content="latest answer", id="ai-latest"),
+    ]
 
     update = graph_agents.trim_history({"messages": messages})
     removed_ids = {message.id for message in update["messages"]}
     retained = [message for message in messages if message.id not in removed_ids]
 
-    assert len(retained) <= graph_agents.MAX_HISTORY_MESSAGES
+    assert [message.id for message in retained] == ["human-latest", "ai-latest"]
     assert retained[0].type == "human"
+
+
+def test_serialized_history_uses_the_same_token_budget_and_turn_boundary():
+    history = [
+        {"role": "user", "content": "中" * graph_agents.MAX_HISTORY_TOKENS},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "latest question"},
+        {"role": "assistant", "content": "latest answer"},
+    ]
+
+    retained = graph_agents.trim_conversation_history_to_token_budget(history)
+
+    assert retained == history[-2:]

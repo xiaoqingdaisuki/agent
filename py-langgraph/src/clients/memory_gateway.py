@@ -24,6 +24,7 @@ from src.clients.schemas import (
     UserProfileData,
     ConversationData,
     MessageData,
+    TurnData,
     MemoryData,
     MemorySearchResultData,
     MessagesPageData,
@@ -235,9 +236,14 @@ class CloudflareMemoryClient:
         })
 
     # 获取 get messages 对应的数据
-    async def get_messages(self, conversation_id: str, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    async def get_messages(
+        self, conversation_id: str, limit: int = 50, offset: int = 0, direction: str = "asc"
+    ) -> tuple[list[dict], int]:
         """获取会话消息"""
-        result = await self._request("GET", f"/internal/v1/conversations/{_path_segment(conversation_id)}/messages?limit={limit}&offset={offset}")
+        result = await self._request(
+            "GET",
+            f"/internal/v1/conversations/{_path_segment(conversation_id)}/messages?limit={limit}&offset={offset}&direction={direction}",
+        )
         page = MessagesPageData.model_validate(result.get("data", {}))
         return [msg.model_dump() for msg in page.messages], page.total
 
@@ -245,6 +251,46 @@ class CloudflareMemoryClient:
     async def clear_messages(self, conversation_id: str) -> None:
         """清空会话消息"""
         await self._request("DELETE", f"/internal/v1/conversations/{_path_segment(conversation_id)}/messages")
+
+    # 原子创建或复用客户端消息对应的 Turn。
+    async def create_or_get_turn(
+        self,
+        conversation_id: str,
+        user_id: str,
+        client_message_id: str,
+        turn_id: str,
+    ) -> tuple[dict, bool]:
+        result = await self._request(
+            "POST",
+            f"/internal/v1/conversations/{_path_segment(conversation_id)}/turns",
+            {"id": turn_id, "user_id": user_id, "client_message_id": client_message_id},
+            idempotency_key=client_message_id,
+        )
+        raw = result["data"]
+        return TurnData.model_validate(raw).model_dump(mode="json"), bool(raw.get("created"))
+
+    # 按用户读取指定 Turn。
+    async def get_turn(self, turn_id: str, user_id: str) -> dict | None:
+        try:
+            result = await self._request(
+                "GET",
+                f"/internal/v1/turns/{_path_segment(turn_id)}?user_id={quote(user_id, safe='')}",
+            )
+            return TurnData.model_validate(result["data"]).model_dump(mode="json")
+        except MemoryGatewayError as error:
+            if error.code == "MEMORY_TURN_NOT_FOUND":
+                return None
+            raise
+
+    # 按合法状态机更新 Turn。
+    async def update_turn(self, turn_id: str, user_id: str, **changes) -> dict:
+        result = await self._request(
+            "PATCH",
+            f"/internal/v1/turns/{_path_segment(turn_id)}",
+            {"user_id": user_id, **changes},
+            idempotency_key=f"{turn_id}:{changes['status']}",
+        )
+        return TurnData.model_validate(result["data"]).model_dump(mode="json")
 
     # ============ Memory ============
 

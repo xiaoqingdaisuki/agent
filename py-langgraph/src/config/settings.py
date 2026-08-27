@@ -17,7 +17,10 @@ class Settings(BaseSettings):
     llm_timeout_ms: int = 30000
     llm_max_retries: int = Field(default=1, ge=0, le=2)
     llm_max_output_tokens: int = Field(default=128000, ge=256, le=128000)
+    history_context_token_budget: int = Field(default=16000, ge=1024, le=128000)
     llm_max_concurrency: int = Field(default=2, ge=1, le=32)
+    llm_queue_max: int = Field(default=100, ge=1, le=1000)
+    llm_queue_timeout_ms: int = Field(default=5000, ge=100, le=60000)
     background_task_concurrency: int = Field(default=4, ge=1, le=32)
     background_task_queue_max: int = Field(default=200, ge=1, le=1000)
     max_agent_iterations: int = 6
@@ -37,6 +40,8 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 6002
     agent_api_secret: str = ""
+    user_rate_limit_rpm: int = Field(default=120, ge=1, le=100000)
+    tenant_rate_limit_rpm: int = Field(default=1200, ge=1, le=1000000)
     cors_origin: str = ""
 
     # ============ Cloudflare Service 配置 ============
@@ -56,7 +61,7 @@ class Settings(BaseSettings):
         ),
     )
     memory_search_mode: str = "hybrid"
-    memory_auto_extract: bool = True
+    memory_auto_extract: bool = False
     memory_max_active_per_user: int = 50
     memory_request_timeout_ms: int = 15000
 

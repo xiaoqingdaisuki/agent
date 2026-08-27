@@ -48,6 +48,14 @@ class MessageRole(str, Enum):
     tool = "tool"
 
 
+class TurnStatus(str, Enum):
+    pending = "pending"
+    streaming = "streaming"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
 # ============ 数据模型 ============
 
 class UserProfileData(BaseModel):
@@ -80,6 +88,23 @@ class MessageData(BaseModel):
     role: MessageRole = MessageRole.user
     content_json: str
     created_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class TurnData(BaseModel):
+    id: str
+    conversation_id: str
+    user_id: str
+    client_message_id: str
+    status: TurnStatus
+    user_message_id: str | None = None
+    assistant_message_id: str | None = None
+    assistant_content_json: str | None = None
+    error_code: str | None = None
+    created_at: str
+    updated_at: str
+    completed_at: str | None = None
 
     model_config = {"from_attributes": True}
 

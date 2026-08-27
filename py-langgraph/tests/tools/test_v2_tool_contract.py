@@ -26,12 +26,13 @@ V2_DESCRIPTOR_NAMES = {
 }
 
 
-async def test_v2_registers_fifteen_tools():
-    """V2 应注册原有九个工具和新增六个工具。"""
+async def test_v2_registers_all_descriptors_but_hides_write_tools_by_default():
+    """默认 Agent 只暴露成员可执行的只读工具。"""
     descriptor_names = {descriptor.name for descriptor in get_registry().get_descriptors()}
     assert V2_DESCRIPTOR_NAMES <= descriptor_names
-    expected_count = 15 if "knowledge.search" in descriptor_names else 14
-    assert len(tools) == expected_count
+    expected_count = 14 if "knowledge.search" in descriptor_names else 13
+    assert "memory_user_save" not in {tool.name for tool in tools}
+    assert "memory_user_delete" not in {tool.name for tool in tools}
     assert len(descriptor_names) == expected_count
 
 
@@ -115,7 +116,7 @@ async def test_memory_list_delete_dialogue_flow():
     """记忆应通过保存→列表定位 ID→按精确 ID 删除完成闭环。"""
     user_id = "v2-memory-user"
     await memory_user_save.ainvoke({"user_id": user_id, "content": "用户偏好简洁回答", "category": "preference"})
-    context = create_tool_call_context(user_id, "v2-memory-conversation")
+    context = create_tool_call_context(user_id, "v2-memory-conversation", roles=["admin"])
     with tool_call_scope(context):
         listed = json.loads(await memory_user_list.ainvoke({}))
         memory_id = listed["memories"][0]["memory_id"] if listed["memories"] else None

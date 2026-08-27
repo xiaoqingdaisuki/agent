@@ -37,15 +37,32 @@ export async function createMessageBatch(db: D1Database, messages: Message[]): P
      ON CONFLICT(id) DO UPDATE SET role = excluded.role, content_json = excluded.content_json`,
   );
 
-  for (const msg of messages) {
-    await stmt.bind(msg.id, msg.conversation_id, msg.user_id, msg.sequence_no, msg.role, msg.content_json, msg.created_at).run();
-  }
+  await db.batch(
+    messages.map((msg) =>
+      stmt.bind(
+        msg.id,
+        msg.conversation_id,
+        msg.user_id,
+        msg.sequence_no,
+        msg.role,
+        msg.content_json,
+        msg.created_at,
+      ),
+    ),
+  );
 }
 
 // 获取会话消息列表
-export async function getMessagesByConversation(db: D1Database, conversationId: string, limit = 50, offset = 0): Promise<{ messages: Message[]; total: number }> {
+export async function getMessagesByConversation(
+  db: D1Database,
+  conversationId: string,
+  limit = 50,
+  offset = 0,
+  direction: "asc" | "desc" = "asc",
+): Promise<{ messages: Message[]; total: number }> {
+  const order = direction === "desc" ? "DESC" : "ASC";
   const { results } = await db
-    .prepare("SELECT id, conversation_id, user_id, sequence_no, role, content_json, created_at FROM messages WHERE conversation_id = ? ORDER BY sequence_no LIMIT ? OFFSET ?")
+    .prepare(`SELECT id, conversation_id, user_id, sequence_no, role, content_json, created_at FROM messages WHERE conversation_id = ? ORDER BY sequence_no ${order} LIMIT ? OFFSET ?`)
     .bind(conversationId, limit, offset)
     .all<Message>();
 

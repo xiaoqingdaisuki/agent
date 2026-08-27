@@ -97,6 +97,9 @@ class TestGlobalRegistry:
     def test_get_tools_for_user_default(self):
         tools = get_tools_for_user()
         assert len(tools) >= 4  # 默认注册了 4 个工具
+        names = {tool.name for tool in tools}
+        assert "memory_user_save" not in names
+        assert "memory_user_delete" not in names
 
     def test_get_tool_metadata_default(self):
         meta = get_tool_metadata_for_user()

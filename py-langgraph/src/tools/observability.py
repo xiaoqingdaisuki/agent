@@ -116,6 +116,14 @@ class MetricsCollector:
             )
         return events
 
+    # 读取最早一批待上传指标但暂不确认删除。
+    def peek_pending(self, limit: int = 500) -> list[ToolCallMetric]:
+        return list(self._metrics[:limit])
+
+    # 成功上传后确认删除指定数量的队首指标。
+    def acknowledge(self, count: int) -> None:
+        del self._metrics[:count]
+
     # 清空所有已记录的指标事件
     def clear(self) -> None:
         self._metrics.clear()
@@ -124,6 +132,7 @@ class MetricsCollector:
 # ============ 全局单例 ==========
 
 _metrics = MetricsCollector()
+_metrics_flush_inflight = False
 
 
 # 获取 get metrics collector 对应的数据
@@ -136,33 +145,42 @@ def _flush_metrics() -> None:
     """将工具指标批量写入 Gateway D1"""
     if not settings.memory_enabled:
         return
-    events = _metrics.get_events()
+    global _metrics_flush_inflight
+    if _metrics_flush_inflight:
+        return
+    events = _metrics.peek_pending()
     if not events:
         return
+    _metrics_flush_inflight = True
     try:
         import asyncio
-        import threading
 
         from src.clients.memory_gateway import CloudflareMemoryClient
 
         client = CloudflareMemoryClient()
         entries = [
             {
-                "tool_name": e["tool"],
-                "tool_version": e.get("version", ""),
-                "ok": e["ok"],
-                "error_code": e.get("error"),
-                "duration_ms": e["duration_ms"],
-                "risk_level": e.get("risk", "R0"),
-                "user_id": e.get("user_id", ""),
-                "tenant_id": e.get("tenant_id", ""),
+                "tool_name": e.tool_name,
+                "tool_version": e.tool_version,
+                "ok": e.ok,
+                "error_code": e.error_code,
+                "duration_ms": e.duration_ms,
+                "risk_level": e.risk_level,
+                "user_id": e.user_id,
+                "tenant_id": e.tenant_id,
             }
             for e in events
         ]
 
         # 执行 do flush 对应的业务逻辑
         async def _do_flush():
-            await client.write_tool_metrics(entries)
+            global _metrics_flush_inflight
+            try:
+                await client.write_tool_metrics(entries)
+                _metrics.acknowledge(len(events))
+            finally:
+                await client.close()
+                _metrics_flush_inflight = False
 
         try:
             loop = asyncio.get_event_loop()
@@ -171,13 +189,9 @@ def _flush_metrics() -> None:
             else:
                 loop.run_until_complete(_do_flush())
         except RuntimeError:
-            # 执行 run 对应的业务逻辑
-            def _run():
-                asyncio.run(_do_flush())
-
-            threading.Thread(target=_run, daemon=True).start()
+            asyncio.run(_do_flush())
     except Exception:
-        pass  # 刷入失败静默降级
+        _metrics_flush_inflight = False
 
 
 # 更新或保存 record tool metric 对应的数据

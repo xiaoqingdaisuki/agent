@@ -16,6 +16,7 @@ vi.mock("../../src/agents/tool-agent.js", () => ({
 import {
   AgentService,
   ConversationService,
+  KnowledgeService,
   extractAgentOutputText,
   flushBackgroundTasks,
 } from "../../src/services/index.js";
@@ -26,6 +27,30 @@ describe("AgentService empty streams", () => {
   beforeEach(() => {
     createToolAgentMock.mockReset();
     createDirectChatAgentMock.mockReset();
+  });
+
+  it("routes explicit knowledge queries without model planning", async () => {
+    const conversation = await ConversationService.create("explicit knowledge");
+    const knowledgeChat = vi.spyOn(KnowledgeService, "chat").mockResolvedValue({ output: "没有检索到" });
+
+    const events = [];
+    for await (const event of AgentService.chatStream(
+      conversation.id,
+      "请从知识库查询 Agent 项目整改",
+      undefined,
+      undefined,
+      { tenantId: "tenant:test", roles: ["member"] },
+    )) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([{ type: "text", text: "没有检索到" }]);
+    expect(knowledgeChat).toHaveBeenCalledWith(
+      "请从知识库查询 Agent 项目整改",
+      [],
+      "tenant:test",
+    );
+    expect(createToolAgentMock).not.toHaveBeenCalled();
   });
 
   it("passes the persisted previous turn as supplemental chat history", async () => {
@@ -442,7 +467,7 @@ describe("AgentService empty streams", () => {
 
     const conversation = await ConversationService.create("timeout stream");
     const events = [];
-    for await (const event of AgentService.chatStream(conversation.id, "南山有什么好吃的？")) {
+    for await (const event of AgentService.chatStream(conversation.id, "流式超时测试")) {
       events.push(event);
     }
 
@@ -450,6 +475,30 @@ describe("AgentService empty streams", () => {
       type: "text",
       text: "AI助手响应超时，请稍后重试。",
     });
+  });
+
+  it("does not resend streamed text when a request times out", async () => {
+    createDirectChatAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        yield {
+          event: "on_chat_model_stream",
+          data: { chunk: { content: "已输出内容" } },
+        };
+        throw new AgentDeadlineError(30_000);
+      },
+    });
+
+    const conversation = await ConversationService.create("partial timeout");
+    const events = [];
+    for await (const event of AgentService.chatStream(conversation.id, "你好")) {
+      events.push(event);
+    }
+
+    const text = events
+      .filter((event) => event.type === "text")
+      .map((event) => event.text)
+      .join("");
+    expect(text).toBe("已输出内容\n\n---\n⚠️ 以上回答尚未完成。如需继续，请回复「继续」。");
   });
 
   it("does not wait for a slow memory gateway before streaming", async () => {
