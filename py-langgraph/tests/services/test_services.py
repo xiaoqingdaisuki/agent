@@ -1,6 +1,7 @@
 """Tests for service layer"""
 
 import asyncio
+import io
 
 import pytest
 from src.services import (
@@ -15,6 +16,39 @@ from src.services import (
     extract_agent_output_text,
     flush_background_tasks,
 )
+from src.services.document_parser import parse_document
+
+
+def _build_pdf_fixture() -> bytes:
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length 59 >>\nstream\nBT\n/F1 18 Tf\n72 720 Td\n(PDF-MARKER-421) Tj\nET\nendstream",
+    ]
+    result = b"%PDF-1.4\n"
+    offsets = [0]
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(result))
+        result += f"{index} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(result)
+    result += f"xref\n0 {len(objects) + 1}\n".encode()
+    result += b"0000000000 65535 f \n"
+    result += b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets[1:])
+    result += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return result
+
+
+def _build_docx_fixture() -> bytes:
+    from docx import Document as DocxDocument
+
+    document = DocxDocument()
+    document.add_heading("DOCX-MARKER-862", level=1)
+    document.add_paragraph("可检索的 DOCX 正文")
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
 
 
 def test_nested_tool_lifecycle_is_emitted_once():
@@ -34,6 +68,26 @@ def test_nested_tool_lifecycle_is_emitted_once():
     ]
 
     assert accepted == ["outer", "outer"]
+
+
+def test_document_parser_extracts_pdf_text_with_page_metadata():
+    document = parse_document(_build_pdf_fixture(), "marker.pdf", "application/pdf")
+
+    assert document["parserVersion"] == "session-document-v2"
+    assert document["parts"][0]["page"] == 1
+    assert document["parts"][0]["content"] == "PDF-MARKER-421"
+
+
+def test_document_parser_extracts_docx_paragraphs():
+    document = parse_document(
+        _build_docx_fixture(),
+        "marker.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    content = "\n".join(part["content"] for part in document["parts"])
+    assert "DOCX-MARKER-862" in content
+    assert "可检索的 DOCX 正文" in content
 
 
 class TestBusinessError:
@@ -173,6 +227,41 @@ class TestConversationService:
 
 
 class TestAgentService:
+    @pytest.mark.asyncio
+    async def test_chat_injects_knowledge_context_for_memory_enabled_user(self, monkeypatch):
+        from langchain_core.messages import AIMessage
+        from src.agents import graph_agents
+
+        captured = {}
+
+        class FakeAgent:
+            async def ainvoke(self, payload, **_kwargs):
+                captured.update(payload)
+                return {"messages": [AIMessage(content="基于知识库的回答")]}
+
+        async def fake_search(query, top_k, user_id, document_ids=None):
+            assert query == "后续问题"
+            assert top_k == 5
+            assert user_id == "rag-user"
+            assert document_ids == ["doc-1"]
+            return [{"document_name": "guide.txt", "content": "持久知识内容"}]
+
+        conversation = ConversationService.create("auto rag", user_id="rag-user")
+        monkeypatch.setattr(graph_agents, "build_chat_agent", lambda **_kwargs: FakeAgent())
+        monkeypatch.setattr(graph_agents, "is_direct_chat_message", lambda _content: True)
+        monkeypatch.setattr(KnowledgeService, "search", fake_search)
+
+        reply = await AgentService.chat(
+            conversation.id,
+            "后续问题",
+            user_id="rag-user",
+            attachment_context={"document_ids": ["doc-1"]},
+        )
+        await flush_background_tasks()
+
+        assert reply.content == "基于知识库的回答"
+        assert "持久知识内容" in captured["messages"][0]["content"]
+
     @pytest.mark.asyncio
     async def test_chat_passes_persisted_history_as_supplemental_context(self, monkeypatch):
         """跨轮请求必须把已持久化的会话记录传给 Agent。"""

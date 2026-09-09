@@ -26,7 +26,7 @@ export async function buildApp() {
     origin: config.CORS_ORIGIN.length > 0 ? config.CORS_ORIGIN : false,
   });
   await app.register(multipart, {
-    limits: { files: 1, fileSize: 10 * 1024 * 1024 },
+    limits: { files: 6, fileSize: 10 * 1024 * 1024 },
   });
   registerAgentAuthMiddleware(app);
 

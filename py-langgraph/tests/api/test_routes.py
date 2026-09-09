@@ -1,9 +1,42 @@
 """Tests for API routes"""
 
+import io
+
 import pytest
 from httpx import AsyncClient, ASGITransport
 from src.api.main import app, create_app
 from src.config.settings import settings
+
+
+def _build_pdf_fixture() -> bytes:
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length 59 >>\nstream\nBT\n/F1 18 Tf\n72 720 Td\n(PDF-API-MARKER-421) Tj\nET\nendstream",
+    ]
+    result = b"%PDF-1.4\n"
+    offsets = [0]
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(result))
+        result += f"{index} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(result)
+    result += f"xref\n0 {len(objects) + 1}\n".encode()
+    result += b"0000000000 65535 f \n"
+    result += b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets[1:])
+    result += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return result
+
+
+def _build_docx_fixture() -> bytes:
+    from docx import Document as DocxDocument
+
+    document = DocxDocument()
+    document.add_paragraph("DOCX-API-MARKER-862")
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
 
 
 @pytest.fixture
@@ -310,6 +343,78 @@ class TestConversationEndpoints:
         assert "你好！我是 AI 老情，很高兴为你服务。" in response.text
         assert "data: [DONE]" in response.text
 
+    @pytest.mark.asyncio
+    async def test_multipart_message_extracts_pdf_and_docx(self, client: AsyncClient, monkeypatch):
+        from src.services import AgentService, Message
+
+        monkeypatch.setattr(settings, "memory_enabled", False)
+        captured: dict = {}
+
+        async def fake_chat(_conversation_id, _content, user_id=None, tool_identity=None, attachment_context=None):
+            captured["attachments"] = attachment_context
+            return Message("assistant", "附件解析成功")
+
+        monkeypatch.setattr(AgentService, "chat", fake_chat)
+        created = await client.post(
+            "/api/v1/conversations",
+            json={"title": "文档解析接口测试", "user_id": "test-user"},
+        )
+        conversation_id = created.json()["id"]
+        response = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages",
+            data={
+                "content": "请读取两个附件",
+                "user_id": "test-user",
+                "client_message_id": "pdf-docx-api-test",
+            },
+            files=[
+                ("documents", ("marker.pdf", _build_pdf_fixture(), "application/pdf")),
+                (
+                    "documents",
+                    (
+                        "marker.docx",
+                        _build_docx_fixture(),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    ),
+                ),
+            ],
+        )
+
+        assert response.status_code == 200
+        documents = captured["attachments"]["session_documents"]
+        assert [document["filename"] for document in documents] == ["marker.pdf", "marker.docx"]
+        assert "PDF-API-MARKER-421" in documents[0]["parts"][0]["content"]
+        assert "DOCX-API-MARKER-862" in documents[1]["parts"][0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_multipart_message_ignores_duplicate_images(self, client: AsyncClient, monkeypatch):
+        from src.services import AgentService, Message
+
+        monkeypatch.setattr(settings, "memory_enabled", False)
+        captured: dict = {}
+
+        async def fake_chat(_conversation_id, _content, user_id=None, tool_identity=None, attachment_context=None):
+            captured["attachments"] = attachment_context
+            return Message("assistant", "图片解析成功")
+
+        monkeypatch.setattr(AgentService, "chat", fake_chat)
+        created = await client.post(
+            "/api/v1/conversations",
+            json={"title": "重复图片接口测试", "user_id": "test-user"},
+        )
+        conversation_id = created.json()["id"]
+        response = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages",
+            data={"content": "请分析图片", "user_id": "test-user"},
+            files=[
+                ("images", ("same.png", b"PNGDATA", "image/png")),
+                ("images", ("same.png", b"PNGDATA", "image/png")),
+            ],
+        )
+
+        assert response.status_code == 200
+        assert len(captured["attachments"]["images"]) == 1
+
 
 class TestKnowledgeEndpoints:
     @pytest.mark.asyncio
@@ -334,6 +439,16 @@ class TestKnowledgeEndpoints:
         )
         assert response.status_code == 201
         assert response.json()["name"] == "note.txt"
+
+    @pytest.mark.asyncio
+    async def test_upload_parses_pdf_before_persisting(self, client: AsyncClient):
+        response = await client.post(
+            "/api/v1/knowledge/documents",
+            files={"file": ("marker.pdf", _build_pdf_fixture(), "application/pdf")},
+        )
+
+        assert response.status_code == 201
+        assert response.json()["name"] == "marker.pdf"
 
 
 class TestCompleteApiContract:

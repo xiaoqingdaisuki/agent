@@ -1,10 +1,11 @@
 /**
  * RAG 文档加载器
- * 支持 TXT, Markdown 文件
+ * 支持 TXT、Markdown、PDF、DOCX 文件
  */
 
 import * as fs from "fs/promises";
 import * as path from "path";
+import { parseSessionDocument } from "../services/session-documents.js";
 
 export interface Document {
   id: string;
@@ -50,9 +51,14 @@ export class DocumentLoader {
   static async loadFromBuffer(
     buffer: Buffer,
     filename: string,
+    contentAlreadyParsed = false,
   ): Promise<Document> {
     const ext = path.extname(filename).toLowerCase();
-    const content = buffer.toString("utf-8");
+    const content = contentAlreadyParsed
+      ? buffer.toString("utf-8")
+      : (await parseSessionDocument(buffer, filename, "application/octet-stream"))
+          .parts.map((part) => part.content)
+          .join("\n\n");
 
     return {
       id: crypto.randomUUID(),

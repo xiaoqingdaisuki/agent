@@ -347,6 +347,9 @@ function getMessageText(message: BaseMessage | undefined): string {
   return message ? contentToText(message.content) : "";
 }
 
+export type AgentContentBlock = Record<string, unknown>;
+export type AgentUserContent = string | AgentContentBlock[];
+
 // 以 createAgent 封装旧调用约定，并保留现有服务层输入接口。
 class DeclarativeToolAgent {
   readonly maxIterations = MAX_AGENT_ITERATIONS;
@@ -358,7 +361,7 @@ class DeclarativeToolAgent {
 
   // 调用 Agent 并将消息状态转换为旧接口的 output 字段。
   async invoke(
-    input: { input: string; chat_history?: BaseMessage[]; memory_context?: BaseMessage[] },
+    input: { input: AgentUserContent; chat_history?: BaseMessage[]; memory_context?: BaseMessage[] },
     options: { signal?: AbortSignal } = {},
   ): Promise<{ output: string; react: ReActRunSummary }> {
     const tracker = createReActTracker();
@@ -388,7 +391,7 @@ class DeclarativeToolAgent {
 
   // 直接转发 LangChain 原生事件流，提供真实 token 和工具进度。
   async *streamEvents(
-    input: { input: string; chat_history?: BaseMessage[]; memory_context?: BaseMessage[] },
+    input: { input: AgentUserContent; chat_history?: BaseMessage[]; memory_context?: BaseMessage[] },
     options: {
       signal?: AbortSignal;
       version?: "v1" | "v2";

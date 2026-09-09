@@ -1,6 +1,6 @@
 """
 RAG 文档加载器
-支持 TXT, Markdown 文件
+支持 TXT、Markdown、PDF、DOCX 文件
 """
 
 import os

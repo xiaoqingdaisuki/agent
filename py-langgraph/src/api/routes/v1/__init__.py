@@ -4,8 +4,10 @@ External API v1 — 给前端 UI 使用
 
 import json
 import asyncio
+import base64
+import hashlib
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -14,6 +16,12 @@ from pydantic import BaseModel, Field
 from src.api.auth import get_agent_tool_identity, require_agent_user_id
 from src.api.request_logging import log_request_error
 from src.api.sse import SseEventSequencer, encode_sse_heartbeat, with_sse_heartbeats
+from src.config.settings import settings
+from src.services.document_parser import (
+    DocumentParseError,
+    SESSION_DOCUMENT_JSON_MAX_BYTES,
+    parse_document,
+)
 from src.services import (
     AgentService,
     BusinessError,
@@ -39,9 +47,11 @@ class CreateConversationRequest(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
-    content: str = Field(..., min_length=1, max_length=16_000)
+    content: str = Field(default="", max_length=16_000)
     user_id: str | None = Field(None, description="用户标识，用于记忆和个人化")
     client_message_id: str | None = Field(default=None, min_length=1, max_length=128)
+    session_documents: list[dict[str, Any]] = Field(default_factory=list)
+    document_attachment_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
 class MessageResponse(BaseModel):
@@ -73,6 +83,141 @@ class DocumentResponse(BaseModel):
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2_000)
     top_k: int = Field(default=5, ge=1, le=20)
+
+
+# 将统一文档解析异常转换为 FastAPI 错误响应。
+def document_parse_http_error(error: DocumentParseError) -> HTTPException:
+    return HTTPException(
+        status_code=error.status_code,
+        detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": str(error)},
+    )
+
+
+# 读取 JSON 或 multipart 消息，并将图片编码为仅当前请求使用的数据块。
+async def read_send_message_payload(request: Request) -> tuple[SendMessageRequest, dict[str, Any]]:
+    content_type = request.headers.get("content-type", "").lower()
+    if "multipart/form-data" not in content_type:
+        try:
+            payload = await request.json()
+            raw_documents = payload.get("session_documents") if isinstance(payload, dict) else None
+            if raw_documents is not None and len(json.dumps(raw_documents, ensure_ascii=False).encode("utf-8")) > SESSION_DOCUMENT_JSON_MAX_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail={
+                        "code": BusinessErrorCode.INVALID_REQUEST.value,
+                        "message": "临时文档总大小不能超过 5MB",
+                    },
+                )
+            req = SendMessageRequest.model_validate(payload)
+        except Exception as error:
+            if isinstance(error, HTTPException):
+                raise
+            raise HTTPException(
+                status_code=400,
+                detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "请求体格式不正确"},
+            ) from error
+        return req, {
+            "session_documents": req.session_documents,
+            "document_ids": req.document_attachment_ids,
+            "images": [],
+        }
+
+    form = await request.form()
+    metadata: dict[str, Any] = {}
+    raw_metadata = form.get("metadata")
+    if isinstance(raw_metadata, str):
+        try:
+            parsed = json.loads(raw_metadata)
+            if isinstance(parsed, dict):
+                metadata = parsed
+        except json.JSONDecodeError as error:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "附件元数据格式不正确"},
+            ) from error
+
+    documents = list(metadata.get("session_documents") or [])
+    images: list[dict[str, str]] = []
+    image_fingerprints: set[str] = set()
+    for field_name, value in form.multi_items():
+        if field_name in {"metadata", "content", "user_id", "client_message_id"}:
+            continue
+        if not hasattr(value, "read"):
+            continue
+        file_content = await value.read()
+        content_type_value = str(getattr(value, "content_type", "") or "")
+        filename = str(getattr(value, "filename", "unknown") or "unknown")
+        if content_type_value.startswith("image/"):
+            fingerprint = hashlib.sha256(file_content).hexdigest()
+            if fingerprint in image_fingerprints:
+                continue
+            image_fingerprints.add(fingerprint)
+            if len(images) >= 4:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "图片最多上传 4 张"},
+                )
+            images.append({
+                "mime_type": content_type_value,
+                "data": base64.b64encode(file_content).decode("ascii"),
+                "filename": filename,
+            })
+        else:
+            try:
+                documents.append(parse_document(file_content, filename, content_type_value))
+            except DocumentParseError as error:
+                raise document_parse_http_error(error) from error
+
+    req = SendMessageRequest.model_validate({
+        "content": metadata.get("content", form.get("content", "")),
+        "user_id": metadata.get("user_id", form.get("user_id")),
+        "client_message_id": metadata.get("client_message_id", form.get("client_message_id")),
+        "session_documents": documents,
+        "document_attachment_ids": metadata.get("document_attachment_ids", []),
+    })
+    if len(json.dumps(documents, ensure_ascii=False).encode("utf-8")) > SESSION_DOCUMENT_JSON_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": BusinessErrorCode.INVALID_REQUEST.value,
+                "message": "临时文档总大小不能超过 5MB",
+            },
+        )
+    return req, {
+        "session_documents": documents,
+        "document_ids": req.document_attachment_ids,
+        "images": images,
+    }
+
+
+# 持久化模式将本轮文档写入知识库，关闭记忆模式只返回临时上下文。
+async def prepare_attachment_context(attachments: dict[str, Any], user_id: str) -> dict[str, Any]:
+    if not settings.memory_enabled or not attachments.get("session_documents"):
+        return attachments
+    document_ids = list(attachments.get("document_ids") or [])
+    for document in attachments["session_documents"]:
+        text = "\n\n".join(str(part.get("content") or "") for part in document.get("parts", []))
+        uploaded = await KnowledgeService.upload_document(
+            text.encode("utf-8"),
+            str(document.get("filename") or "unknown.txt"),
+            None,
+            user_id,
+            parsed_content=text,
+        )
+        document_ids.append(uploaded.id)
+    return {**attachments, "document_ids": document_ids}
+
+
+# 要求持久化知识库模式，避免关闭记忆时误写长期文档数据。
+def require_persistent_knowledge() -> None:
+    if not settings.memory_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": BusinessErrorCode.FORBIDDEN.value,
+                "message": "memory_enabled=false 时不启用知识库持久化",
+            },
+        )
 
 
 # ============ 健康检查 ==========
@@ -177,9 +322,22 @@ async def get_messages(conv_id: str, request: Request):
 
 @router.post("/conversations/{conv_id}/messages", response_model=MessageResponse)
 # 向会话发送用户消息并获取 AI 回复
-async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
+async def send_message(conv_id: str, request: Request):
+    req, attachment_context = await read_send_message_payload(request)
     trusted_user_id = require_agent_user_id(request, req.user_id)
     tool_identity = get_agent_tool_identity(request, req.user_id)
+    content = req.content.strip()
+    has_attachment = bool(
+        attachment_context.get("session_documents")
+        or attachment_context.get("document_ids")
+        or attachment_context.get("images")
+    )
+    if not content and not has_attachment:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "content or attachment is required"},
+        )
+    turn_content = content or "请分析我上传的附件"
     active_turn_id = None
     try:
         # 确保会话存在于当前仓储并校验用户归属。
@@ -200,7 +358,7 @@ async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
             pass  # 恢复失败不影响主流程
 
         turn, created = TurnService.begin(
-            conv_id, trusted_user_id, req.content, req.client_message_id
+            conv_id, trusted_user_id, turn_content, req.client_message_id
         )
         if not created:
             completed = TurnService.completed_message(turn)
@@ -209,7 +367,14 @@ async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
             raise TurnService.duplicate_error(turn["status"])
 
         active_turn_id = turn["id"]
-        reply = await AgentService.chat(conv_id, req.content, user_id=trusted_user_id, tool_identity=tool_identity)
+        attachment_context = await prepare_attachment_context(attachment_context, trusted_user_id)
+        reply = await AgentService.chat(
+            conv_id,
+            turn_content,
+            user_id=trusted_user_id,
+            tool_identity=tool_identity,
+            attachment_context=attachment_context,
+        )
         TurnService.complete(turn["id"], trusted_user_id, reply)
         active_turn_id = None
 
@@ -237,9 +402,22 @@ async def send_message(conv_id: str, req: SendMessageRequest, request: Request):
 
 @router.post("/conversations/{conv_id}/messages/stream")
 # 向会话发送消息并流式返回 AI 回复
-async def stream_message(conv_id: str, req: SendMessageRequest, request: Request):
+async def stream_message(conv_id: str, request: Request):
+    req, attachment_context = await read_send_message_payload(request)
     trusted_user_id = require_agent_user_id(request, req.user_id)
     tool_identity = get_agent_tool_identity(request, req.user_id)
+    content = req.content.strip()
+    has_attachment = bool(
+        attachment_context.get("session_documents")
+        or attachment_context.get("document_ids")
+        or attachment_context.get("images")
+    )
+    if not content and not has_attachment:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "content or attachment is required"},
+        )
+    turn_content = content or "请分析我上传的附件"
     # 确保会话存在于当前仓储并校验已有 thread_id 的用户归属。
     ConversationService.ensure(conv_id, trusted_user_id)
 
@@ -259,12 +437,23 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
 
     await wait_for_conversation_persistence(conv_id)
     turn, created = TurnService.begin(
-        conv_id, trusted_user_id, req.content, req.client_message_id
+        conv_id, trusted_user_id, turn_content, req.client_message_id
     )
     completed = None if created else TurnService.completed_message(turn)
     if not created and not completed:
         error = TurnService.duplicate_error(turn["status"])
         raise HTTPException(status_code=error.status_code, detail=error.to_dict())
+    try:
+        attachment_context = await prepare_attachment_context(attachment_context, trusted_user_id)
+    except BusinessError as error:
+        TurnService.terminate(turn["id"], trusted_user_id, False, error.code.value)
+        raise HTTPException(status_code=error.status_code, detail=error.to_dict()) from error
+    except Exception as error:
+        TurnService.terminate(turn["id"], trusted_user_id, False, "INTERNAL_ERROR")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": "附件处理失败"},
+        ) from error
     # 执行 event generator 对应的业务逻辑
     async def event_generator():
         sse_events = SseEventSequencer(turn["id"])
@@ -282,7 +471,11 @@ async def stream_message(conv_id: str, req: SendMessageRequest, request: Request
                 yield sse_events.done()
                 return
             events = AgentService.chat_stream(
-                conv_id, req.content, user_id=trusted_user_id, tool_identity=tool_identity
+                conv_id,
+                turn_content,
+                user_id=trusted_user_id,
+                tool_identity=tool_identity,
+                attachment_context=attachment_context,
             )
             async for event in with_sse_heartbeats(events):
                 if await request.is_disconnected():
@@ -403,6 +596,7 @@ async def clear_messages(conv_id: str, request: Request):
 async def upload_document(request: Request):
     """上传文档（multipart/form-data）"""
     try:
+        require_persistent_knowledge()
         trusted_user_id = require_agent_user_id(request)
         form = await request.form()
         file = form.get("file")
@@ -450,12 +644,14 @@ async def upload_document(request: Request):
 @router.get("/knowledge/documents")
 # 列出所有已索引文档
 async def list_documents(request: Request):
+    require_persistent_knowledge()
     return await KnowledgeService.list_documents(require_agent_user_id(request))
 
 
 @router.get("/knowledge/documents/{doc_id}")
 # 获取指定文档详情
 async def get_document(doc_id: str, request: Request):
+    require_persistent_knowledge()
     doc = await KnowledgeService.get_document(doc_id, require_agent_user_id(request))
     if not doc:
         raise HTTPException(
@@ -468,6 +664,7 @@ async def get_document(doc_id: str, request: Request):
 @router.delete("/knowledge/documents/{doc_id}")
 # 删除指定文档及其向量索引
 async def delete_document(doc_id: str, request: Request):
+    require_persistent_knowledge()
     deleted = await KnowledgeService.delete_document(doc_id, require_agent_user_id(request))
     if not deleted:
         raise HTTPException(
@@ -481,6 +678,7 @@ async def delete_document(doc_id: str, request: Request):
 # 重新索引指定文档
 async def reindex_document(doc_id: str, request: Request):
     try:
+        require_persistent_knowledge()
         doc = await KnowledgeService.reindex_document(doc_id, require_agent_user_id(request))
         return doc.to_dict()
     except BusinessError as e:
@@ -498,6 +696,7 @@ async def reindex_document(doc_id: str, request: Request):
 # 在知识库中搜索相关内容
 async def search_knowledge(req: SearchRequest, request: Request):
     try:
+        require_persistent_knowledge()
         results = await KnowledgeService.search(req.query, req.top_k, require_agent_user_id(request))
         return {"results": results}
     except BusinessError as e:

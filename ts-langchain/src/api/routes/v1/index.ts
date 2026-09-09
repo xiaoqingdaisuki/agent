@@ -8,6 +8,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import { createHash } from "node:crypto";
 import {
   ConversationService,
   AgentService,
@@ -25,14 +26,188 @@ import {
   HistoryService,
 } from "../../../profile/service.js";
 import type {
+  AttachmentContext,
+  AttachmentImage,
   Conversation,
   Document,
   Message,
 } from "../../../services/index.js";
+import { config } from "../../../config/index.js";
+import { parseSessionDocument } from "../../../services/session-documents.js";
+import type { SessionDocument } from "../../../services/session-documents.js";
 import { getAgentToolIdentity, requireAgentUserId } from "../../middleware/auth.js";
 import { logRequestError } from "../../middleware/error.js";
 import { SseEventSequencer, encodeSseHeartbeat } from "../../sse.js";
 import { getReadiness } from "../../health.js";
+
+interface ParsedMessagePayload {
+  content?: string;
+  user_id?: string;
+  client_message_id?: string;
+  session_documents?: SessionDocument[];
+  document_attachment_ids?: string[];
+  images: AttachmentImage[];
+}
+
+// 将文档解析错误转换为统一的 HTTP 错误响应数据。
+function getSessionDocumentErrorResponse(error: unknown): { statusCode: number; body: ReturnType<BusinessError["toJSON"]> } | undefined {
+  const code = String(error instanceof Error ? error.message : "");
+  const messages: Record<string, { statusCode: number; message: string }> = {
+    SESSION_DOCUMENT_TOO_LARGE: { statusCode: 413, message: "临时文档不能超过 2.5MB" },
+    SESSION_DOCUMENT_UNSUPPORTED: { statusCode: 415, message: "临时模式仅支持 txt、md、markdown、json、csv、pdf、docx 文档" },
+    SESSION_DOCUMENT_INVALID_ENCODING: { statusCode: 422, message: "文档必须使用 UTF-8 编码" },
+    SESSION_DOCUMENT_TEXT_TOO_LARGE: { statusCode: 413, message: "文档正文不能超过 1MB" },
+    SESSION_DOCUMENT_EMPTY: { statusCode: 400, message: "文档内容不能为空" },
+    SESSION_DOCUMENT_PARSE_FAILED: { statusCode: 422, message: "PDF 或 DOCX 文档解析失败" },
+  };
+  const mapped = messages[code];
+  return mapped
+    ? {
+        statusCode: mapped.statusCode,
+        body: { error: { code: BusinessErrorCode.INVALID_REQUEST, message: mapped.message } },
+      }
+    : undefined;
+}
+
+// 规范化前端暂存的文档引用，禁止把路径或任意对象带入模型上下文。
+function normalizeSessionDocuments(value: unknown): SessionDocument[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 10).map((item, index) => {
+    const candidate = item as Record<string, unknown>;
+    const filename = typeof candidate.filename === "string" ? candidate.filename : `document-${index + 1}.txt`;
+    const parts = Array.isArray(candidate.parts) ? candidate.parts : [];
+    return {
+      localId: typeof candidate.localId === "string" ? candidate.localId : `session-${index + 1}`,
+      filename: filename.slice(0, 255),
+      mimeType: typeof candidate.mimeType === "string" ? candidate.mimeType : "text/plain",
+      size: typeof candidate.size === "number" ? candidate.size : 0,
+      parserVersion: typeof candidate.parserVersion === "string" ? candidate.parserVersion : "session-text-v1",
+      parts: parts.slice(0, 200).flatMap((part, partIndex) => {
+        const partRecord = part as Record<string, unknown>;
+        const content = typeof partRecord.content === "string" ? partRecord.content.trim() : "";
+        return content
+          ? [{
+              partIndex,
+              page: typeof partRecord.page === "number" ? partRecord.page : undefined,
+              section: typeof partRecord.section === "string" ? partRecord.section : undefined,
+              content: content.slice(0, 20_000),
+            }]
+          : [];
+      }),
+    };
+  }).filter((document) => document.parts.length > 0);
+}
+
+// 读取 JSON 或 multipart 消息，并把图片保持在请求内存中交给 Agent。
+async function readMessagePayload(request: any): Promise<ParsedMessagePayload> {
+  const contentType = String(request.headers?.["content-type"] || "").toLowerCase();
+  if (!contentType.includes("multipart/form-data")) {
+    const body = (request.body || {}) as Record<string, unknown>;
+    const rawDocuments = body.session_documents;
+    if (rawDocuments !== undefined && Buffer.byteLength(JSON.stringify(rawDocuments), "utf8") > 5 * 1024 * 1024) {
+      throw new BusinessError(BusinessErrorCode.INVALID_REQUEST, "临时文档总大小不能超过 5MB", 413);
+    }
+    return {
+      content: typeof body.content === "string" ? body.content : undefined,
+      user_id: typeof body.user_id === "string" ? body.user_id : undefined,
+      client_message_id: typeof body.client_message_id === "string" ? body.client_message_id : undefined,
+      session_documents: normalizeSessionDocuments(body.session_documents),
+      document_attachment_ids: Array.isArray(body.document_attachment_ids)
+        ? body.document_attachment_ids.filter((id): id is string => typeof id === "string").slice(0, 20)
+        : undefined,
+      images: [],
+    };
+  }
+
+  const fields: Record<string, string> = {};
+  const images: AttachmentImage[] = [];
+  const imageFingerprints = new Set<string>();
+  const parsedFiles: SessionDocument[] = [];
+  for await (const part of request.parts()) {
+    if (part.type === "file") {
+      const buffer = await part.toBuffer();
+      if (part.mimetype.startsWith("image/")) {
+        const fingerprint = createHash("sha256").update(buffer).digest("hex");
+        if (imageFingerprints.has(fingerprint)) continue;
+        imageFingerprints.add(fingerprint);
+        if (images.length >= 4) throw new BusinessError(BusinessErrorCode.INVALID_REQUEST, "图片最多上传 4 张", 400);
+        images.push({ mimeType: part.mimetype, data: buffer });
+      } else {
+        parsedFiles.push(await parseSessionDocument(buffer, part.filename, part.mimetype));
+      }
+    } else {
+      fields[part.fieldname] = String(part.value ?? "");
+    }
+  }
+
+  let metadata: Record<string, unknown> = {};
+  if (fields.metadata) {
+    try {
+      const parsed = JSON.parse(fields.metadata);
+      if (!parsed || typeof parsed !== "object") throw new Error("metadata must be object");
+      metadata = parsed as Record<string, unknown>;
+    } catch {
+      throw new BusinessError(BusinessErrorCode.INVALID_REQUEST, "metadata must be valid JSON", 400);
+    }
+  }
+  const sessionDocuments = [
+    ...normalizeSessionDocuments(metadata.session_documents),
+    ...parsedFiles,
+  ];
+  return {
+    content: typeof metadata.content === "string" ? metadata.content : fields.content,
+    user_id: typeof metadata.user_id === "string" ? metadata.user_id : fields.user_id,
+    client_message_id: typeof metadata.client_message_id === "string"
+      ? metadata.client_message_id
+      : fields.client_message_id,
+    session_documents: sessionDocuments,
+    document_attachment_ids: Array.isArray(metadata.document_attachment_ids)
+      ? metadata.document_attachment_ids.filter((id): id is string => typeof id === "string").slice(0, 20)
+      : undefined,
+    images,
+  };
+}
+
+// 将消息附件转换为 Agent Service 可消费的上下文，持久化模式先把文档写入知识库。
+async function toAttachmentContext(
+  payload: ParsedMessagePayload,
+  userId: string,
+): Promise<AttachmentContext | undefined> {
+  if (!payload.session_documents?.length && !payload.document_attachment_ids?.length && !payload.images.length) {
+    return undefined;
+  }
+  if (config.MEMORY_ENABLED && payload.session_documents?.length) {
+    const uploadedIds = [];
+    for (const document of payload.session_documents) {
+      const content = document.parts.map((part) => part.content).join("\n\n");
+      const persisted = await KnowledgeService.uploadDocument(
+        Buffer.from(content, "utf8"),
+        document.filename,
+        undefined,
+        userId,
+        content,
+      );
+      uploadedIds.push(persisted.id);
+    }
+    return {
+      sessionDocuments: payload.session_documents,
+      documentIds: [...(payload.document_attachment_ids || []), ...uploadedIds],
+      images: payload.images,
+    };
+  }
+  return {
+    sessionDocuments: payload.session_documents,
+    documentIds: payload.document_attachment_ids,
+    images: payload.images,
+  };
+}
+
+// 要求当前运行在可持久化知识库模式，避免关闭记忆时误写长期数据。
+function requirePersistentKnowledge(): void {
+  if (!config.MEMORY_ENABLED) {
+    throw new BusinessError(BusinessErrorCode.FORBIDDEN, "memory_enabled=false 时不启用知识库持久化", 403);
+  }
+}
 
 // 向 SSE 客户端写入一条事件，并在内核背压时等待 drain。
 async function writeSse(raw: any, data: string): Promise<void> {
@@ -199,10 +374,19 @@ export async function registerV1Routes(app: FastifyInstance) {
   }>("/conversations/:id/messages", async (request, reply) => {
     let activeTurn: { id: string; userId: string } | null = null;
     try {
-      const { content, user_id, client_message_id } = request.body;
+      const payload = await readMessagePayload(request);
+      const content = payload.content?.trim() || "";
+      const user_id = payload.user_id;
+      const client_message_id = payload.client_message_id;
       const convId = request.params.id;
       const trustedUserId = requireAgentUserId(request, user_id);
       const toolIdentity = getAgentToolIdentity(request, user_id);
+      const turnContent = content || "请分析我上传的附件";
+      const hasAttachment = Boolean(
+        payload.session_documents?.length
+        || payload.document_attachment_ids?.length
+        || payload.images.length,
+      );
 
       // 确保会话存在于当前仓储并校验用户归属。
       await ConversationService.ensure(convId, trustedUserId);
@@ -214,27 +398,34 @@ export async function registerV1Routes(app: FastifyInstance) {
           error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
         });
       }
-      if (typeof content !== "string" || content.length < 1 || content.length > 16_000) {
+      if (content.length > 16_000) {
         return reply.status(400).send({
           error: {
             code: BusinessErrorCode.INVALID_REQUEST,
-            message: "content is required",
+            message: "content must be at most 16000 characters",
           },
         });
       }
+      if (!content && !hasAttachment) {
+        return reply.status(400).send({
+          error: { code: BusinessErrorCode.INVALID_REQUEST, message: "content or attachment is required" },
+        });
+      }
 
-      const turnResult = await TurnService.begin(convId, trustedUserId, content, client_message_id);
+      const turnResult = await TurnService.begin(convId, trustedUserId, turnContent, client_message_id);
       if (!turnResult.created) {
         const completed = TurnService.completedMessage(turnResult.turn);
         if (completed) return reply.status(200).send({ ...serializeMessage(completed), turn_id: turnResult.turn.id });
         throw TurnService.duplicateError(turnResult.turn.status);
       }
       activeTurn = { id: turnResult.turn.id, userId: trustedUserId };
+      const attachmentContext = await toAttachmentContext(payload, trustedUserId);
       const assistantMessage = await AgentService.chat(
         convId,
-        content,
+        turnContent,
         trustedUserId,
         toolIdentity,
+        attachmentContext,
       );
       const persistedAssistant = assistantMessage;
       await TurnService.complete(turnResult.turn.id, trustedUserId, persistedAssistant);
@@ -248,6 +439,8 @@ export async function registerV1Routes(app: FastifyInstance) {
       if (error instanceof BusinessError) {
         return reply.status(error.statusCode).send(error.toJSON());
       }
+      const documentError = getSessionDocumentErrorResponse(error);
+      if (documentError) return reply.status(documentError.statusCode).send(documentError.body);
       return reply.status(500).send({
         error: {
           code: BusinessErrorCode.INTERNAL_ERROR,
@@ -261,10 +454,29 @@ export async function registerV1Routes(app: FastifyInstance) {
     Params: { id: string };
     Body: { content: string; user_id?: string; client_message_id?: string };
   }>("/conversations/:id/messages/stream", async (request, reply) => {
-    const { content, user_id, client_message_id } = request.body;
+    let payload: ParsedMessagePayload;
+    try {
+      payload = await readMessagePayload(request);
+    } catch (error) {
+      if (error instanceof BusinessError) return reply.status(error.statusCode).send(error.toJSON());
+      const documentError = getSessionDocumentErrorResponse(error);
+      if (documentError) return reply.status(documentError.statusCode).send(documentError.body);
+      return reply.status(400).send({
+        error: { code: BusinessErrorCode.INVALID_REQUEST, message: "请求体格式不正确" },
+      });
+    }
+    const content = payload.content?.trim() || "";
+    const user_id = payload.user_id;
+    const client_message_id = payload.client_message_id;
     const convId = request.params.id;
     const trustedUserId = requireAgentUserId(request, user_id);
     const toolIdentity = getAgentToolIdentity(request, user_id);
+    const turnContent = content || "请分析我上传的附件";
+    const hasAttachment = Boolean(
+      payload.session_documents?.length
+      || payload.document_attachment_ids?.length
+      || payload.images.length,
+    );
 
     // 确保会话存在于当前仓储并校验已有 thread_id 的用户归属。
     await ConversationService.ensure(convId, trustedUserId);
@@ -275,21 +487,27 @@ export async function registerV1Routes(app: FastifyInstance) {
         error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
       });
     }
-    if (typeof content !== "string" || content.length < 1 || content.length > 16_000) {
+    if (content.length > 16_000) {
       return reply.status(400).send({
         error: {
           code: BusinessErrorCode.INVALID_REQUEST,
-          message: "content is required",
+          message: "content must be at most 16000 characters",
         },
       });
     }
+    if (!content && !hasAttachment) {
+      return reply.status(400).send({
+        error: { code: BusinessErrorCode.INVALID_REQUEST, message: "content or attachment is required" },
+      });
+    }
 
-    const turnResult = await TurnService.begin(convId, trustedUserId, content, client_message_id);
+    const turnResult = await TurnService.begin(convId, trustedUserId, turnContent, client_message_id);
     const completed = turnResult.created ? null : TurnService.completedMessage(turnResult.turn);
     if (!turnResult.created && !completed) {
       const error = TurnService.duplicateError(turnResult.turn.status);
       return reply.status(error.statusCode).send(error.toJSON());
     }
+    let attachmentContext: AttachmentContext | undefined;
     reply.hijack();
     reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
@@ -313,6 +531,9 @@ export async function registerV1Routes(app: FastifyInstance) {
     let turnCompleted = Boolean(completed);
 
     try {
+      if (turnResult.created) {
+        attachmentContext = await toAttachmentContext(payload, trustedUserId);
+      }
       await writeSse(
         reply.raw,
         sseEvents.event("meta", { conversation_id: convId, thread_id: convId, turn_id: turnResult.turn.id }),
@@ -323,10 +544,11 @@ export async function registerV1Routes(app: FastifyInstance) {
       }
       for await (const event of AgentService.chatStream(
         convId,
-        content,
+        turnContent,
         trustedUserId,
         requestController.signal,
         toolIdentity,
+        attachmentContext,
       )) {
         let eventName: string;
         let payload: Record<string, unknown>;
@@ -423,10 +645,69 @@ export async function registerV1Routes(app: FastifyInstance) {
     },
   );
 
+  // ============ 会话临时文档 ============
+
+  app.post<{ Params: { id: string } }>(
+    "/conversations/:id/session-documents/parse",
+    async (request, reply) => {
+      try {
+        if (config.MEMORY_ENABLED) {
+          throw new BusinessError(BusinessErrorCode.FORBIDDEN, "memory_enabled=true 时文档必须上传到知识库", 403);
+        }
+        const conversation = await ConversationService.get(request.params.id);
+        if (!conversation) {
+          return reply.status(404).send({
+            error: { code: BusinessErrorCode.NOT_FOUND, message: "会话不存在" },
+          });
+        }
+        const userId = requireAgentUserId(request, conversation.userId);
+        const file = await (request as any).file();
+        if (!file) {
+          return reply.status(400).send({
+            error: { code: BusinessErrorCode.INVALID_REQUEST, message: "file is required" },
+          });
+        }
+        const document = await parseSessionDocument(
+          await file.toBuffer(),
+          file.filename || "unknown.txt",
+          file.mimetype || "text/plain",
+        );
+        return reply.status(200).send({ ...document, user_id: userId });
+      } catch (error: any) {
+        if (error instanceof BusinessError) return reply.status(error.statusCode).send(error.toJSON());
+        const code = String(error?.message || "");
+        if (code === "SESSION_DOCUMENT_TOO_LARGE") {
+          return reply.status(413).send({ error: { code: "INVALID_REQUEST", message: "临时文档不能超过 2.5MB" } });
+        }
+        if (code === "SESSION_DOCUMENT_UNSUPPORTED") {
+          return reply.status(415).send({
+            error: { code: "INVALID_REQUEST", message: "临时模式仅支持 txt、md、markdown、json、csv、pdf、docx 文档" },
+          });
+        }
+        if (code === "SESSION_DOCUMENT_INVALID_ENCODING") {
+          return reply.status(422).send({ error: { code: "INVALID_REQUEST", message: "文档必须使用 UTF-8 编码" } });
+        }
+        if (code === "SESSION_DOCUMENT_TEXT_TOO_LARGE") {
+          return reply.status(413).send({ error: { code: "INVALID_REQUEST", message: "文档正文不能超过 1MB" } });
+        }
+        if (code === "SESSION_DOCUMENT_EMPTY") {
+          return reply.status(400).send({ error: { code: "INVALID_REQUEST", message: "文档内容不能为空" } });
+        }
+        if (code === "SESSION_DOCUMENT_PARSE_FAILED") {
+          return reply.status(422).send({ error: { code: "INVALID_REQUEST", message: "PDF 或 DOCX 文档解析失败" } });
+        }
+        return reply.status(500).send({
+          error: { code: BusinessErrorCode.INTERNAL_ERROR, message: "临时文档解析失败" },
+        });
+      }
+    },
+  );
+
   // ============ 知识库管理 ==========
 
   app.post("/knowledge/documents", async (request, reply) => {
     try {
+      requirePersistentKnowledge();
       const userId = requireAgentUserId(request);
       const file = await request.file();
 
@@ -468,6 +749,7 @@ export async function registerV1Routes(app: FastifyInstance) {
   });
 
   app.get("/knowledge/documents", async (request) => {
+    requirePersistentKnowledge();
     const docs = await KnowledgeService.listDocuments(requireAgentUserId(request));
     return docs.map(serializeDocument);
   });
@@ -475,6 +757,7 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>(
     "/knowledge/documents/:id",
     async (request, reply) => {
+      requirePersistentKnowledge();
       const doc = await KnowledgeService.getDocument(request.params.id, requireAgentUserId(request));
       if (!doc) {
         return reply.status(404).send({
@@ -488,6 +771,7 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>(
     "/knowledge/documents/:id",
     async (request, reply) => {
+      requirePersistentKnowledge();
       const deleted = await KnowledgeService.deleteDocument(request.params.id, requireAgentUserId(request));
       if (!deleted) {
         return reply.status(404).send({
@@ -502,6 +786,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     "/knowledge/documents/:id/reindex",
     async (request, reply) => {
       try {
+        requirePersistentKnowledge();
         const doc = await KnowledgeService.reindexDocument(request.params.id, requireAgentUserId(request));
         return serializeDocument(doc);
       } catch (error: any) {
@@ -522,6 +807,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     "/knowledge/search",
     async (request, reply) => {
       try {
+        requirePersistentKnowledge();
         const userId = requireAgentUserId(request);
         const { query, top_k = 5 } = request.body;
         if (typeof query !== "string" || query.length < 1) {
