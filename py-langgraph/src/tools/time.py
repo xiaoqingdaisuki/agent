@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain_core.tools import tool
@@ -45,7 +45,7 @@ _CONVERT_DESCRIPTOR = ToolDescriptor(
     name="time.convert",
     version="1.0.0",
     title="时区转换",
-    description="将指定 IANA 时区中的本地日期时间转换为另一个 IANA 时区，自动处理夏令时。",
+    description="将指定 IANA 时区中的本地日期时间转换为另一个 IANA 时区；夏令时跳过的时间会报错，回拨重叠时间选择较早瞬时值。",
     category="COMPUTE",
     risk_level="R0",
     side_effect="none",
@@ -100,7 +100,18 @@ def convert_timezone(datetime: str, from_timezone: str, to_timezone: str) -> str
         parsed = __import__("datetime").datetime.fromisoformat(datetime.replace("Z", "+00:00"))
         if parsed.tzinfo is not None:
             raise ValueError("datetime 必须是不带时区偏移的本地日期时间")
-        instant = parsed.replace(tzinfo=source)
+        candidates = [
+            parsed.replace(tzinfo=source, fold=fold)
+            for fold in (0, 1)
+            if parsed.replace(tzinfo=source, fold=fold)
+            .astimezone(UTC)
+            .astimezone(source)
+            .replace(tzinfo=None)
+            == parsed
+        ]
+        if not candidates:
+            raise ValueError("datetime 在来源时区不存在（夏令时切换）")
+        instant = min(candidates, key=lambda value: value.astimezone(UTC))
         result = _format_time(instant, to_timezone)
         result.update(
             {

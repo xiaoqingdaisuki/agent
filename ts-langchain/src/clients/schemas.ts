@@ -35,6 +35,7 @@ export const ConversationSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   deleted_at: z.string().nullable().default(null),
+  message_count: z.number().int().nonnegative().default(0),
 });
 
 export const MessageSchema = z.object({

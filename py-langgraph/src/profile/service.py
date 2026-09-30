@@ -211,15 +211,15 @@ class MemoryService:
         q = question.lower()
 
         preference_patterns = [
-            (r"我喜欢(.+?)[。！\n]", "preference"),
-            (r"我爱(.+?)[。！\n]", "preference"),
-            (r"我讨厌(.+?)[。！\n]", "preference"),
-            (r"别(.+?)[。！\n]", "preference"),
-            (r"不要(.+?)[。！\n]", "preference"),
-            (r"(.+?)是我喜欢的", "preference"),
+            (r"我喜欢(.+?)[。！\n]", "用户喜欢/偏好"),
+            (r"我爱(.+?)[。！\n]", "用户喜欢/偏好"),
+            (r"我讨厌(.+?)[。！\n]", "用户讨厌"),
+            (r"别(.+?)[。！\n]", "用户要求不要"),
+            (r"不要(.+?)[。！\n]", "用户要求不要"),
+            (r"([^。！\n]+?)是我喜欢的", "用户喜欢/偏好"),
         ]
 
-        for pattern, category in preference_patterns:
+        for pattern, prefix in preference_patterns:
             matches = re.findall(pattern, q)
             for match in matches:
                 content = match.strip()
@@ -228,8 +228,8 @@ class MemoryService:
                         Memory(
                             id=f"mem_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
                             user_id=user_id,
-                            content=f"用户喜欢/偏好: {content}",
-                            category=category,
+                            content=f"{prefix}: {content}",
+                            category="preference",
                             importance=4,
                         )
                     )
@@ -322,7 +322,8 @@ class HistoryService:
         elif conversation.get("user_id") != user_id:
             raise ValueError("Conversation does not belong to the requested user")
 
-        messages, _ = repos.get_messages(conversation_id, 200, 0)
+        messages, _ = repos.get_messages(conversation_id, 200, 0, "desc")
+        messages.reverse()
         for index in range(len(messages) - 1, 0, -1):
             assistant = messages[index]
             user = messages[index - 1]
@@ -350,14 +351,12 @@ class HistoryService:
             [
                 {
                     "id": user_message_id,
-                    "sequence_no": len(messages),
                     "role": "user",
                     "content": question,
                     "created_at": timestamp,
                 },
                 {
                     "id": assistant_message_id,
-                    "sequence_no": len(messages) + 1,
                     "role": "assistant",
                     "content": answer,
                     "created_at": timestamp,
@@ -376,6 +375,8 @@ class HistoryService:
     @staticmethod
     # 获取 get history 对应的数据
     def get_history(user_id: str, conversation_id: str = None, limit: int = 50) -> list[dict]:
+        if limit <= 0:
+            return []
         repos = _get_repositories()
         if conversation_id:
             conversation = repos.get_conversation(conversation_id)
@@ -389,22 +390,31 @@ class HistoryService:
 
         records = []
         for conversation in conversations:
-            messages, _ = repos.get_messages(conversation["id"], 200, 0)
-            pending_question = None
-            for message in messages:
-                if message["role"] == "user":
-                    pending_question = message
-                elif message["role"] == "assistant" and pending_question:
-                    records.append(
-                        {
-                            "id": message["id"],
-                            "user_id": user_id,
-                            "conversation_id": conversation["id"],
-                            "question": pending_question["content_json"],
-                            "answer": message["content_json"],
-                            "timestamp": message["created_at"],
-                        }
-                    )
-                    pending_question = None
+            offset = 0
+            found = 0
+            pending_assistant = None
+            while found < limit:
+                messages, total = repos.get_messages(conversation["id"], 200, offset, "desc")
+                for message in messages:
+                    if message["role"] == "assistant":
+                        pending_assistant = message
+                    elif message["role"] == "user" and pending_assistant:
+                        records.append(
+                            {
+                                "id": pending_assistant["id"],
+                                "user_id": user_id,
+                                "conversation_id": conversation["id"],
+                                "question": message["content_json"],
+                                "answer": pending_assistant["content_json"],
+                                "timestamp": pending_assistant["created_at"],
+                            }
+                        )
+                        pending_assistant = None
+                        found += 1
+                        if found >= limit:
+                            break
+                offset += len(messages)
+                if not messages or offset >= total:
+                    break
 
         return sorted(records, key=lambda item: item["timestamp"], reverse=True)[:limit]

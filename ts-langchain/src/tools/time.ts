@@ -108,14 +108,21 @@ function getTimezoneOffsetMs(instantMs: number, timezone: string): number {
   return asUtc - Math.floor(instantMs / 1000) * 1000;
 }
 
-// 将来源时区中的墙上时间转换为 UTC 瞬时值。
+// 验证本地时间存在性，并在夏令时回拨重叠时选择较早的 UTC 瞬时值。
 function localTimeToInstant(values: [number, number, number, number, number, number], timezone: string): Date {
   const utcGuess = Date.UTC(values[0], values[1] - 1, values[2], values[3], values[4], values[5]);
-  let instantMs = utcGuess;
-  for (let i = 0; i < 3; i++) {
-    instantMs = utcGuess - getTimezoneOffsetMs(instantMs, timezone);
+  const offsets = new Set([-36, 0, 36].map((hours) =>
+    getTimezoneOffsetMs(utcGuess + hours * 3_600_000, timezone),
+  ));
+  const candidates: number[] = [];
+  for (const offset of offsets) {
+    const instantMs = utcGuess - offset;
+    const parts = getDateParts(new Date(instantMs), timezone);
+    if ([parts.year, parts.month, parts.day, parts.hour, parts.minute, parts.second]
+      .every((part, index) => Number(part) === values[index])) candidates.push(instantMs);
   }
-  return new Date(instantMs);
+  if (candidates.length === 0) throw new Error("datetime 在来源时区不存在（夏令时切换）");
+  return new Date(Math.min(...candidates));
 }
 
 export const currentTimeInputSchema = z.object({
@@ -147,7 +154,7 @@ export const convertTimezoneDescriptor: ToolDescriptor = {
   name: "time.convert",
   version: "1.0.0",
   title: "时区转换",
-  description: "将指定 IANA 时区中的本地日期时间转换为另一个 IANA 时区，自动处理夏令时。",
+  description: "将指定 IANA 时区中的本地日期时间转换为另一个 IANA 时区；夏令时跳过的时间会报错，回拨重叠时间选择较早瞬时值。",
   category: "COMPUTE",
   risk_level: "R0",
   side_effect: "none",

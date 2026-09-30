@@ -29,6 +29,24 @@ describe("AgentService empty streams", () => {
     createDirectChatAgentMock.mockReset();
   });
 
+  it("propagates client cancellation so routes cannot complete an empty turn", async () => {
+    const controller = new AbortController();
+    const disconnected = new Error("Client disconnected");
+    const conversation = await ConversationService.create("cancel stream");
+    createToolAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        controller.abort(disconnected);
+        throw disconnected;
+      },
+    });
+    const consume = async () => {
+      for await (const _event of AgentService.chatStream(conversation.id, "cancel question", undefined, controller.signal)) {
+        // 只等待流程取消，无需消费业务文本。
+      }
+    };
+    await expect(consume()).rejects.toBe(disconnected);
+  });
+
   it("routes explicit knowledge queries without model planning", async () => {
     const conversation = await ConversationService.create("explicit knowledge");
     const knowledgeChat = vi.spyOn(KnowledgeService, "chat").mockResolvedValue({ output: "没有检索到" });

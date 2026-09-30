@@ -24,6 +24,7 @@ export async function buildApp() {
 
   await app.register(import("@fastify/cors"), {
     origin: config.CORS_ORIGIN.length > 0 ? config.CORS_ORIGIN : false,
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
   await app.register(multipart, {
     limits: { files: 6, fileSize: 10 * 1024 * 1024 },

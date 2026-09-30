@@ -1,7 +1,7 @@
 """
 Safe Math Calculator — 使用手写 AST 解析器替代 eval()
 
-支持: +, -, *, /, %, **, 括号, 一元负号
+支持: +, -, *, /, %, **, 括号, 一元负号；取模结果与除数同号
 拒绝: 任意代码执行、函数调用、属性访问
 """
 
@@ -26,7 +26,7 @@ from src.tools.contracts import (
 
 _TOKEN_RE = re.compile(
     r"\s*(?:"
-    r"(\d+(?:\.\d+)?)"  # 1: number
+    r"(\d+(?:\.\d*)?|\.\d+)"  # 1: number
     r"|(\*\*)"  # 2: power (must be before single *)
     r"|([+\-*/%])"  # 3: binary op
     r"|(\^)"  # 4: caret (alias for power)

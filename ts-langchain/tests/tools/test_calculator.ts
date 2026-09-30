@@ -78,4 +78,14 @@ describe("Safe Calculator", () => {
   it("throws on function call", () => {
     expect(() => safeCalculate("pow(2, 3)")).toThrow();
   });
+
+  it.each(["1 2", "1..2", "2(3)", "1.2.3", "1 + .", "2 **"])(
+    "rejects incomplete or unconsumed expression %s",
+    (expression) => expect(() => safeCalculate(expression)).toThrow(),
+  );
+
+  it.each([[".5 + .5", 1], ["5. + .25", 5.25], ["-5 % 3", 1], ["5 % -3", -1], ["-5 % -3", -2], ["-6 % 3", 0], ["0.1 % 0.3", 0.1]] as const)(
+    "calculates decimals and divisor-signed modulo in %s",
+    (expression, result) => expect(safeCalculate(expression)).toBeCloseTo(result),
+  );
 });

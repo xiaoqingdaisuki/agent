@@ -106,6 +106,7 @@ export const inMemoryRepositories: Repositories = {
         created_at: now,
         updated_at: now,
         deleted_at: null,
+        message_count: inMemoryMessages.get(conversationId)?.length ?? 0,
       };
       inMemoryConversations.set(conversationId, conversation);
       inMemoryMessages.set(conversationId, inMemoryMessages.get(conversationId) ?? []);
@@ -114,12 +115,15 @@ export const inMemoryRepositories: Repositories = {
     // 获取未被删除的进程内会话。
     async get(conversationId) {
       const conversation = inMemoryConversations.get(conversationId);
-      return conversation?.deleted_at ? null : conversation ?? null;
+      return !conversation || conversation.deleted_at
+        ? null
+        : { ...conversation, message_count: inMemoryMessages.get(conversationId)?.length ?? 0 };
     },
     // 按用户列出未被删除的进程内会话。
     async list(userId, limit = 20, offset = 0) {
       return Array.from(inMemoryConversations.values())
         .filter((conversation) => conversation.user_id === userId && !conversation.deleted_at)
+        .map((conversation) => ({ ...conversation, message_count: inMemoryMessages.get(conversation.id)?.length ?? 0 }))
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .slice(offset, offset + limit);
     },

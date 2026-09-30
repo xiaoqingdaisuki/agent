@@ -131,14 +131,19 @@ export class ReActRunTracker {
   // 记录一次工具执行结果，错误结果仍会交给框架驱动下一次模型调用。
   recordTool(toolCallId: string, tool: string, signature: string, startedAt: number, result: unknown, error?: unknown): void {
     const latencyMs = Date.now() - startedAt;
-    if (error) {
+    const parsedResult = parseObservationData(result);
+    const envelope = parsedResult && typeof parsedResult === "object"
+      && "status" in parsedResult && "data" in parsedResult && "error" in parsedResult
+      ? parsedResult as { status: unknown; data: unknown; error: ReActObservation["error"] }
+      : undefined;
+    if (error || envelope?.status === "error") {
       this.errors += 1;
       this.failures.set(signature, (this.failures.get(signature) || 0) + 1);
-      this.observations.push({ tool_call_id: toolCallId, tool, status: "error", data: null, error: { code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : "工具执行失败" }, latency_ms: latencyMs });
+      this.observations.push({ tool_call_id: toolCallId, tool, status: "error", data: envelope?.data ?? null, error: error ? { code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : "工具执行失败" } : envelope?.error ?? null, latency_ms: latencyMs });
       this.state = "TOOL_ERROR";
       return;
     }
-    this.observations.push({ tool_call_id: toolCallId, tool, status: "success", data: parseObservationData(result), error: null, latency_ms: latencyMs });
+    this.observations.push({ tool_call_id: toolCallId, tool, status: "success", data: envelope ? envelope.data : parsedResult, error: null, latency_ms: latencyMs });
     this.state = "OBSERVING";
   }
 

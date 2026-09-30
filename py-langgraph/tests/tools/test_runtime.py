@@ -239,6 +239,33 @@ class TestInvokeTool:
         assert "boom" in result.error.message
 
     @pytest.mark.asyncio
+    async def test_execution_error_redacts_sensitive_content(self):
+        async def failing_fn(input_data, ctx):
+            raise RuntimeError("password=demo_password_123")
+
+        executor = ToolExecutor(descriptor=CALC_DESCRIPTOR, execute_fn=failing_fn)
+        result = await invoke_tool(executor, {}, _make_context())
+        assert result.error.message == "password=[REDACTED]"
+
+    @pytest.mark.asyncio
+    async def test_prompt_success_cleans_up_timeout_task_and_validates_once(self):
+        validations = []
+
+        def schema(value):
+            validations.append(value)
+            return value
+
+        async def execute_fn(input_data, ctx):
+            return "done"
+
+        before = asyncio.all_tasks()
+        executor = ToolExecutor(descriptor=CALC_DESCRIPTOR, execute_fn=execute_fn, schema=schema)
+        result = await invoke_tool(executor, "input", _make_context())
+        assert result.data == "done"
+        assert validations == ["input"]
+        assert asyncio.all_tasks() == before
+
+    @pytest.mark.asyncio
     async def test_result_sanitized(self):
         async def return_secrets(input_data, ctx):
             return {"api_key": "secret123", "result": "ok"}

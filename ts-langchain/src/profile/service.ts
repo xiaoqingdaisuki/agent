@@ -261,20 +261,21 @@ export class MemoryService {
     const q = question.toLowerCase();
 
     const preferencePatterns: Array<[RegExp, string]> = [
-      [/我喜欢(.+?)[。！\n]/g, "preference"],
-      [/我爱(.+?)[。！\n]/g, "preference"],
-      [/我讨厌(.+?)[。！\n]/g, "preference"],
-      [/别(.+?)[。！\n]/g, "preference"],
-      [/不要(.+?)[。！\n]/g, "preference"],
+      [/我喜欢(.+?)[。！\n]/g, "用户喜欢/偏好"],
+      [/我爱(.+?)[。！\n]/g, "用户喜欢/偏好"],
+      [/我讨厌(.+?)[。！\n]/g, "用户讨厌"],
+      [/别(.+?)[。！\n]/g, "用户要求不要"],
+      [/不要(.+?)[。！\n]/g, "用户要求不要"],
+      [/([^。！\n]+?)是我喜欢的/g, "用户喜欢/偏好"],
     ];
 
-    for (const [pattern, category] of preferencePatterns) {
+    for (const [pattern, prefix] of preferencePatterns) {
       const matches = q.matchAll(pattern);
       for (const match of matches) {
         const content = match[1].trim();
         if (content.length > 1 && content.length < 50) {
           newMemories.push(
-            createMemory(userId, `用户喜欢/偏好: ${content}`, category, 4),
+            createMemory(userId, `${prefix}: ${content}`, "preference", 4),
           );
         }
       }
@@ -394,7 +395,8 @@ export class HistoryService {
       throw new Error("Conversation does not belong to the requested user");
     }
 
-    const { messages } = await repos.message.getMessages(conversationId, 200, 0);
+    const { messages } = await repos.message.getMessages(conversationId, 200, 0, "desc");
+    messages.reverse();
     for (let index = messages.length - 1; index > 0; index--) {
       const assistant = messages[index];
       const user = messages[index - 1];
@@ -423,7 +425,6 @@ export class HistoryService {
         id: userMessageId,
         conversation_id: conversationId,
         user_id: userId,
-        sequence_no: messages.length,
         role: "user",
         content_json: question,
         created_at: timestamp,
@@ -432,7 +433,6 @@ export class HistoryService {
         id: assistantMessageId,
         conversation_id: conversationId,
         user_id: userId,
-        sequence_no: messages.length + 1,
         role: "assistant",
         content_json: answer,
         created_at: timestamp,
@@ -457,6 +457,7 @@ export class HistoryService {
     conversationId?: string,
     limit: number = 50,
   ): Promise<Record<string, string>[]> {
+    if (limit <= 0) return [];
     const repos = getRepos();
     const conversations = conversationId
       ? [await repos.conversation.get(conversationId)].filter(
@@ -467,22 +468,30 @@ export class HistoryService {
     const records: Record<string, string>[] = [];
 
     for (const conversation of conversations) {
-      const { messages } = await repos.message.getMessages(conversation.id, 200, 0);
-      let pendingQuestion: typeof messages[number] | undefined;
-      for (const message of messages) {
-        if (message.role === "user") {
-          pendingQuestion = message;
-        } else if (message.role === "assistant" && pendingQuestion) {
-          records.push({
-            id: message.id,
-            user_id: userId,
-            conversation_id: conversation.id,
-            question: pendingQuestion.content_json,
-            answer: message.content_json,
-            timestamp: message.created_at,
-          });
-          pendingQuestion = undefined;
+      let offset = 0;
+      let found = 0;
+      let pendingAssistant: import("../repositories/types.js").MessageData | undefined;
+      while (found < limit) {
+        const { messages, total } = await repos.message.getMessages(conversation.id, 200, offset, "desc");
+        for (const message of messages) {
+          if (message.role === "assistant") {
+            pendingAssistant = message;
+          } else if (message.role === "user" && pendingAssistant) {
+            records.push({
+              id: pendingAssistant.id,
+              user_id: userId,
+              conversation_id: conversation.id,
+              question: message.content_json,
+              answer: pendingAssistant.content_json,
+              timestamp: pendingAssistant.created_at,
+            });
+            pendingAssistant = undefined;
+            found += 1;
+            if (found >= limit) break;
+          }
         }
+        offset += messages.length;
+        if (messages.length === 0 || offset >= total) break;
       }
     }
 

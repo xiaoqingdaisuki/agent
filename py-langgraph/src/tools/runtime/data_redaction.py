@@ -8,6 +8,9 @@
 from __future__ import annotations
 
 import re
+import base64
+import json
+from collections.abc import Callable
 
 # ============ 结构化数据脱敏 ============
 
@@ -63,7 +66,30 @@ def redact_structured_data(data):
 
 # ============ 内容级脱敏 ============
 
-_CONTENT_REDACTION_RULES: list[tuple[str, re.Pattern, str]] = [
+
+# 仅遮蔽具有 JSON 头部和载荷的 JWT，保留普通域名和版本号。
+def _redact_jwt_candidate(match: re.Match[str]) -> str:
+    candidate = match.group(0)
+    try:
+        encoded_header, encoded_payload, _signature = candidate.split(".")
+        header = json.loads(
+            base64.urlsafe_b64decode(encoded_header + "=" * (-len(encoded_header) % 4))
+        )
+        payload = json.loads(
+            base64.urlsafe_b64decode(encoded_payload + "=" * (-len(encoded_payload) % 4))
+        )
+        if (
+            isinstance(header, dict)
+            and isinstance(header.get("alg"), str)
+            and isinstance(payload, dict)
+        ):
+            return "[REDACTED]"
+    except (ValueError, UnicodeError):
+        pass
+    return candidate
+
+
+_CONTENT_REDACTION_RULES: list[tuple[str, re.Pattern, str | Callable[[re.Match[str]], str]]] = [
     # Bearer tokens
     (
         "bearer_token",
@@ -73,7 +99,7 @@ _CONTENT_REDACTION_RULES: list[tuple[str, re.Pattern, str]] = [
     # Authorization headers
     (
         "auth_header",
-        re.compile(r"(Authorization:\s*)[^\s,;]+", re.IGNORECASE),
+        re.compile(r"(Authorization:[ \t]*)[^\r\n,;]+", re.IGNORECASE),
         r"\1[REDACTED]",
     ),
     # Long hex strings (64+ chars) — likely API keys
@@ -85,8 +111,8 @@ _CONTENT_REDACTION_RULES: list[tuple[str, re.Pattern, str]] = [
     # JWT tokens
     (
         "jwt",
-        re.compile(r"[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+"),
-        "[REDACTED]",
+        re.compile(r"[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*"),
+        _redact_jwt_candidate,
     ),
     # Private keys
     (
@@ -133,7 +159,7 @@ _CONTENT_REDACTION_RULES: list[tuple[str, re.Pattern, str]] = [
     (
         "password_inline",
         re.compile(
-            r"(?:password|passwd|pwd|pass)\s*[=:]\s*[\"']?([^\s\"',;)}\]]+)[\"']?",
+            r"(password|passwd|pwd|pass)\s*[=:]\s*[\"']?[^\s\"',;)}\]]+[\"']?",
             re.IGNORECASE,
         ),
         r"\1=[REDACTED]",

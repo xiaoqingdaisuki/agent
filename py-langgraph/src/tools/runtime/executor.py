@@ -110,7 +110,7 @@ def validate_input(
         parsed = schema(**raw_input) if isinstance(raw_input, dict) else schema(raw_input)
         return ToolRuntimeResult(success=True, data=parsed)
     except Exception as exc:
-        message = str(exc)
+        message = redact_text_content(str(exc))
         return ToolRuntimeResult(
             success=False,
             error=ToolError(code="INVALID_ARGUMENT", message=message),
@@ -530,7 +530,11 @@ def _error_envelope(
     return ToolResultEnvelope(
         ok=False,
         data=None,
-        error=error,
+        error=ToolError(
+            code=error.code,
+            message=redact_text_content(error.message),
+            details=error.details,
+        ),
         meta=ToolResultMeta(
             tool_call_id=call_id,
             tool_name=tool_name,

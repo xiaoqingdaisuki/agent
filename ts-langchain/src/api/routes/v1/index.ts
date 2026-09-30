@@ -90,7 +90,7 @@ function normalizeSessionDocuments(value: unknown): SessionDocument[] {
               partIndex,
               page: typeof partRecord.page === "number" ? partRecord.page : undefined,
               section: typeof partRecord.section === "string" ? partRecord.section : undefined,
-              content: content.slice(0, 20_000),
+              content: content.match(/^[\s\S]{1,20000}/u)![0],
             }]
           : [];
       }),

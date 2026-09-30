@@ -210,7 +210,7 @@ def get_fast_path_answer(content: str) -> str | None:
         return "我可以回答问题、计算、检索公开信息，并协助规划和整理内容。"
     if re.fullmatch(r"1\+1(等于几|等于多少)?[?？。]?", normalized):
         return "1 + 1 = 2。"
-    if "解释递归" in normalized or normalized.startswith("什么是递归"):
+    if re.fullmatch(r"(?:(?:请)?解释递归|什么是递归)[?？。]?", normalized):
         return "递归是函数直接或间接调用自身，并在满足终止条件时停止。"
     return None
 
@@ -796,6 +796,8 @@ def should_continue(state: AgentState) -> Literal["tools", "limit", END]:
     last_message = state["messages"][-1]
     tool_calls = getattr(last_message, "tool_calls", None)
     if tool_calls:
+        if state.get("stop_reason") in {"TOOL_FAILURE", "TIMEOUT", "MAX_STEPS"}:
+            return "limit"
         elapsed_ms = int((time.monotonic() - state.get("started_at", time.monotonic())) * 1000)
         signatures = state.get("react_call_signatures", {})
         repeated = any(count > MAX_SAME_TOOL_CALLS for count in signatures.values())
@@ -877,7 +879,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
         # Handle XML-format tool calls (e.g. StepFun step-3.7-flash)
         response = _convert_xml_tool_calls(response)
 
-        # 去重：同一轮中 memory_user_save 只保留第一次调用，防止 LLM 并行重复保存
+        # 同一响应中相同参数的记忆保存只保留首次调用，防止模型并行重复保存。
         if hasattr(response, "tool_calls") and response.tool_calls:
             seen_save_calls = set()
             deduped_calls = []
@@ -886,7 +888,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
                 tc_name = tc.get("function", {}).get("name", tc.get("name", ""))
                 if tc_name == "memory_user_save":
                     tc_content = tc.get("function", {}).get("arguments", tc.get("args", ""))
-                    tc_key = (tc_name, tc_content)
+                    tc_key = tool_call_signature(tc_name, tc_content)
                     if tc_key in seen_save_calls:
                         had_duplicate_save = True
                         continue
@@ -1006,10 +1008,18 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
             "TOOL_FAILURE": "TOOL_ERROR",
         }.get(stop_reason, "MAX_STEPS_REACHED")
         pending_message = state["messages"][-1]
+        pending_calls = list(getattr(pending_message, "tool_calls", []) or [])
         return {
             "messages": [RemoveMessage(id=pending_message.id), response],
             "react_state": final_state,
             "stop_reason": stop_reason,
+            "model_calls": int(state.get("model_calls", 0)) + 1,
+            "react_tool_calls": max(0, int(state.get("react_tool_calls", 0)) - len(pending_calls)),
+            "react_tool_names": (
+                state.get("react_tool_names", [])[: -len(pending_calls)]
+                if pending_calls
+                else state.get("react_tool_names", [])
+            ),
             "total_latency_ms": int(
                 (time.monotonic() - state.get("started_at", time.monotonic())) * 1000
             ),

@@ -478,13 +478,14 @@ class Conversation:
         conversation_id: str | None = None,
         user_id: str = "anonymous",
         created_at: str | None = None,
+        message_count: int = 0,
     ):
         self.id = conversation_id or f"conv_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         self.title = title
         self.mode = mode
         self.user_id = user_id or "anonymous"
         self.created_at = created_at or datetime.now().isoformat()
-        self.message_count = 0
+        self.message_count = message_count
         self.messages: list[Message] = []
 
     # 将会话对象序列化为字典
@@ -595,8 +596,7 @@ class ConversationService:
             return
         if not any(item.id == message.id for item in conv.messages):
             conv.messages.append(message)
-            if message.role == "user":
-                conv.message_count += 1
+            conv.message_count += 1
 
     # 创建新会话并注册到内存存储，同时持久化到 D1
     @staticmethod
@@ -667,6 +667,7 @@ class ConversationService:
                     conversation_id=existing["id"],
                     user_id=existing.get("user_id", DEFAULT_CONVERSATION_USER_ID),
                     created_at=existing.get("created_at"),
+                    message_count=existing.get("message_count", 0),
                 )
             else:
                 get_repositories().create_conversation(
@@ -709,6 +710,7 @@ class ConversationService:
                 conversation_id=data["id"],
                 user_id=data.get("user_id", DEFAULT_CONVERSATION_USER_ID),
                 created_at=data.get("created_at"),
+                message_count=data.get("message_count", 0),
             )
             _conversations[conv_id] = conv
             return conv
@@ -733,7 +735,7 @@ class ConversationService:
                     "title": item.get("title", ""),
                     "mode": item.get("mode", "chat"),
                     "created_at": item.get("created_at", ""),
-                    "message_count": 0,
+                    "message_count": item.get("message_count", 0),
                 }
 
             # 只合并当前用户的内存会话
@@ -806,6 +808,7 @@ class ConversationService:
         persisted_message = existing or message
         if existing is None:
             conv.messages.append(persisted_message)
+            conv.message_count += 1
 
         from src.repositories import get_repositories
 
@@ -863,7 +866,7 @@ class ConversationService:
                     )
                     for m in loaded
                 ]
-                conv.message_count = sum(m.role == "user" for m in conv.messages)
+                conv.message_count = len(conv.messages)
 
             return loaded
         except Exception as exc:
@@ -885,11 +888,11 @@ class ConversationService:
         history = [
             {
                 "role": str(message.get("role", "")),
-                "content": str(message.get("content", "")),
+                "content": str(message.get("content_json", message.get("content", ""))),
             }
             for message in source_messages
             if message.get("role") in {"user", "assistant"}
-            and str(message.get("content", "")).strip()
+            and str(message.get("content_json", message.get("content", ""))).strip()
         ]
         if (
             current_content
@@ -1500,7 +1503,10 @@ class AgentService:
                 return Message("assistant", fast_answer)
 
             conversation = ConversationService.get(conversation_id)
-            if is_explicit_knowledge_query(content) and not attachment_present:
+            if (
+                is_explicit_knowledge_query(content)
+                or (not settings.memory_enabled and conversation and conversation.mode == "knowledge")
+            ) and not attachment_present:
                 knowledge_scope = user_id or "anonymous"
                 result = await KnowledgeService.chat(content, user_id=knowledge_scope)
                 reply_content = str(result["output"])
@@ -1674,7 +1680,10 @@ class AgentService:
                 return
 
             conversation = ConversationService.get(conversation_id)
-            if is_explicit_knowledge_query(content) and not attachment_present:
+            if (
+                is_explicit_knowledge_query(content)
+                or (not settings.memory_enabled and conversation and conversation.mode == "knowledge")
+            ) and not attachment_present:
                 knowledge_scope = user_id or "anonymous"
                 result = await KnowledgeService.chat(content, user_id=knowledge_scope)
                 full_answer = str(result["output"])

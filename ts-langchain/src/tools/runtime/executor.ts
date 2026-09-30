@@ -156,7 +156,7 @@ export function validateInput<T>(
     const parsed = schema.parse(rawInput);
     return { success: true, data: parsed, meta: createMeta("validation") };
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Invalid input";
+    const message = redactTextContent(error instanceof Error ? error.message : "Invalid input");
     return {
       success: false,
       error: { code: "INVALID_ARGUMENT", message },
@@ -388,6 +388,7 @@ export async function invokeTool<TInput, TOutput>(
   }
 
   // 2. 参数校验
+  let validatedInput = rawInput as TInput;
   if (executor.schema) {
     const validation = validateInput(executor.schema, rawInput);
     if (!validation.success) {
@@ -416,6 +417,7 @@ export async function invokeTool<TInput, TOutput>(
         },
       };
     }
+    validatedInput = validation.data as TInput;
   }
 
   // 3. 权限检查
@@ -470,21 +472,17 @@ export async function invokeTool<TInput, TOutput>(
 
   // 4. 执行（带超时）
   let rawOutput: TOutput;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   reportToolProgress({ type: "started", toolName, callId });
 
   try {
     const timeoutMs = executor.descriptor.timeout_ms ?? 10_000;
 
     rawOutput = await Promise.race([
-      executor.execute(
-        (executor.schema
-          ? validateInput(executor.schema, rawInput).data!
-          : rawInput) as TInput,
-        context,
-      ),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("TIMEOUT")), timeoutMs),
-      ),
+      executor.execute(validatedInput, context),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error("TIMEOUT")), timeoutMs);
+      }),
     ]);
   } catch (error: unknown) {
     const isTimeout = error instanceof Error && error.message === "TIMEOUT";
@@ -514,7 +512,7 @@ export async function invokeTool<TInput, TOutput>(
         message: isTimeout
           ? `工具执行超时 (${executor.descriptor.timeout_ms}ms)`
           : error instanceof Error
-            ? error.message
+            ? redactTextContent(error.message)
             : "执行失败",
       },
       meta: {
@@ -524,6 +522,8 @@ export async function invokeTool<TInput, TOutput>(
         duration_ms: durationMs,
       },
     };
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
 
   // 5. 结果脱敏

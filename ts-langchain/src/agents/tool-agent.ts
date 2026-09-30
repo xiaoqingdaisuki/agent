@@ -12,6 +12,7 @@ import {
   ReActRunSummary,
   ReActRunTracker,
   runWithReActTracker,
+  toolCallSignature,
 } from "./react-policy.js";
 
 // ReAct 最大步骤与 Python 版共享配置，避免两种实现的安全边界不一致。
@@ -60,8 +61,9 @@ function normalizeToolName(name: string): string {
   return TOOL_NAME_ALIASES[name] || name;
 }
 
-// 规范化标准 tool_calls，兼容供应商把 descriptor 名称直接作为调用名称。
+// 规范化工具别名并合并同一响应中相同参数的记忆保存调用。
 function normalizeToolCalls(calls: unknown[]): unknown[] {
+  const seenMemorySaves = new Set<string>();
   return calls.map((call) => {
     if (!call || typeof call !== "object") return call;
     const candidate = call as Record<string, any>;
@@ -78,6 +80,16 @@ function normalizeToolCalls(calls: unknown[]): unknown[] {
       };
     }
     return call;
+  // 仅合并相同参数的记忆保存，其他工具保留原始顺序。
+  }).filter((call) => {
+    if (!call || typeof call !== "object") return true;
+    const candidate = call as Record<string, any>;
+    const name = candidate.name || candidate.function?.name;
+    if (name !== "memory_user_save") return true;
+    const signature = toolCallSignature(name, candidate.args ?? candidate.function?.arguments ?? {});
+    if (seenMemorySaves.has(signature)) return false;
+    seenMemorySaves.add(signature);
+    return true;
   });
 }
 
@@ -202,7 +214,7 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
   }));
   return new AIMessage({
     content: removeXmlToolCallText(content, parsedCalls),
-    tool_calls: toolCalls,
+    tool_calls: normalizeToolCalls(toolCalls) as any,
     id: candidate?.id,
     response_metadata: candidate?.response_metadata,
     additional_kwargs: (candidate as any)?.additional_kwargs,
@@ -336,7 +348,7 @@ export function getFastPathAnswer(content: string): string | undefined {
     return "我可以回答问题、计算、检索公开信息，并协助规划和整理内容。";
   }
   if (/^1\+1(等于几|等于多少)?[?？。]?$/.test(normalized)) return "1 + 1 = 2。";
-  if (normalized.includes("解释递归") || normalized.startsWith("什么是递归")) {
+  if (/^(?:(?:请)?解释递归|什么是递归)[?？。]?$/.test(normalized)) {
     return "递归是函数直接或间接调用自身，并在满足终止条件时停止。";
   }
   return undefined;

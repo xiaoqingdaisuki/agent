@@ -1,6 +1,6 @@
 /**
  * RAG 文本切分器
- * 递归字符切分，保持段落完整性
+ * 按有界窗口切分，保持段落完整性
  */
 
 export interface TextChunk {
@@ -27,6 +27,16 @@ export class TextSplitter {
   constructor(
     options: SplitterOptions = { chunkSize: 1000, chunkOverlap: 200 },
   ) {
+    if (!Number.isInteger(options.chunkSize) || options.chunkSize <= 0) {
+      throw new RangeError("chunkSize 必须为正整数");
+    }
+    if (
+      !Number.isInteger(options.chunkOverlap)
+      || options.chunkOverlap < 0
+      || options.chunkOverlap >= options.chunkSize
+    ) {
+      throw new RangeError("chunkOverlap 必须为非负整数且小于 chunkSize");
+    }
     this.chunkSize = options.chunkSize;
     this.chunkOverlap = options.chunkOverlap;
   }
@@ -39,7 +49,7 @@ export class TextSplitter {
     content: string;
     metadata: { source: string; filename: string };
   }): TextChunk[] {
-    const chunks = this.recursiveSplit(doc.content);
+    const chunks = this.splitText(doc.content);
     return chunks.map((text, index) => ({
       text,
       index,
@@ -53,41 +63,29 @@ export class TextSplitter {
   }
 
   /**
-   * 递归字符切分
+   * 迭代字符切分
    * 优先按段落（\n\n）切分，其次按句子（\n）切分，最后按字符切分
    */
-  // 执行 recursiveSplit 对应的业务逻辑
-  private recursiveSplit(text: string): string[] {
-    // 如果文本足够短，直接返回
-    if (text.length <= this.chunkSize) {
-      return [text];
-    }
-
+  // 逐个有界窗口选择分隔点，确保重叠后仍向前推进且大文档不耗尽调用栈。
+  private splitText(text: string): string[] {
     const chunks: string[] = [];
-    const separators = ["\n\n", "\n", "。", ". ", " ", ""];
-
-    // 找到最佳分割点
-    let splitAt = -1;
-    for (const sep of separators) {
-      const pos = text.lastIndexOf(sep, this.chunkSize);
-      if (pos > this.chunkSize * 0.3) {
-        // 在 chunkSize 之前找到分割点
-        splitAt = pos + sep.length;
-        break;
+    const separators = ["\n\n", "\n", "。", ". ", " "];
+    let offset = 0;
+    while (text.length - offset > this.chunkSize) {
+      const window = text.slice(offset, offset + this.chunkSize);
+      let splitAt = this.chunkSize;
+      for (const separator of separators) {
+        const position = window.lastIndexOf(separator);
+        const end = position + separator.length;
+        if (position > this.chunkSize * 0.3 && end > this.chunkOverlap) {
+          splitAt = end;
+          break;
+        }
       }
+      chunks.push(window.slice(0, splitAt).trim());
+      offset += splitAt - this.chunkOverlap;
     }
-
-    if (splitAt === -1) {
-      // 硬切分
-      splitAt = this.chunkSize;
-    }
-
-    const chunk = text.slice(0, splitAt).trim();
-    const remaining = text.slice(splitAt - this.chunkOverlap);
-
-    chunks.push(chunk);
-    chunks.push(...this.recursiveSplit(remaining));
-
+    chunks.push(text.slice(offset));
     return chunks;
   }
 }

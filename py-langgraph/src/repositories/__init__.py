@@ -157,22 +157,23 @@ class InMemoryRepositories:
             "created_at": now,
             "updated_at": now,
             "deleted_at": None,
+            "message_count": len(self._messages.get(conversation_id, [])),
         }
         self._conversations[conversation_id] = conversation
         self._messages.setdefault(conversation_id, [])
-        return dict(conversation)
+        return {**conversation, "message_count": len(self._messages.get(conversation_id, []))}
 
     # 获取会话
     def get_conversation(self, conversation_id: str) -> dict | None:
         conversation = self._conversations.get(conversation_id)
         if not conversation or conversation.get("deleted_at"):
             return None
-        return dict(conversation)
+        return {**conversation, "message_count": len(self._messages.get(conversation_id, []))}
 
     # 列出用户会话
     def list_conversations(self, user_id: str, limit: int = 20, offset: int = 0) -> list[dict]:
         conversations = [
-            dict(conversation)
+            {**conversation, "message_count": len(self._messages.get(conversation["id"], []))}
             for conversation in self._conversations.values()
             if conversation["user_id"] == user_id and not conversation.get("deleted_at")
         ]

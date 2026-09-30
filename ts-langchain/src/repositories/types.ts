@@ -25,6 +25,7 @@ export interface ConversationData {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  message_count: number;
 }
 
 /** 消息 */

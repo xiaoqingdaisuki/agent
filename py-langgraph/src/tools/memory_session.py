@@ -70,7 +70,10 @@ def memory_session_search(
     repos = get_repositories()
 
     try:
-        messages_data, _ = repos.get_messages(scoped_conversation_id, limit=max_results * 5)
+        messages_data, _ = repos.get_messages(
+            scoped_conversation_id, limit=min(max_results * 5, 100), direction="desc"
+        )
+        messages_data.reverse()
         query_lower = query.lower()
         results = [
             {"role": m.get("role", "user"), "content": m.get("content_json", "")}

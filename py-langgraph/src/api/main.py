@@ -69,18 +69,18 @@ def create_app() -> FastAPI:
     allowed_origins = [
         origin.strip() for origin in settings.cors_origin.split(",") if origin.strip()
     ]
+    # 请求级超时中间件
+    app.middleware("http")(_timeout_middleware)
+    app.middleware("http")(agent_auth_middleware)
+    # 将跨域处理放在鉴权外层，让浏览器无需凭证即可完成合法预检。
     if allowed_origins:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=allowed_origins,
             allow_credentials="*" not in allowed_origins,
-            allow_methods=["*"],
+            allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
             allow_headers=["*"],
         )
-
-    # 请求级超时中间件
-    app.middleware("http")(_timeout_middleware)
-    app.middleware("http")(agent_auth_middleware)
 
     @app.exception_handler(BusinessError)
     # 执行 business error handler 对应的业务逻辑

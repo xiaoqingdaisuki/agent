@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
@@ -7,6 +7,7 @@ import {
   budgetGuard,
   createToolCallScope,
   getToolCallContext,
+  invokeTool,
   permissionCheck,
   runWithToolCallContext,
   wrapToolWithRuntime,
@@ -25,6 +26,52 @@ function context(userId: string, roles: string[] = ["member"]): ToolCallContext 
 }
 
 describe("per-request tool runtime", () => {
+  const computeDescriptor: ToolDescriptor = {
+    name: "test.compute", version: "1.0.0", title: "test", description: "test",
+    category: "COMPUTE", risk_level: "R0", side_effect: "none", timeout_ms: 1000,
+    input_schema: z.object({}),
+  };
+
+  it("redacts sensitive execution errors", async () => {
+    const trustedContext = context("error-redaction");
+    const result = await runWithToolCallContext(trustedContext, () => invokeTool({
+      descriptor: computeDescriptor,
+      execute: async () => { throw new Error("password=demo_password_123"); },
+    }, {}, trustedContext));
+    expect(result.error?.message).toBe("password=[REDACTED]");
+  });
+
+  it("clears the timeout when a tool finishes promptly and validates once", async () => {
+    vi.useFakeTimers();
+    try {
+      const trustedContext = context("timer-cleanup");
+      const parse = vi.fn((value) => value);
+      const result = await runWithToolCallContext(trustedContext, () => invokeTool({
+        descriptor: computeDescriptor, schema: { parse }, execute: async () => "done",
+      }, {}, trustedContext));
+      expect(result.data).toBe("done");
+      expect(parse).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still returns a timeout for a tool that does not finish", async () => {
+    vi.useFakeTimers();
+    try {
+      const trustedContext = context("tool-timeout");
+      const resultPromise = runWithToolCallContext(trustedContext, () => invokeTool({
+        descriptor: computeDescriptor, execute: () => new Promise<never>(() => {}),
+      }, {}, trustedContext));
+      await vi.advanceTimersByTimeAsync(computeDescriptor.timeout_ms);
+      expect((await resultPromise).error?.code).toBe("TIMEOUT");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves denial reasons and role order across permission cache hits", () => {
     const roles = ["viewer", "member"];
     const descriptor: ToolDescriptor = {

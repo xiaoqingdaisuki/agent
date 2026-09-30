@@ -1,7 +1,7 @@
 /**
  * Safe Math Calculator — 手写递归下降解析器替代 Function()/eval()
  *
- * 支持: +, -, *, /, %, **, 括号, 一元负号
+ * 支持: +, -, *, /, %, **, 括号, 一元负号；取模结果与除数同号
  * 拒绝: 任意代码执行、函数调用、属性访问
  */
 
@@ -47,10 +47,13 @@ function tokenize(expr: string): Token[] {
   }
 
   // ** 必须在 * 之前匹配（正则从左到右尝试）
-  const regex = /\s*(\d+(?:\.\d+)?)|(\*\*)|([+\-*/%])|(\()|(\))\s*/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(normalized)) !== null) {
+  const regex = /\s*(?:(\d+(?:\.\d*)?|\.\d+)|(\*\*)|([+\-*/%])|(\()|(\)))\s*/y;
+  let pos = 0;
+  while (pos < normalized.length) {
+    regex.lastIndex = pos;
+    const match = regex.exec(normalized);
+    if (!match) throw new ParseError(`无法解析的位置 ${pos}: '${normalized.slice(pos, pos + 20)}'`);
+    pos = regex.lastIndex;
     if (match[1] !== undefined) {
       tokens.push({ type: "NUM", numValue: parseFloat(match[1]) });
     } else if (match[2] !== undefined) {
@@ -117,6 +120,8 @@ function parseTerm(
       case "%":
         if (right.value === 0) throw new ParseError("取模除零");
         value = value % right.value;
+        if (value !== 0 && Math.sign(value) !== Math.sign(right.value)) value += right.value;
+        if (value === 0) value = 0;
         break;
     }
   }
@@ -204,7 +209,9 @@ export function safeCalculate(expression: string): number {
   const tokens = tokenize(cleaned);
   if (tokens.length === 0) throw new ParseError("空表达式");
 
-  const result = parseExpr(tokens, 0).value;
+  const parsed = parseExpr(tokens, 0);
+  if (parsed.pos !== tokens.length) throw new ParseError("表达式未完全解析，可能有多余字符");
+  const result = parsed.value;
 
   if (!Number.isFinite(result)) {
     throw new ParseError("计算结果不是有效数字");

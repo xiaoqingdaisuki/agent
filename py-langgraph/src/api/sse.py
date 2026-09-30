@@ -50,6 +50,7 @@ async def with_sse_heartbeats(
     sentinel = object()
     queue: asyncio.Queue[dict | object] = asyncio.Queue(maxsize=1)
     producer_error: BaseException | None = None
+    closing = False
 
     # 在单一任务中完整迭代上游，避免异步生成器跨 ContextVar 上下文恢复。
     async def produce() -> None:
@@ -60,7 +61,15 @@ async def with_sse_heartbeats(
         except BaseException as error:
             producer_error = error
         finally:
-            await queue.put(sentinel)
+            try:
+                close = getattr(events, "aclose", None)
+                if close is not None:
+                    await close()
+            except BaseException as error:
+                if producer_error is None:
+                    producer_error = error
+            if not closing:
+                await queue.put(sentinel)
 
     producer = asyncio.create_task(produce())
     try:
@@ -77,6 +86,7 @@ async def with_sse_heartbeats(
                 return
             yield item
     finally:
+        closing = True
         if not producer.done():
             producer.cancel()
             try:

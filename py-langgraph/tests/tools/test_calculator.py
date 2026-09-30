@@ -88,6 +88,26 @@ class TestSafeCalculate:
         with pytest.raises(Exception):
             safe_calculate("2; import os")
 
+    @pytest.mark.parametrize("expression", ["1 2", "1..2", "2(3)", "1.2.3", "1 + .", "2 **"])
+    def test_incomplete_or_unconsumed_expression_rejected(self, expression):
+        with pytest.raises(Exception):
+            safe_calculate(expression)
+
+    @pytest.mark.parametrize(
+        ("expression", "result"),
+        [
+            (".5 + .5", 1),
+            ("5. + .25", 5.25),
+            ("-5 % 3", 1),
+            ("5 % -3", -1),
+            ("-5 % -3", -2),
+            ("-6 % 3", 0),
+            ("0.1 % 0.3", 0.1),
+        ],
+    )
+    def test_decimals_and_divisor_signed_modulo(self, expression, result):
+        assert safe_calculate(expression) == pytest.approx(result)
+
 
 class TestCalculatorTool:
     """LangChain tool 封装测试"""
@@ -98,7 +118,7 @@ class TestCalculatorTool:
         assert "4" in result
 
     def test_tool_error_message(self):
-        result = calculator.invoke({"expression": "1 / 0" })
+        result = calculator.invoke({"expression": "1 / 0"})
         assert "错误" in result or "错误" in result
 
     def test_tool_rejects_code(self):

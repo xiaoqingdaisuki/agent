@@ -671,10 +671,11 @@ export class ConversationService {
   // 将已由原子 Turn 命令持久化的消息同步到进程缓存。
   static cachePersistedMessage(conversationId: string, message: Message): void {
     const messages = conversationMessages.get(conversationId) ?? [];
-    if (!messages.some((item) => item.id === message.id)) messages.push(message);
+    const created = !messages.some((item) => item.id === message.id);
+    if (created) messages.push(message);
     conversationMessages.set(conversationId, messages);
     const conversation = conversations.get(conversationId);
-    if (conversation && message.role === "user") conversation.messageCount += 1;
+    if (conversation && created) conversation.messageCount += 1;
   }
 
   // 创建新会话，分配唯一 ID 并初始化消息列表，同时持久化到 D1
@@ -751,7 +752,7 @@ export class ConversationService {
           title: existing.title,
           mode: existing.mode,
           createdAt: existing.created_at,
-          messageCount: 0,
+          messageCount: existing.message_count ?? 0,
           userId: existing.user_id,
         };
         conversations.set(conversationId, conversation);
@@ -805,7 +806,7 @@ export class ConversationService {
         title: data.title,
         mode: data.mode,
         createdAt: data.created_at,
-        messageCount: 0,
+        messageCount: data.message_count ?? 0,
         userId: data.user_id,
       };
       conversations.set(id, conversation);
@@ -830,7 +831,7 @@ export class ConversationService {
           title: d.title,
           mode: d.mode,
           createdAt: d.created_at,
-          messageCount: 0,
+          messageCount: d.message_count ?? 0,
           userId: d.user_id,
         });
       }
@@ -931,6 +932,8 @@ export class ConversationService {
     const cachedMessages = conversationMessages.get(conversationId);
     if (cachedMessages && !cachedMessages.some((item) => item.id === message.id)) {
       cachedMessages.push(message);
+      const cachedConversation = conversations.get(conversationId);
+      if (cachedConversation) cachedConversation.messageCount += 1;
     }
 
     const conversation = conversations.get(conversationId);
@@ -953,12 +956,17 @@ export class ConversationService {
   // 获取会话消息列表，服务缓存未命中时从当前仓储加载。
   static async getMessages(conversationId: string): Promise<Message[]> {
     const cached = conversationMessages.get(conversationId);
-    if (cached) return [...cached];
-
-    // D1 回退
+    // 从权威仓储逐页刷新，避免冷启动后的新消息缓存遮蔽历史。
     try {
       const repos = getRepositories();
-      const { messages } = await repos.message.getMessages(conversationId, 200, 0);
+      const messages: import("../repositories/types.js").MessageData[] = [];
+      let total = 0;
+      do {
+        const page = await repos.message.getMessages(conversationId, 200, messages.length);
+        total = page.total;
+        if (page.messages.length === 0) break;
+        messages.push(...page.messages);
+      } while (messages.length < total);
       const loaded: Message[] = messages.map((m) => ({
         id: m.id,
         role: m.role,
@@ -969,14 +977,14 @@ export class ConversationService {
 
       // 同步更新会话 messageCount
       const conv = conversations.get(conversationId);
-      if (conv && loaded.length > 0) {
-        conv.messageCount = loaded.filter((m) => m.role === "user").length;
+      if (conv) {
+        conv.messageCount = loaded.length;
       }
 
       return [...loaded];
     } catch (err) {
       console.warn(`[service] D1 get messages for conversation ${conversationId} failed: ${err}`);
-      return [];
+      return cached ? [...cached] : [];
     }
   }
 
@@ -1107,7 +1115,7 @@ export class AgentService {
       }
 
       const conversation = await ConversationService.get(conversationId);
-      if (isExplicitKnowledgeQuery(content) && !hasAttachments) {
+      if ((isExplicitKnowledgeQuery(content) || (!config.MEMORY_ENABLED && conversation?.mode === "knowledge")) && !hasAttachments) {
         const knowledgeScope = userId || "anonymous";
         const result = await KnowledgeService.chat(content, [], knowledgeScope);
         const replyContent = String(result.output);
@@ -1263,7 +1271,7 @@ export class AgentService {
         return;
       }
       const conversation = await ConversationService.get(conversationId);
-      if (isExplicitKnowledgeQuery(content) && !hasAttachments) {
+      if ((isExplicitKnowledgeQuery(content) || (!config.MEMORY_ENABLED && conversation?.mode === "knowledge")) && !hasAttachments) {
         const knowledgeScope = userId || "anonymous";
         const result = await KnowledgeService.chat(content, [], knowledgeScope);
         fullAnswer = String(result.output);
@@ -1535,7 +1543,7 @@ export class AgentService {
         };
       }
     } catch (error: any) {
-      if (isClientAbortError(error) || requestSignal?.aborted) return;
+      if (isClientAbortError(error) || requestSignal?.aborted) throw error;
       if (error instanceof BusinessError) throw error;
       if (isAgentDeadlineError(error)) {
         // 超时但有部分结果 → 返回部分内容 + 继续提示

@@ -70,7 +70,22 @@ export function redactStructuredData<T>(data: T): T {
 interface RedactionRule {
   name: string;
   pattern: RegExp;
-  replacement: string;
+  replacement: string | ((match: string) => string);
+}
+
+// 仅遮蔽具有 JSON 头部和载荷的 JWT，保留普通域名和版本号。
+function redactJwtCandidate(candidate: string): string {
+  try {
+    const [encodedHeader, encodedPayload] = candidate.split(".");
+    const header = JSON.parse(Buffer.from(encodedHeader, "base64url").toString("utf8"));
+    const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+    return header && typeof header === "object" && typeof header.alg === "string" &&
+      payload && typeof payload === "object" && !Array.isArray(payload)
+      ? "[REDACTED]"
+      : candidate;
+  } catch {
+    return candidate;
+  }
 }
 
 const CONTENT_REDACTION_RULES: RedactionRule[] = [
@@ -82,7 +97,7 @@ const CONTENT_REDACTION_RULES: RedactionRule[] = [
   },
   {
     name: "auth_header",
-    pattern: /(Authorization:\s*)[^\s,;]+/gi,
+    pattern: /(Authorization:[ \t]*)[^\r\n,;]+/gi,
     replacement: "$1[REDACTED]",
   },
   // API keys — 长十六进制字符串 (64+ chars)
@@ -94,8 +109,8 @@ const CONTENT_REDACTION_RULES: RedactionRule[] = [
   // JWT tokens
   {
     name: "jwt",
-    pattern: /[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+/g,
-    replacement: "[REDACTED]",
+    pattern: /[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*/g,
+    replacement: redactJwtCandidate,
   },
   // Private keys
   {
@@ -130,7 +145,7 @@ const CONTENT_REDACTION_RULES: RedactionRule[] = [
   // Generic password patterns in text
   {
     name: "password_inline",
-    pattern: /(?:password|passwd|pwd|pass)\s*[=:]\s*["']?([^\s"',;)}\]]+)["']?/gi,
+    pattern: /(password|passwd|pwd|pass)\s*[=:]\s*["']?[^\s"',;)}\]]+["']?/gi,
     replacement: "$1=[REDACTED]",
   },
 ];
@@ -142,7 +157,9 @@ const CONTENT_REDACTION_RULES: RedactionRule[] = [
 export function redactTextContent(text: string): string {
   let result = text;
   for (const rule of CONTENT_REDACTION_RULES) {
-    result = result.replace(rule.pattern, rule.replacement);
+    result = typeof rule.replacement === "string"
+      ? result.replace(rule.pattern, rule.replacement)
+      : result.replace(rule.pattern, rule.replacement);
   }
   return result;
 }

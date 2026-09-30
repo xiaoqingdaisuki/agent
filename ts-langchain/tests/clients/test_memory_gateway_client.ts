@@ -380,6 +380,23 @@ describe("CloudflareMemoryClient", () => {
   // ============ Error Handling ============
 
   describe("Error Handling", () => {
+    it.each([400, 500, 503])("preserves the Gateway error code for HTTP %i", async (status) => {
+      mockSetup.setMockResponse("/internal/v1/documents", status, {
+        error: { code: "DOCUMENT_UPLOAD_FAILED", message: "upload failed" },
+      });
+      await expect(client.uploadDocument("audit", "broken.txt", "%%%"))
+        .rejects.toMatchObject({ code: "DOCUMENT_UPLOAD_FAILED", statusCode: status });
+    });
+
+    it("rejects business failures inside a successful HTTP response", async () => {
+      mockSetup.mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: false, data: null,
+        error: { code: "MEMORY_INTERNAL_ERROR", message: "business failure" },
+        meta: { request_id: "request-audit" },
+      }), { status: 200 }));
+      await expect(client.getProfile("audit")).rejects.toThrow("business failure");
+    });
+
     it("throws MemoryGatewayError on 401", async () => {
       mockSetup.setMockResponse("/internal/v1/users/usr_001/profile", 401, {
         error: { code: "MEMORY_UNAUTHENTICATED", message: "认证失败" },

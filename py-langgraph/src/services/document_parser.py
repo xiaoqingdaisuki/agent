@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -33,14 +34,19 @@ def _build_parts(content: str, page: int | None = None) -> list[dict[str, Any]]:
     normalized = content.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not normalized:
         return []
+    chunks = [
+        paragraph[start : start + SESSION_DOCUMENT_MAX_PART_CHARS]
+        for raw_paragraph in re.split(r"\n{2,}", normalized)
+        if (paragraph := raw_paragraph.strip())
+        for start in range(0, len(paragraph), SESSION_DOCUMENT_MAX_PART_CHARS)
+    ]
     return [
         {
             "partIndex": index,
             "page": page,
-            "content": chunk.strip()[:SESSION_DOCUMENT_MAX_PART_CHARS],
+            "content": chunk,
         }
-        for index, chunk in enumerate(normalized.split("\n\n"))
-        if chunk.strip()
+        for index, chunk in enumerate(chunks)
     ]
 
 
@@ -96,6 +102,8 @@ def parse_document(file_content: bytes, filename: str, mime_type: str = "applica
             text = file_content.decode("utf-8").lstrip("\ufeff")
         except UnicodeDecodeError as error:
             raise DocumentParseError("SESSION_DOCUMENT_INVALID_ENCODING", "文档必须使用 UTF-8 编码", 422) from error
+        if len(text.encode("utf-8")) > SESSION_DOCUMENT_MAX_TEXT_BYTES:
+            raise DocumentParseError("SESSION_DOCUMENT_TEXT_TOO_LARGE", "文档正文不能超过 1MB", 413)
         parts = _build_parts(text, 1)
 
     extracted_size = len("\n\n".join(str(part["content"]) for part in parts).encode("utf-8"))

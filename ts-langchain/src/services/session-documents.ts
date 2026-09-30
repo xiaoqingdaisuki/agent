@@ -41,10 +41,11 @@ function buildSessionDocumentParts(
     .split(/\n{2,}/)
     .map((part) => part.trim())
     .filter(Boolean)
+    .flatMap((part) => part.match(/[\s\S]{1,20000}/gu) ?? [])
     .map((part, index) => ({
       partIndex: index,
       page,
-      content: part.slice(0, 20_000),
+      content: part,
     }));
 }
 

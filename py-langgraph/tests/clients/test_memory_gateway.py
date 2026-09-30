@@ -3,7 +3,7 @@
 import httpx
 import pytest
 
-from src.clients.memory_gateway import CloudflareMemoryClient
+from src.clients.memory_gateway import CloudflareMemoryClient, MemoryGatewayError
 from src.repositories import _run_sync
 
 
@@ -44,6 +44,73 @@ async def test_preserves_gateway_not_found_codes():
         assert await client.get_profile("missing") is None
         assert await client.get_conversation("missing") is None
         assert await client.get_document("missing") is None
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 500, 503])
+async def test_preserves_gateway_errors_for_all_failure_statuses(status):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status,
+            json={"ok": False, "data": None,
+                  "error": {"code": "DOCUMENT_UPLOAD_FAILED", "message": "upload failed"}},
+        )
+
+    client = CloudflareMemoryClient("https://gateway.test", "secret")
+    client._client = httpx.AsyncClient(
+        base_url="https://gateway.test", transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(MemoryGatewayError) as caught:
+            await client.upload_document("audit", "broken.txt", "%%%")
+        assert caught.value.code == "DOCUMENT_UPLOAD_FAILED"
+        assert caught.value.status_code == status
+        assert caught.value.message == "upload failed"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_rejects_business_failure_inside_a_successful_http_response():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "ok": False, "data": None,
+            "error": {"code": "MEMORY_INTERNAL_ERROR", "message": "business failure"},
+            "meta": {"request_id": "request-audit"},
+        })
+
+    client = CloudflareMemoryClient("https://gateway.test", "secret")
+    client._client = httpx.AsyncClient(
+        base_url="https://gateway.test", transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(MemoryGatewayError, match="business failure"):
+            await client.get_profile("audit")
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_type", "expected_code", "expected_status"),
+    [(httpx.ReadTimeout, "MEMORY_TIMEOUT", 408),
+     (httpx.ConnectError, "MEMORY_INTERNAL_ERROR", 500)],
+)
+async def test_maps_exhausted_transport_failures(error_type, expected_code, expected_status):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise error_type("transport failed", request=request)
+
+    client = CloudflareMemoryClient("https://gateway.test", "secret")
+    client._client = httpx.AsyncClient(
+        base_url="https://gateway.test", transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(MemoryGatewayError) as caught:
+            await client.get_profile("audit")
+        assert caught.value.code == expected_code
+        assert caught.value.status_code == expected_status
     finally:
         await client.close()
 

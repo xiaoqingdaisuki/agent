@@ -45,3 +45,33 @@ def test_sse_events_have_monotonic_turn_bound_event_ids():
     assert "id: turn-1:1" in first
     assert '"event_id": "turn-1:2"' in second
     assert "id: turn-1:3" in done
+
+
+@pytest.mark.asyncio
+async def test_closing_backpressured_stream_cancels_producer_without_hanging():
+    closed = asyncio.Event()
+
+    async def events():
+        try:
+            for index in range(10):
+                yield {"type": "text", "text": str(index)}
+        finally:
+            closed.set()
+
+    stream = with_sse_heartbeats(events())
+    await anext(stream)
+    await asyncio.sleep(0.01)
+    await asyncio.wait_for(stream.aclose(), timeout=0.2)
+    assert closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_upstream_cancellation_reaches_consumer_instead_of_infinite_heartbeats():
+    async def events():
+        yield {"type": "text", "text": "one"}
+        raise asyncio.CancelledError("upstream cancelled")
+
+    stream = with_sse_heartbeats(events(), 0.01)
+    assert await anext(stream) == {"type": "text", "text": "one"}
+    with pytest.raises(asyncio.CancelledError, match="upstream cancelled"):
+        await asyncio.wait_for(anext(stream), timeout=0.2)

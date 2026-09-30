@@ -165,6 +165,59 @@ def test_static_fast_path_never_returns_a_location_specific_recommendation():
     assert graph_agents.get_fast_path_answer("深圳南山有什么好玩的") is None
 
 
+def test_static_fast_path_preserves_additional_recursion_requirements():
+    assert "调用自身" in graph_agents.get_fast_path_answer("什么是递归？")
+    assert graph_agents.get_fast_path_answer("请解释递归，并计算 12345 × 12") is None
+    assert graph_agents.get_fast_path_answer("请用三句话解释递归") is None
+    assert graph_agents.get_fast_path_answer("什么是递归，请用 Python 举例") is None
+
+
+async def test_structured_memory_save_executes_once_without_unhashable_args(monkeypatch):
+    from langchain_core.tools import tool
+    import src.tools as tools_module
+
+    saved = []
+
+    @tool
+    async def memory_user_save(content: str, category: str, user_id: str) -> str:
+        """Save a user preference."""
+        saved.append((content, category, user_id))
+        return "saved"
+
+    model = ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "save-1",
+                        "name": "memory_user_save",
+                        "args": {"content": "我喜欢蓝色", "category": "preference"},
+                    },
+                    {
+                        "id": "save-2",
+                        "name": "memory_user_save",
+                        "args": {"category": "preference", "content": "我喜欢蓝色"},
+                    },
+                ],
+            ),
+            AIMessage(content="已记住"),
+        ]
+    )
+    monkeypatch.setattr(graph_agents, "get_llm", lambda provider="openai": model)
+    monkeypatch.setattr(tools_module, "tools", [memory_user_save])
+    agent = graph_agents.build_tool_agent(checkpointer=MemorySaver())
+
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage(content="记住我喜欢蓝色")], "user_id": "audit-user"},
+        config={"configurable": {"thread_id": "memory-save-chain"}},
+    )
+
+    assert saved == [("我喜欢蓝色", "preference", "audit-user")]
+    assert result["messages"][-1].content == "已记住"
+    assert result["react_tool_calls"] == 1
+
+
 async def test_tool_agent_executes_invoke_name_xml_calls(monkeypatch):
     """The provider invoke/name XML format must enter the normal tool graph."""
     model = ToolCapableFakeModel(
@@ -257,3 +310,50 @@ def test_serialized_history_uses_the_same_token_budget_and_turn_boundary():
     retained = graph_agents.trim_conversation_history_to_token_budget(history)
 
     assert retained == history[-2:]
+
+
+async def test_identical_error_observation_stops_after_one_retry(monkeypatch):
+    from langchain_core.tools import tool
+    import src.tools as tools_module
+
+    executed = []
+
+    @tool
+    async def failing_tool(query: str) -> str:
+        """Return a recoverable error."""
+        executed.append(query)
+        return (
+            '{"status":"error","data":null,"error":{"code":"INTERNAL_ERROR","message":"offline"}}'
+        )
+
+    model = ToolCapableFakeModel(
+        responses=[
+            *[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"name": "failing_tool", "args": {"query": "same"}, "id": f"fail-{index}"},
+                    ],
+                )
+                for index in range(3)
+            ],
+            AIMessage(content="partial answer"),
+        ]
+    )
+    monkeypatch.setattr(graph_agents, "get_llm", lambda provider="openai": model)
+    monkeypatch.setattr(tools_module, "tools", [failing_tool])
+    agent = graph_agents.build_tool_agent(checkpointer=MemorySaver())
+
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage(content="question")]},
+        config={"configurable": {"thread_id": "retry-limit-chain"}},
+    )
+
+    assert executed == ["same", "same"]
+    assert result["messages"][-1].content == "partial answer"
+    assert result["stop_reason"] == "TOOL_FAILURE"
+    assert result["reason_code"] == "TOOL_RETRY_EXHAUSTED"
+    assert result["react_state"] == "TOOL_ERROR"
+    assert result["react_tool_calls"] == 2
+    assert result["tool_errors"] == 2
+    assert result["model_calls"] == 4

@@ -55,9 +55,10 @@ export const memorySessionSearchTool: DynamicStructuredTool =
         conversation_id,
         Math.min(maxResults * 5, 100),
         0,
+        "desc",
       );
 
-      let messages = result.messages;
+      let messages = [...result.messages].reverse();
 
       // 关键词过滤
       if (query) {

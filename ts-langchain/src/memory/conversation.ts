@@ -117,6 +117,7 @@ export async function appendMessage(threadId: string, message: BaseMessage): Pro
 
   const bounded = trimHistoryToTokenBudget(history);
   history.splice(0, history.length, ...bounded);
+  conversations.set(threadId, history);
 }
 
 /**

@@ -116,37 +116,57 @@ class CloudflareMemoryClient:
             try:
                 response = await client.request(method, path, content=request_content, headers=headers)
                 break
-            except (httpx.TimeoutException, httpx.NetworkError):
+            except (httpx.TimeoutException, httpx.NetworkError) as error:
                 if attempt + 1 >= attempts:
-                    raise
+                    if isinstance(error, httpx.TimeoutException):
+                        raise MemoryGatewayError("MEMORY_TIMEOUT", "请求 Gateway 超时", 408) from error
+                    raise MemoryGatewayError(
+                        "MEMORY_INTERNAL_ERROR", str(error) or "网络请求失败", 500
+                    ) from error
                 await asyncio.sleep(0.15 * (attempt + 1))
+            except httpx.RequestError as error:
+                raise MemoryGatewayError(
+                    "MEMORY_INTERNAL_ERROR", str(error) or "网络请求失败", 500
+                ) from error
 
         if response is None:
             raise MemoryGatewayError("MEMORY_REQUEST_FAILED", "记忆网关请求失败", 503)
 
-        if response.status_code in {401, 403, 404, 409}:
+        if response.is_error:
             try:
                 payload = response.json()
             except ValueError:
                 payload = {}
-            error = payload.get("error") or {}
+            error = payload.get("error") if isinstance(payload, dict) else None
+            if not isinstance(error, dict):
+                error = {}
             fallbacks = {
                 401: ("MEMORY_UNAUTHENTICATED", "缺少或无效的认证凭证"),
                 403: ("MEMORY_FORBIDDEN", "无权访问该资源"),
                 404: ("MEMORY_NOT_FOUND", "资源不存在"),
                 409: ("MEMORY_CONFLICT", "数据冲突"),
             }
-            fallback_code, fallback_message = fallbacks[response.status_code]
+            fallback_code, fallback_message = fallbacks.get(
+                response.status_code, ("MEMORY_INTERNAL_ERROR", f"HTTP {response.status_code}")
+            )
             raise MemoryGatewayError(
                 error.get("code", fallback_code),
                 error.get("message", fallback_message),
                 response.status_code,
             )
 
-        response.raise_for_status()
-        data = response.json()
-        # 校验响应信封格式
-        GatewayResponse.model_validate(data)
+        try:
+            data = response.json()
+            envelope = GatewayResponse.model_validate(data)
+        except (ValueError, TypeError) as error:
+            raise MemoryGatewayError("MEMORY_INTERNAL_ERROR", str(error), 500) from error
+        if not envelope.ok:
+            error = envelope.error
+            raise MemoryGatewayError(
+                error.code if error else "MEMORY_INTERNAL_ERROR",
+                error.message if error else "Gateway 返回错误",
+                response.status_code,
+            )
         return data
 
     # ============ Profile ============

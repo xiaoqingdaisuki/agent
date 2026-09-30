@@ -181,6 +181,48 @@ describe("tool agent", () => {
     expect(getFastPathAnswer("深圳南山有什么好玩的")).toBeUndefined();
   });
 
+  it("preserves additional requirements after a recursion question", () => {
+    expect(getFastPathAnswer("什么是递归？")).toContain("调用自身");
+    expect(getFastPathAnswer("请解释递归，并计算 12345 × 12")).toBeUndefined();
+    expect(getFastPathAnswer("请用三句话解释递归")).toBeUndefined();
+    expect(getFastPathAnswer("什么是递归，请用 Python 举例")).toBeUndefined();
+  });
+
+  it("deduplicates structured memory saves without dropping other calls", () => {
+    const result = convertXmlToolCalls(new AIMessage({
+      content: "",
+      tool_calls: [
+        { id: "save-1", name: "memory_user_save", args: { content: "我喜欢蓝色", category: "preference" } },
+        { id: "save-2", name: "memory_user_save", args: { category: "preference", content: "我喜欢蓝色" } },
+        { id: "list-1", name: "memory_user_list", args: {} },
+      ],
+    }));
+
+    expect(result.tool_calls?.map((call) => call.id)).toEqual(["save-1", "list-1"]);
+  });
+
+  it("executes a repeated XML memory save once through the real Agent loop", async () => {
+    const save = vi.fn(async () => "saved");
+    const memorySave = tool(save, {
+      name: "memory_user_save",
+      description: "Save a user preference",
+      schema: z.object({ content: z.string() }),
+    });
+    const xml = '<invoke name="memory_user_save"><parameter name="content">我喜欢蓝色</parameter></invoke>';
+    const model = new FakeListChatModel({ responses: [xml + xml, "已记住"] });
+    vi.spyOn(model, "bindTools").mockImplementation(() => model as any);
+    const agent = createAgent({ model, tools: [memorySave], middleware: [createReActPolicyMiddleware()] });
+    const tracker = new ReActRunTracker(createDefaultReActLimits());
+
+    const result = await runWithReActTracker(tracker, () =>
+      agent.invoke({ messages: [{ role: "user", content: "记住我喜欢蓝色" }] }),
+    );
+
+    expect(save).toHaveBeenCalledOnce();
+    expect(result.messages.at(-1)?.content).toBe("已记住");
+    expect(tracker.summary().tool_calls).toBe(1);
+  });
+
   it("creates unique IDs for multiple XML tool calls", () => {
     const message = new AIMessage(
       "<function=get_weather><parameter=city>Beijing</parameter></function>" +
@@ -269,5 +311,30 @@ describe("tool agent", () => {
 
     expect(result.messages.at(-1)?.content).toBe("4");
     expect(result.messages.some((message) => message.type === "tool")).toBe(true);
+  });
+
+  it("stops an identical error Observation after one retry in the real Agent loop", async () => {
+    const fail = vi.fn(async () => JSON.stringify({ status: "error", data: null, error: { code: "INTERNAL_ERROR", message: "offline" } }));
+    const failingTool = tool(fail, {
+      name: "failing_tool",
+      description: "Return a recoverable error",
+      schema: z.object({ query: z.string() }),
+    });
+    const xml = '<invoke name="failing_tool"><parameter name="query">same</parameter></invoke>';
+    const model = new FakeListChatModel({ responses: [xml, xml, xml, "partial answer"] });
+    vi.spyOn(model, "bindTools").mockImplementation(() => model as any);
+    const agent = createAgent({ model, tools: [failingTool], middleware: [createReActPolicyMiddleware()] });
+    const tracker = new ReActRunTracker(createDefaultReActLimits());
+
+    const result = await runWithReActTracker(tracker, () =>
+      agent.invoke({ messages: [{ role: "user", content: "question" }] }),
+    );
+
+    expect(fail).toHaveBeenCalledTimes(2);
+    expect(result.messages.at(-1)?.content).toBe("partial answer");
+    expect(tracker.summary()).toMatchObject({
+      state: "TOOL_ERROR", stop_reason: "TOOL_FAILURE", reason_code: "TOOL_RETRY_EXHAUSTED",
+      tool_calls: 2, tool_errors: 2, model_calls: 4,
+    });
   });
 });

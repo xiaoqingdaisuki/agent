@@ -76,6 +76,7 @@ class ConversationData(BaseModel):
     created_at: str
     updated_at: str
     deleted_at: Optional[str] = None
+    message_count: int = 0
 
     model_config = {"from_attributes": True}
 

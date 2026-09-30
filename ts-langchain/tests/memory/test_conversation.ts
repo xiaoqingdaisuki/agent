@@ -14,6 +14,7 @@ import {
   KnowledgeService,
   drainXmlToolStream,
 } from "../../src/services/index.js";
+import { getRepositories } from "../../src/repositories/index.js";
 
 describe("conversation history", () => {
   const threadId = "bounded-history";
@@ -49,6 +50,23 @@ describe("conversation history", () => {
 
     expect(history.at(-1)?.content).toBe("answer 209");
     expect(history.some((message) => message.content === "question 0")).toBe(false);
+  });
+
+  it("retains the first local turn when the Gateway is unavailable", async () => {
+    const load = vi.spyOn(getRepositories().message, "getMessages")
+      .mockRejectedValue(new Error("Gateway unavailable"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await clearHistory(threadId);
+      await appendMessage(threadId, new HumanMessage("first question"));
+      await appendMessage(threadId, new AIMessage("first answer"));
+
+      expect((await getHistory(threadId)).map((message) => message.content))
+        .toEqual(["first question", "first answer"]);
+    } finally {
+      load.mockRestore();
+      warn.mockRestore();
+    }
   });
 });
 

@@ -444,7 +444,8 @@ async def stream_message(conv_id: str, request: Request):
         error = TurnService.duplicate_error(turn["status"])
         raise HTTPException(status_code=error.status_code, detail=error.to_dict())
     try:
-        attachment_context = await prepare_attachment_context(attachment_context, trusted_user_id)
+        if created:
+            attachment_context = await prepare_attachment_context(attachment_context, trusted_user_id)
     except BusinessError as error:
         TurnService.terminate(turn["id"], trusted_user_id, False, error.code.value)
         raise HTTPException(status_code=error.status_code, detail=error.to_dict()) from error
