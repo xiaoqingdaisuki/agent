@@ -7,10 +7,12 @@ COMPOSE_FILE="docker-compose.yml"
 
 # 输出部署脚本的用法说明
 usage() {
-  echo "Usage: bash deploy-ecs.sh <typescript|python|all>"
+  echo "Usage: bash deploy-ecs.sh <agent-typescript|agent-python|all>"
 }
 
 case "$TARGET" in
+  agent-typescript) TARGET="typescript" ;;
+  agent-python) TARGET="python" ;;
   typescript|python|all) ;;
   *)
     usage
@@ -96,10 +98,12 @@ PY_PORT="$(read_env PY_PUBLIC_PORT)"
 PY_PORT="${PY_PORT:-6002}"
 
 if [ "$TARGET" = "typescript" ] || [ "$TARGET" = "all" ]; then
+  echo "TypeScript container: agent-typescript"
   echo "TypeScript local health check: http://127.0.0.1:$TS_PORT/api/v1/health"
   echo "TypeScript frontend API: http://<ECS-public-IP>:$TS_PORT/api/v1"
 fi
 if [ "$TARGET" = "python" ] || [ "$TARGET" = "all" ]; then
+  echo "Python container: agent-python"
   echo "Python local health check: http://127.0.0.1:$PY_PORT/api/v1/health"
   echo "Python frontend API: http://<ECS-public-IP>:$PY_PORT/api/v1"
 fi

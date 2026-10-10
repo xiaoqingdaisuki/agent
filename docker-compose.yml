@@ -47,6 +47,7 @@ x-agent-environment: &agent-environment
 services:
   ts-agent:
     <<: *agent-common
+    container_name: agent-typescript
     environment:
       <<: *agent-environment
     profiles: ["typescript"]
@@ -66,6 +67,7 @@ services:
 
   py-agent:
     <<: *agent-common
+    container_name: agent-python
     profiles: ["python"]
     build:
       context: ./py-langgraph
