@@ -304,7 +304,7 @@ export class CloudflareMemoryClient {
     try {
       const result = validateGatewayResponse(await this.request(
         "GET",
-        `/internal/v1/users/${encodeURIComponent(userId)}/profile`,
+        `/v1/internal/users/${encodeURIComponent(userId)}/profile`,
       )) as { data: unknown };
       return result.data ? validateProfile(result.data) : null;
     } catch (error) {
@@ -333,7 +333,7 @@ export class CloudflareMemoryClient {
     }
     const result = validateGatewayResponse(await this.request(
       "PUT",
-      `/internal/v1/users/${encodeURIComponent(userId)}/profile`,
+      `/v1/internal/users/${encodeURIComponent(userId)}/profile`,
       body,
     )) as { data: unknown };
     return validateProfile(result.data);
@@ -355,7 +355,7 @@ export class CloudflareMemoryClient {
     if (conversationId) body.id = conversationId;
     const result = validateGatewayResponse(await this.request(
       "POST",
-      "/internal/v1/conversations",
+      "/v1/internal/conversations",
       body,
     )) as { data: unknown };
     return validateConversation(result.data);
@@ -372,7 +372,7 @@ export class CloudflareMemoryClient {
   ): Promise<ConversationData[]> {
     const result = validateGatewayResponse(await this.request(
       "GET",
-      `/internal/v1/users/${encodeURIComponent(userId)}/conversations?limit=${limit}&offset=${offset}`,
+      `/v1/internal/users/${encodeURIComponent(userId)}/conversations?limit=${limit}&offset=${offset}`,
     )) as { data: unknown };
     return validateConversationList(result.data);
   }
@@ -387,7 +387,7 @@ export class CloudflareMemoryClient {
     try {
       const result = validateGatewayResponse(await this.request(
         "GET",
-        `/internal/v1/conversations/${encodeURIComponent(conversationId)}`,
+        `/v1/internal/conversations/${encodeURIComponent(conversationId)}`,
       )) as { data: unknown };
       return result.data ? validateConversation(result.data) : null;
     } catch (error) {
@@ -406,7 +406,7 @@ export class CloudflareMemoryClient {
     try {
       await this.request(
         "DELETE",
-        `/internal/v1/conversations/${encodeURIComponent(conversationId)}`,
+        `/v1/internal/conversations/${encodeURIComponent(conversationId)}`,
       );
       return true;
     } catch (error) {
@@ -430,7 +430,7 @@ export class CloudflareMemoryClient {
   ): Promise<void> {
     await this.request(
       "POST",
-      `/internal/v1/conversations/${encodeURIComponent(conversationId)}/messages:batch`,
+      `/v1/internal/conversations/${encodeURIComponent(conversationId)}/messages:batch`,
       { user_id: userId, messages },
     );
   }
@@ -447,7 +447,7 @@ export class CloudflareMemoryClient {
   ): Promise<MessagesPageData> {
     const result = validateGatewayResponse(await this.request(
       "GET",
-      `/internal/v1/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}&offset=${offset}&direction=${direction}`,
+      `/v1/internal/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}&offset=${offset}&direction=${direction}`,
     )) as { data: unknown };
     return validateMessagesPage(result.data);
   }
@@ -459,7 +459,7 @@ export class CloudflareMemoryClient {
   async clearMessages(conversationId: string): Promise<void> {
     await this.request(
       "DELETE",
-      `/internal/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
+      `/v1/internal/conversations/${encodeURIComponent(conversationId)}/messages`,
     );
   }
 
@@ -472,7 +472,7 @@ export class CloudflareMemoryClient {
   ): Promise<{ turn: TurnData; created: boolean }> {
     const result = validateGatewayResponse(await this.request(
       "POST",
-      `/internal/v1/conversations/${encodeURIComponent(conversationId)}/turns`,
+      `/v1/internal/conversations/${encodeURIComponent(conversationId)}/turns`,
       { id: turnId, user_id: userId, client_message_id: clientMessageId },
       clientMessageId,
     )) as { data: unknown };
@@ -491,7 +491,7 @@ export class CloudflareMemoryClient {
   ): Promise<{ turn: TurnData; userMessage: import("../repositories/types.js").MessageData; created: boolean }> {
     const result = validateGatewayResponse(await this.request(
       "POST",
-      `/internal/v1/conversations/${encodeURIComponent(conversationId)}/turns:begin`,
+      `/v1/internal/conversations/${encodeURIComponent(conversationId)}/turns:begin`,
       { id: turnId, user_id: userId, client_message_id: clientMessageId, user_message_id: userMessageId, content },
       clientMessageId,
     )) as { data: unknown };
@@ -512,7 +512,7 @@ export class CloudflareMemoryClient {
   ): Promise<TurnData> {
     const result = validateGatewayResponse(await this.request(
       "POST",
-      `/internal/v1/turns/${encodeURIComponent(turnId)}/complete`,
+      `/v1/internal/turns/${encodeURIComponent(turnId)}/complete`,
       {
         user_id: userId,
         assistant_message_id: message.id,
@@ -530,7 +530,7 @@ export class CloudflareMemoryClient {
     try {
       const result = validateGatewayResponse(await this.request(
         "GET",
-        `/internal/v1/turns/${encodeURIComponent(turnId)}?user_id=${encodeURIComponent(userId)}`,
+        `/v1/internal/turns/${encodeURIComponent(turnId)}?user_id=${encodeURIComponent(userId)}`,
       )) as { data: unknown };
       return result.data ? validateTurn(result.data) : null;
     } catch (error) {
@@ -547,7 +547,7 @@ export class CloudflareMemoryClient {
   ): Promise<TurnData> {
     const result = validateGatewayResponse(await this.request(
       "PATCH",
-      `/internal/v1/turns/${encodeURIComponent(turnId)}`,
+      `/v1/internal/turns/${encodeURIComponent(turnId)}`,
       { user_id: userId, ...changes },
       `${turnId}:${changes.status}`,
     )) as { data: unknown };
@@ -574,7 +574,7 @@ export class CloudflareMemoryClient {
   ): Promise<MemoryData> {
     const result = validateGatewayResponse(await this.request(
       "PUT",
-      `/internal/v1/users/${encodeURIComponent(userId)}/memories/${encodeURIComponent(memoryId)}`,
+      `/v1/internal/users/${encodeURIComponent(userId)}/memories/${encodeURIComponent(memoryId)}`,
       {
         content,
         category,
@@ -600,7 +600,7 @@ export class CloudflareMemoryClient {
     params.set("limit", String(options.limit ?? 50));
     const result = validateGatewayResponse(await this.request(
       "GET",
-      `/internal/v1/users/${encodeURIComponent(userId)}/memories?${params.toString()}`,
+      `/v1/internal/users/${encodeURIComponent(userId)}/memories?${params.toString()}`,
     )) as { data: unknown };
     return validateMemoryList(result.data);
   }
@@ -617,7 +617,7 @@ export class CloudflareMemoryClient {
     try {
       const result = validateGatewayResponse(await this.request(
         "PATCH",
-        `/internal/v1/users/${encodeURIComponent(userId)}/memories/${encodeURIComponent(memoryId)}`,
+        `/v1/internal/users/${encodeURIComponent(userId)}/memories/${encodeURIComponent(memoryId)}`,
         changes,
       )) as { data: unknown };
       return result.data ? validateMemory(result.data) : null;
@@ -637,7 +637,7 @@ export class CloudflareMemoryClient {
     try {
       await this.request(
         "DELETE",
-        `/internal/v1/users/${encodeURIComponent(userId)}/memories/${encodeURIComponent(memoryId)}`,
+        `/v1/internal/users/${encodeURIComponent(userId)}/memories/${encodeURIComponent(memoryId)}`,
       );
       return true;
     } catch (error) {
@@ -668,7 +668,7 @@ export class CloudflareMemoryClient {
     }
     const result = validateGatewayResponse(await this.request(
       "POST",
-      `/internal/v1/users/${encodeURIComponent(userId)}/memories:search`,
+      `/v1/internal/users/${encodeURIComponent(userId)}/memories:search`,
       body,
     )) as { data: unknown };
     return validateSearchResponse(result.data);
@@ -697,7 +697,7 @@ export class CloudflareMemoryClient {
 
     const result = validateGatewayResponse(await this.request(
       "POST",
-      "/internal/v1/documents",
+      "/v1/internal/documents",
       body,
     )) as { data: unknown };
     return (result.data as { document: DocumentData }).document;
@@ -719,7 +719,7 @@ export class CloudflareMemoryClient {
 
     const result = validateGatewayResponse(await this.request(
       "GET",
-      `/internal/v1/documents?${params.toString()}`,
+      `/v1/internal/documents?${params.toString()}`,
     )) as { data: { documents: DocumentData[]; total: number } };
     return result.data;
   }
@@ -732,7 +732,7 @@ export class CloudflareMemoryClient {
     try {
       const result = validateGatewayResponse(await this.request(
         "GET",
-        `/internal/v1/documents/${encodeURIComponent(documentId)}`,
+        `/v1/internal/documents/${encodeURIComponent(documentId)}`,
       )) as { data: { document: DocumentData; chunks: ChunkData[] } };
       return result.data;
     } catch (error) {
@@ -751,7 +751,7 @@ export class CloudflareMemoryClient {
     try {
       await this.request(
         "DELETE",
-        `/internal/v1/documents/${encodeURIComponent(documentId)}`,
+        `/v1/internal/documents/${encodeURIComponent(documentId)}`,
       );
       return true;
     } catch (error) {
@@ -766,7 +766,7 @@ export class CloudflareMemoryClient {
   async reindexDocument(documentId: string): Promise<{ chunk_count: number; degraded: boolean }> {
     const result = validateGatewayResponse(await this.request(
       "POST",
-      `/internal/v1/documents/${encodeURIComponent(documentId)}/reindex`,
+      `/v1/internal/documents/${encodeURIComponent(documentId)}/reindex`,
     )) as { data: { chunk_count: number; degraded: boolean } };
     return result.data;
   }
@@ -791,7 +791,7 @@ export class CloudflareMemoryClient {
     }
     const result = validateGatewayResponse(await this.request(
       "POST",
-      "/internal/v1/documents:search",
+      "/v1/internal/documents:search",
       body,
     )) as { data: { results: DocumentSearchResultData[]; degraded: boolean } };
     return {
@@ -824,7 +824,7 @@ export class CloudflareMemoryClient {
     try {
       await this.request(
         "POST",
-        "/internal/v1/audit-logs",
+        "/v1/internal/audit-logs",
         { entries },
       );
     } catch {
@@ -853,7 +853,7 @@ export class CloudflareMemoryClient {
     try {
       await this.request(
         "POST",
-        "/internal/v1/tool-metrics",
+        "/v1/internal/tool-metrics",
         { entries },
       );
     } catch {

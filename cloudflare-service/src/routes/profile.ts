@@ -1,8 +1,8 @@
 /**
  * Profile Routes — 用户画像
  *
- * PUT   /internal/v1/users/{user_id}/profile  — 创建/更新画像
- * GET   /internal/v1/users/{user_id}/profile  — 获取画像
+ * PUT   /v1/internal/users/{user_id}/profile  — 创建/更新画像
+ * GET   /v1/internal/users/{user_id}/profile  — 获取画像
  */
 
 import { getOrCreateProfile, getProfile, updateProfile } from "../repositories/profile.js";
@@ -11,7 +11,7 @@ import { ProfileSaveSchema, GatewayResponseSchema } from "../schemas/memory-mode
 // 创建或注册 registerProfileRoutes 所需的数据
 export function registerProfileRoutes(app: any) {
   // 创建/更新画像
-  app.put("/internal/v1/users/:user_id/profile", async (c: any) => {
+  app.put("/v1/internal/users/:user_id/profile", async (c: any) => {
     const userId = c.req.param("user_id");
     const body = await c.req.json();
     const parsed = ProfileSaveSchema.parse(body);
@@ -33,7 +33,7 @@ export function registerProfileRoutes(app: any) {
   });
 
   // 获取画像
-  app.get("/internal/v1/users/:user_id/profile", async (c: any) => {
+  app.get("/v1/internal/users/:user_id/profile", async (c: any) => {
     const userId = c.req.param("user_id");
     const profile = await getProfile(c.env.DB, userId);
 

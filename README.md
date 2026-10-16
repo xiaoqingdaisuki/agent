@@ -22,14 +22,14 @@
 
 | 能力 | 同步范围 | 允许的实现差异 |
 | --- | --- | --- |
-| HTTP API | `/api/v1` 会话、消息、SSE、知识库、画像、记忆、历史、能力查询；兼容 `/chat`、`/stream`、`/tools`、`/images/generations` | Fastify 与 FastAPI 的参数命名/校验实现不同 |
+| HTTP API | `/v1` 会话、消息、SSE、知识库、画像、记忆、历史、能力查询和图片生成 | Fastify 与 FastAPI 的参数命名/校验实现不同 |
 | Agent 行为 | 普通请求轻量直答，实时/计算/文件/知识库/记忆/未知意图进入工具链；两版共享 240 秒工具 Agent 上限、270 秒 SSE 总时限 | LangChain 使用声明式 middleware，LangGraph 使用显式 StateGraph |
 | 工具集合 | 天气、搜索、网页读取/提取、计算、时间、文件、知识和会话/用户记忆工具；风险、权限和写工具审批策略一致 | 工具包装器分别使用 Zod 和 Pydantic/LangChain 类型 |
 | 数据与可靠性 | 用户隔离、Turn 幂等、活动 Turn 冲突、完成结果重放、SSE `meta/text/error/complete` 生命周期 | Cloudflare Gateway 客户端和本地仓储分别用 TypeScript/Python 实现 |
 | 附件 | 消息内联图片与临时文档；`MEMORY_ENABLED=false` 时 session-only，`true` 时写入知识库；临时文档独立解析接口 | PDF/DOCX 解析库不同，返回结构和限制一致 |
-| 运行与探针 | `/health`、`/health/live`、`/health/ready` 及 v1 对应探针、鉴权、限流、错误格式 | TS 额外提供 Cloudflare Worker 启动检查、Service Binding、Workers AI 图片 binding |
+| 运行与探针 | `/v1/health`、`/v1/health/live`、`/v1/health/ready`、鉴权、限流、错误格式 | TS 额外提供 Cloudflare Worker 启动检查、Service Binding、Workers AI 图片 binding |
 
-Python 版额外保留 LangGraph 的 checkpoint 适配；TS 版额外保留 Cloudflare Workers 的路由兼容层。这些是框架或部署差异，不改变对外 API 和业务能力。
+Python 版额外保留 LangGraph 的 checkpoint 适配；TS 版额外保留 Cloudflare Workers 的运行时路由适配层。这些是框架或部署差异，不改变对外 API 和业务能力。
 
 ## Cloudflare 持久化服务
 
@@ -293,48 +293,42 @@ uvicorn src.api.main:app --reload
 除健康检查外，所有接口都要求 `Authorization: Bearer <AGENT_API_SECRET>`。涉及用户数据的接口还必须由可信服务端代理传入 `X-Agent-User-Id`；请求体或查询参数中的 `user_id` 只能与该身份一致，不能用于切换用户。
 
 ```
-GET  /api/v1/health                    健康检查
-GET  /api/v1/health/live               进程存活探针
-GET  /api/v1/health/ready              模型与 Memory 配置就绪探针
-GET  /api/v1/capabilities              可用能力列表
+GET  /v1/health                    健康检查
+GET  /v1/health/live               进程存活探针
+GET  /v1/health/ready              模型与 Memory 配置就绪探针
+GET  /v1/capabilities              可用能力列表
+POST /v1/images/generations        图片生成
 
-POST /api/v1/conversations             创建会话
-GET  /api/v1/conversations             列出会话
-GET  /api/v1/conversations/:id         获取会话详情
-DELETE /api/v1/conversations/:id       删除会话
-POST /api/v1/conversations/:id/messages 发送消息
-POST /api/v1/conversations/:id/messages/stream 流式发送消息（SSE）
-GET  /api/v1/conversations/:id/messages 获取历史
-DELETE /api/v1/conversations/:id/messages 清空消息
-POST /api/v1/conversations/:id/session-documents/parse 解析临时文档（关闭持久化时）
+POST /v1/conversations             创建会话
+GET  /v1/conversations             列出会话
+GET  /v1/conversations/:id         获取会话详情
+DELETE /v1/conversations/:id       删除会话
+POST /v1/conversations/:id/messages 发送消息
+POST /v1/conversations/:id/messages/stream 流式发送消息（SSE）
+GET  /v1/conversations/:id/messages 获取历史
+DELETE /v1/conversations/:id/messages 清空消息
+POST /v1/conversations/:id/session-documents/parse 解析临时文档（关闭持久化时）
 
-POST /api/v1/knowledge/documents       上传文档（multipart/form-data）
-GET  /api/v1/knowledge/documents       文档列表
-GET  /api/v1/knowledge/documents/:id   文档详情
-DELETE /api/v1/knowledge/documents/:id 删除文档
-POST /api/v1/knowledge/documents/:id/reindex 重新索引
-POST /api/v1/knowledge/search          知识检索
+POST /v1/knowledge/documents       上传文档（multipart/form-data）
+GET  /v1/knowledge/documents       文档列表
+GET  /v1/knowledge/documents/:id   文档详情
+DELETE /v1/knowledge/documents/:id 删除文档
+POST /v1/knowledge/documents/:id/reindex 重新索引
+POST /v1/knowledge/search          知识检索
 
-GET  /api/v1/profile?user_id=xxx       用户画像
-PATCH /api/v1/profile                  更新画像
+GET  /v1/profile?user_id=xxx       用户画像
+PATCH /v1/profile                  更新画像
 
-GET  /api/v1/memory?user_id=xxx        记忆列表
-POST /api/v1/memory                    添加记忆
-DELETE /api/v1/memory                  删除记忆
+GET  /v1/memory?user_id=xxx        记忆列表
+POST /v1/memory                    添加记忆
+DELETE /v1/memory                  删除记忆
 
-GET  /api/v1/history?user_id=xxx       问答历史
+GET  /v1/history?user_id=xxx       问答历史
 ```
+
+旧的 `/api/v1/*`、`/internal/v1/*` 以及未版本化的 `/chat`、`/stream`、`/tools`、`/images/generations` 路由均已移除，调用方必须使用上述新地址。
 
 临时文档解析接口接收 multipart 字段 `file`，支持 `txt`、`md`、`markdown`、`json`、`csv`、`pdf` 和 `docx`。持久化模式下应直接把附件随消息发送并写入知识库；关闭持久化时，解析结果只在当前会话请求中使用。
-
-旧路由（保留兼容）：
-
-```
-POST /chat                              直接对话
-POST /stream                            流式对话
-GET  /tools                             可用工具列表
-POST /images/generations                图片生成
-```
 
 图片生成独立使用 Cloudflare Workers AI 配置：`IMAGE_API_KEY`、`IMAGE_BASE_URL` 和
 `IMAGE_MODEL=@cf/black-forest-labs/flux-2-dev`。
@@ -348,51 +342,51 @@ ts-langchain 和 py-langgraph 通过以下内部 API 与 Cloudflare Service 通�
 这些内部接口仅在 `MEMORY_ENABLED=true` 时由 Agent 服务调用；关闭记忆网关时无需启动 `cloudflare-service/`。
 
 ```
-PUT   /internal/v1/users/{user_id}/profile          创建/更新画像
-GET   /internal/v1/users/{user_id}/profile          获取画像
+PUT   /v1/internal/users/{user_id}/profile          创建/更新画像
+GET   /v1/internal/users/{user_id}/profile          获取画像
 
-POST  /internal/v1/conversations                    创建会话
-GET   /internal/v1/users/{user_id}/conversations    列出会话
-GET   /internal/v1/conversations/{id}               会话详情
-DELETE /internal/v1/conversations/{id}              删除会话
+POST  /v1/internal/conversations                    创建会话
+GET   /v1/internal/users/{user_id}/conversations    列出会话
+GET   /v1/internal/conversations/{id}               会话详情
+DELETE /v1/internal/conversations/{id}              删除会话
 
-POST  /internal/v1/conversations/{id}/messages:batch 批量写入消息
-GET   /internal/v1/conversations/{id}/messages       查询消息
-DELETE /internal/v1/conversations/{id}/messages       清空消息
+POST  /v1/internal/conversations/{id}/messages:batch 批量写入消息
+GET   /v1/internal/conversations/{id}/messages       查询消息
+DELETE /v1/internal/conversations/{id}/messages       清空消息
 
-POST  /internal/v1/conversations/{id}/turns:begin   原子创建/复用 Turn 并写入用户消息
-POST  /internal/v1/turns/{turn_id}/complete         原子写入助手消息并完成 Turn
-POST  /internal/v1/conversations/{id}/turns         创建/复用 Turn（兼容接口）
-GET   /internal/v1/turns/{turn_id}?user_id=...      查询 Turn
-PATCH /internal/v1/turns/{turn_id}                  更新 Turn 状态
+POST  /v1/internal/conversations/{id}/turns:begin   原子创建/复用 Turn 并写入用户消息
+POST  /v1/internal/turns/{turn_id}/complete         原子写入助手消息并完成 Turn
+POST  /v1/internal/conversations/{id}/turns         创建/复用 Turn（兼容接口）
+GET   /v1/internal/turns/{turn_id}?user_id=...      查询 Turn
+PATCH /v1/internal/turns/{turn_id}                  更新 Turn 状态
 
-PUT   /internal/v1/users/{user_id}/memories/{id}    保存记忆
-GET   /internal/v1/users/{user_id}/memories         列出记忆
-PATCH /internal/v1/users/{user_id}/memories/{id}    更新记忆
-DELETE /internal/v1/users/{user_id}/memories/{id}   删除记忆
-DELETE /internal/v1/users/{user_id}/memories        清空用户记忆
-POST  /internal/v1/users/{user_id}/memories:search  语义搜索记忆
+PUT   /v1/internal/users/{user_id}/memories/{id}    保存记忆
+GET   /v1/internal/users/{user_id}/memories         列出记忆
+PATCH /v1/internal/users/{user_id}/memories/{id}    更新记忆
+DELETE /v1/internal/users/{user_id}/memories/{id}   删除记忆
+DELETE /v1/internal/users/{user_id}/memories        清空用户记忆
+POST  /v1/internal/users/{user_id}/memories:search  语义搜索记忆
 
-POST  /internal/v1/documents                        上传文档
-GET   /internal/v1/documents                        列出文档
-GET   /internal/v1/documents/{id}                   文档详情
-DELETE /internal/v1/documents/{id}                  删除文档
-POST  /internal/v1/documents/{id}/reindex           重新索引
-POST  /internal/v1/documents:search                 语义搜索文档
+POST  /v1/internal/documents                        上传文档
+GET   /v1/internal/documents                        列出文档
+GET   /v1/internal/documents/{id}                   文档详情
+DELETE /v1/internal/documents/{id}                  删除文档
+POST  /v1/internal/documents/{id}/reindex           重新索引
+POST  /v1/internal/documents:search                 语义搜索文档
 
-POST  /internal/v1/checkpoints/{thread_id}          保存 LangGraph checkpoint
-GET   /internal/v1/checkpoints/{thread_id}          读取最新 checkpoint
-DELETE /internal/v1/checkpoints/{thread_id}         删除 checkpoint
+POST  /v1/internal/checkpoints/{thread_id}          保存 LangGraph checkpoint
+GET   /v1/internal/checkpoints/{thread_id}          读取最新 checkpoint
+DELETE /v1/internal/checkpoints/{thread_id}         删除 checkpoint
 
-POST  /internal/v1/audit-logs                       批量写入工具审计日志
-GET   /internal/v1/audit-logs                       查询审计日志
-DELETE /internal/v1/audit-logs                      清理审计日志
+POST  /v1/internal/audit-logs                       批量写入工具审计日志
+GET   /v1/internal/audit-logs                       查询审计日志
+DELETE /v1/internal/audit-logs                      清理审计日志
 
-POST  /internal/v1/tool-metrics                     批量写入工具指标
-GET   /internal/v1/tool-metrics                     查询指标明细
-GET   /internal/v1/tool-metrics/snapshot            查询指标快照
+POST  /v1/internal/tool-metrics                     批量写入工具指标
+GET   /v1/internal/tool-metrics                     查询指标明细
+GET   /v1/internal/tool-metrics/snapshot            查询指标快照
 
-GET   /internal/v1/openapi.json                     OpenAPI 规范
+GET   /v1/internal/openapi.json                     OpenAPI 规范
 ```
 
 ## 开发工作流

@@ -1,12 +1,12 @@
 /**
  * Memory Routes — 长期记忆管理
  *
- * PUT    /internal/v1/users/{user_id}/memories/{memory_id}    — 保存记忆
- * GET    /internal/v1/users/{user_id}/memories                — 列出记忆
- * PATCH  /internal/v1/users/{user_id}/memories/{memory_id}    — 更新记忆
- * DELETE /internal/v1/users/{user_id}/memories/{memory_id}    — 删除记忆
- * POST   /internal/v1/users/{user_id}/memories:search         — 语义搜索
- * DELETE /internal/v1/users/{user_id}/memories                — 清空用户记忆
+ * PUT    /v1/internal/users/{user_id}/memories/{memory_id}    — 保存记忆
+ * GET    /v1/internal/users/{user_id}/memories                — 列出记忆
+ * PATCH  /v1/internal/users/{user_id}/memories/{memory_id}    — 更新记忆
+ * DELETE /v1/internal/users/{user_id}/memories/{memory_id}    — 删除记忆
+ * POST   /v1/internal/users/{user_id}/memories:search         — 语义搜索
+ * DELETE /v1/internal/users/{user_id}/memories                — 清空用户记忆
  */
 
 import {
@@ -26,7 +26,7 @@ import { MemorySaveRequestSchema, MemorySearchRequestSchema } from "../schemas/m
 // 创建或注册 registerMemoryRoutes 所需的数据
 export function registerMemoryRoutes(app: any) {
   // 保存记忆（幂等，自动去重 + embedding + Vectorize）
-  app.put("/internal/v1/users/:user_id/memories/:memory_id", async (c: any) => {
+  app.put("/v1/internal/users/:user_id/memories/:memory_id", async (c: any) => {
     const userId = c.req.param("user_id");
     const memoryId = c.req.param("memory_id");
     const body = await c.req.json();
@@ -89,7 +89,7 @@ export function registerMemoryRoutes(app: any) {
   });
 
   // 列出用户记忆（支持 category 过滤，默认最多 50 条）
-  app.get("/internal/v1/users/:user_id/memories", async (c: any) => {
+  app.get("/v1/internal/users/:user_id/memories", async (c: any) => {
     const userId = c.req.param("user_id");
     const category = (c.req.query("category") as string) || undefined;
     const limit = Math.min(parseInt((c.req.query("limit") as string) || "50", 10), 100);
@@ -108,7 +108,7 @@ export function registerMemoryRoutes(app: any) {
   });
 
   // 更新记忆（内容变更后 index_status 重置为 pending，触发重新 embedding）
-  app.patch("/internal/v1/users/:user_id/memories/:memory_id", async (c: any) => {
+  app.patch("/v1/internal/users/:user_id/memories/:memory_id", async (c: any) => {
     const userId = c.req.param("user_id");
     const memoryId = c.req.param("memory_id");
     const body = await c.req.json();
@@ -175,7 +175,7 @@ export function registerMemoryRoutes(app: any) {
   });
 
   // 删除记忆（D1 软删除 + Vectorize deleteByIds）
-  app.delete("/internal/v1/users/:user_id/memories/:memory_id", async (c: any) => {
+  app.delete("/v1/internal/users/:user_id/memories/:memory_id", async (c: any) => {
     const userId = c.req.param("user_id");
     const memoryId = c.req.param("memory_id");
 
@@ -201,7 +201,7 @@ export function registerMemoryRoutes(app: any) {
   });
 
   // 清空用户所有记忆并批量清理 Vectorize
-  app.delete("/internal/v1/users/:user_id/memories", async (c: any) => {
+  app.delete("/v1/internal/users/:user_id/memories", async (c: any) => {
     const userId = c.req.param("user_id");
     const count = await clearUserMemories(c.env.DB, c.env.MEMORY_INDEX, userId);
 
@@ -214,7 +214,7 @@ export function registerMemoryRoutes(app: any) {
   });
 
   // 语义搜索（Vectorize topK → D1 回表 → 综合评分排序；失败时降级为纯 SQL）
-  app.post("/internal/v1/users/:user_id/memories:search", async (c: any) => {
+  app.post("/v1/internal/users/:user_id/memories:search", async (c: any) => {
     const userId = c.req.param("user_id");
     const body = await c.req.json();
     const parsed = MemorySearchRequestSchema.parse(body);

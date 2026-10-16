@@ -14,8 +14,8 @@ describe("完整 API 契约", () => {
       "x-agent-user-id": "rate-limit-user",
     };
     try {
-      expect((await app.inject({ method: "GET", url: "/tools", headers })).statusCode).toBe(200);
-      const limited = await app.inject({ method: "GET", url: "/tools", headers });
+      expect((await app.inject({ method: "GET", url: "/v1/capabilities", headers })).statusCode).toBe(200);
+      const limited = await app.inject({ method: "GET", url: "/v1/capabilities", headers });
       expect(limited.statusCode).toBe(429);
       expect(limited.headers["retry-after"]).toBeTruthy();
       expect(limited.json().error.code).toBe("RATE_LIMITED");
@@ -34,13 +34,13 @@ describe("完整 API 契约", () => {
     };
     try {
       const created = await app.inject({
-        method: "POST", url: "/api/v1/conversations", headers,
+        method: "POST", url: "/v1/conversations", headers,
         payload: { title: "幂等会话", user_id: userId },
       });
       const conversationId = created.json().id;
       const request = {
         method: "POST" as const,
-        url: `/api/v1/conversations/${conversationId}/messages`,
+        url: `/v1/conversations/${conversationId}/messages`,
         headers,
         payload: { content: "你好", user_id: userId, client_message_id: "client-message-1" },
       };
@@ -51,7 +51,7 @@ describe("完整 API 契约", () => {
       expect(repeated.json()).toEqual(first.json());
 
       const messages = await app.inject({
-        method: "GET", url: `/api/v1/conversations/${conversationId}/messages`, headers,
+        method: "GET", url: `/v1/conversations/${conversationId}/messages`, headers,
       });
       expect(messages.json()).toHaveLength(2);
     } finally {
@@ -59,7 +59,7 @@ describe("完整 API 契约", () => {
     }
   });
 
-  it("覆盖旧版接口与 v1 持久化业务接口", async () => {
+  it("覆盖 v1 持久化业务接口并拒绝旧路由", async () => {
     const document = {
       id: "doc_contract",
       name: "contract.txt",
@@ -90,54 +90,22 @@ describe("完整 API 契约", () => {
     })) as typeof app.inject;
 
     try {
-      expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
-      const invalidRequest = await app.inject({ method: "POST", url: "/chat", payload: {} });
-      expect(invalidRequest.statusCode).toBe(400);
-      expect(invalidRequest.json()).toEqual(expect.objectContaining({
-        error: expect.objectContaining({ code: "VALIDATION_ERROR" }),
-      }));
-      expect((await app.inject({ method: "GET", url: "/api/v1/health" })).statusCode).toBe(200);
-      expect((await app.inject({ method: "GET", url: "/health/live" })).statusCode).toBe(200);
-      const readiness = await app.inject({ method: "GET", url: "/api/v1/health/ready" });
+      expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(404);
+      expect((await app.inject({ method: "GET", url: "/api/v1/health" })).statusCode).toBe(404);
+      expect((await app.inject({ method: "POST", url: "/chat", payload: {} })).statusCode).toBe(404);
+      expect((await app.inject({ method: "GET", url: "/tools" })).statusCode).toBe(404);
+      expect((await app.inject({ method: "GET", url: "/v1/health" })).statusCode).toBe(200);
+      expect((await app.inject({ method: "GET", url: "/v1/health/live" })).statusCode).toBe(200);
+      const readiness = await app.inject({ method: "GET", url: "/v1/health/ready" });
       expect([200, 503]).toContain(readiness.statusCode);
       expect(readiness.json()).toHaveProperty("components");
-      expect((await app.inject({ method: "GET", url: "/tools" })).json()).toEqual(
-        expect.arrayContaining([expect.objectContaining({ name: "math.calculate" })]),
-      );
-      expect((await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).toEqual(
+      expect((await app.inject({ method: "GET", url: "/v1/capabilities" })).json()).toEqual(
         expect.objectContaining({ modes: expect.any(Array), tools: expect.any(Array) }),
       );
 
-      const legacyChat = await app.inject({
-        method: "POST",
-        url: "/chat",
-        payload: { message: "你好", user_id: userId },
-      });
-      expect(legacyChat.statusCode).toBe(200);
-      expect(legacyChat.json().reply).toBe("你好！我是 AI 老情，很高兴为你服务。");
-
-      const fastLegacyChat = await app.inject({
-        method: "POST",
-        url: "/chat",
-        payload: { message: "你好", user_id: userId },
-      });
-      expect(fastLegacyChat.statusCode).toBe(200);
-      expect(fastLegacyChat.json().reply).toBe("你好！我是 AI 老情，很高兴为你服务。");
-
-      const legacyStream = await app.inject({
-        method: "POST",
-        url: "/stream",
-        payload: { message: "你好", user_id: userId },
-      });
-      expect(legacyStream.statusCode).toBe(200);
-      expect(legacyStream.body).toContain("你好！我是 AI 老情，很高兴为你服务。");
-      expect(legacyStream.body).toContain("id: ");
-      expect(legacyStream.body).toContain('"event_id":');
-      expect(legacyStream.body).toContain("data: [DONE]");
-
       const created = await app.inject({
         method: "POST",
-        url: "/api/v1/conversations",
+        url: "/v1/conversations",
         payload: { title: "契约会话", mode: "chat", user_id: userId },
       });
       expect(created.statusCode).toBe(201);
@@ -145,18 +113,18 @@ describe("完整 API 契约", () => {
 
       const listed = await app.inject({
         method: "GET",
-        url: `/api/v1/conversations?user_id=${userId}`,
+        url: `/v1/conversations?user_id=${userId}`,
       });
       expect(listed.json()).toEqual(
         expect.arrayContaining([expect.objectContaining({ id: conversationId, title: "契约会话" })]),
       );
       expect(
-        (await app.inject({ method: "GET", url: `/api/v1/conversations/${conversationId}` })).statusCode,
+        (await app.inject({ method: "GET", url: `/v1/conversations/${conversationId}` })).statusCode,
       ).toBe(200);
 
       const stream = await app.inject({
         method: "POST",
-        url: `/api/v1/conversations/${conversationId}/messages/stream`,
+        url: `/v1/conversations/${conversationId}/messages/stream`,
         payload: { content: "你好", user_id: userId },
       });
       expect(stream.statusCode).toBe(200);
@@ -165,7 +133,7 @@ describe("完整 API 契约", () => {
 
       const messages = await app.inject({
         method: "GET",
-        url: `/api/v1/conversations/${conversationId}/messages`,
+        url: `/v1/conversations/${conversationId}/messages`,
       });
       expect(messages.json()).toEqual([
         expect.objectContaining({ role: "user", content: "你好" }),
@@ -175,17 +143,17 @@ describe("完整 API 契约", () => {
         (
           await app.inject({
             method: "DELETE",
-            url: `/api/v1/conversations/${conversationId}/messages`,
+            url: `/v1/conversations/${conversationId}/messages`,
           })
         ).json(),
       ).toEqual({ success: true });
 
-      const profile = await app.inject({ method: "GET", url: `/api/v1/profile?user_id=${userId}` });
+      const profile = await app.inject({ method: "GET", url: `/v1/profile?user_id=${userId}` });
       expect(profile.statusCode).toBe(200);
       expect(profile.json().id).toBe(userId);
       const updatedProfile = await app.inject({
         method: "PATCH",
-        url: `/api/v1/profile?user_id=${userId}`,
+        url: `/v1/profile?user_id=${userId}`,
         payload: { name: "契约用户", preferences: { theme: "dark" } },
       });
       expect(updatedProfile.json()).toEqual(
@@ -194,12 +162,12 @@ describe("完整 API 契约", () => {
 
       const createdMemory = await app.inject({
         method: "POST",
-        url: `/api/v1/memory?user_id=${userId}`,
+        url: `/v1/memory?user_id=${userId}`,
         payload: { content: "喜欢契约测试", category: "preference", importance: 4 },
       });
       expect(createdMemory.statusCode).toBe(201);
       const memoryId = createdMemory.json().id as string;
-      const memories = await app.inject({ method: "GET", url: `/api/v1/memory?user_id=${userId}` });
+      const memories = await app.inject({ method: "GET", url: `/v1/memory?user_id=${userId}` });
       expect(memories.json().memories).toEqual(
         expect.arrayContaining([expect.objectContaining({ id: memoryId, content: "喜欢契约测试" })]),
       );
@@ -207,25 +175,25 @@ describe("完整 API 契约", () => {
         (
           await app.inject({
             method: "DELETE",
-            url: `/api/v1/memory?user_id=${userId}&memory_id=${memoryId}`,
+            url: `/v1/memory?user_id=${userId}&memory_id=${memoryId}`,
           })
         ).json(),
       ).toEqual({ success: true });
-      const history = await app.inject({ method: "GET", url: `/api/v1/history?user_id=${userId}` });
+      const history = await app.inject({ method: "GET", url: `/v1/history?user_id=${userId}` });
       expect(history.statusCode).toBe(200);
       expect(history.json().history).toEqual(expect.any(Array));
 
-      expect((await app.inject({ method: "GET", url: "/api/v1/knowledge/documents" })).json()).toEqual([
+      expect((await app.inject({ method: "GET", url: "/v1/knowledge/documents" })).json()).toEqual([
         expect.objectContaining({ id: document.id }),
       ]);
       expect(
-        (await app.inject({ method: "GET", url: `/api/v1/knowledge/documents/${document.id}` })).json(),
+        (await app.inject({ method: "GET", url: `/v1/knowledge/documents/${document.id}` })).json(),
       ).toEqual(expect.objectContaining({ id: document.id }));
       expect(
         (
           await app.inject({
             method: "POST",
-            url: `/api/v1/knowledge/documents/${document.id}/reindex`,
+            url: `/v1/knowledge/documents/${document.id}/reindex`,
           })
         ).json(),
       ).toEqual(expect.objectContaining({ id: document.id }));
@@ -233,7 +201,7 @@ describe("完整 API 契约", () => {
         (
           await app.inject({
             method: "POST",
-            url: "/api/v1/knowledge/search",
+            url: "/v1/knowledge/search",
             payload: { query: "契约", top_k: 3 },
           })
         ).json().results,
@@ -242,16 +210,16 @@ describe("完整 API 契约", () => {
         (
           await app.inject({
             method: "DELETE",
-            url: `/api/v1/knowledge/documents/${document.id}`,
+            url: `/v1/knowledge/documents/${document.id}`,
           })
         ).json(),
       ).toEqual({ success: true });
 
       expect(
-        (await app.inject({ method: "POST", url: "/images/generations", payload: {} })).statusCode,
+        (await app.inject({ method: "POST", url: "/v1/images/generations", payload: {} })).statusCode,
       ).toBe(400);
       expect(
-        (await app.inject({ method: "DELETE", url: `/api/v1/conversations/${conversationId}` })).json(),
+        (await app.inject({ method: "DELETE", url: `/v1/conversations/${conversationId}` })).json(),
       ).toEqual({ success: true });
     } finally {
       await app.close();
@@ -263,17 +231,17 @@ describe("完整 API 契约", () => {
     try {
       expect((await app.inject({
         method: "GET",
-        url: "/api/v1/conversations",
+        url: "/v1/conversations",
       })).statusCode).toBe(401);
       expect((await app.inject({
         method: "POST",
-        url: "/api/v1/conversations",
+        url: "/v1/conversations",
         headers: { authorization: "Bearer test-agent-secret" },
         payload: { title: "missing identity" },
       })).statusCode).toBe(401);
       expect((await app.inject({
         method: "POST",
-        url: "/api/v1/conversations",
+        url: "/v1/conversations",
         headers: {
           authorization: "Bearer test-agent-secret",
           "x-agent-user-id": "owner-a",
@@ -283,7 +251,7 @@ describe("完整 API 契约", () => {
 
       const created = await app.inject({
         method: "POST",
-        url: "/api/v1/conversations",
+        url: "/v1/conversations",
         headers: {
           authorization: "Bearer test-agent-secret",
           "x-agent-user-id": "owner-a",
@@ -297,18 +265,14 @@ describe("完整 API 契约", () => {
       };
       expect((await app.inject({
         method: "GET",
-        url: `/api/v1/conversations/${conversationId}`,
+        url: `/v1/conversations/${conversationId}`,
         headers: otherUserHeaders,
       })).statusCode).toBe(403);
       expect((await app.inject({
         method: "POST",
-        url: "/chat",
+        url: `/v1/conversations/${conversationId}/messages`,
         headers: otherUserHeaders,
-        payload: {
-          message: "你好",
-          thread_id: conversationId,
-          user_id: "owner-b",
-        },
+        payload: { content: "你好", user_id: "owner-b" },
       })).statusCode).toBe(403);
     } finally {
       await app.close();
@@ -324,31 +288,31 @@ describe("完整 API 契约", () => {
     try {
       expect((await app.inject({
         method: "POST",
-        url: "/api/v1/conversations",
+        url: "/v1/conversations",
         headers,
         payload: { title: "x".repeat(101), mode: "chat" },
       })).statusCode).toBe(400);
       expect((await app.inject({
         method: "POST",
-        url: "/api/v1/conversations",
+        url: "/v1/conversations",
         headers,
         payload: { title: "invalid mode", mode: "unsupported" },
       })).statusCode).toBe(400);
       expect((await app.inject({
         method: "POST",
-        url: "/api/v1/knowledge/search",
+        url: "/v1/knowledge/search",
         headers,
         payload: { query: "test", top_k: 21 },
       })).statusCode).toBe(400);
       expect((await app.inject({
         method: "POST",
-        url: "/api/v1/knowledge/search",
+        url: "/v1/knowledge/search",
         headers,
         payload: { query: "x".repeat(2_001), top_k: 5 },
       })).statusCode).toBe(400);
       expect((await app.inject({
         method: "POST",
-        url: "/api/v1/memory",
+        url: "/v1/memory",
         headers,
         payload: { content: "test", category: "unknown", importance: 6 },
       })).statusCode).toBe(400);

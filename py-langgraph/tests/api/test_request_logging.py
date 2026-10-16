@@ -27,8 +27,8 @@ def test_request_log_contains_ts_compatible_error_and_request_context(caplog):
         {
             "type": "http",
             "method": "POST",
-            "path": "/api/v1/conversations/conv_1/messages/stream",
-            "raw_path": b"/api/v1/conversations/conv_1/messages/stream",
+            "path": "/v1/conversations/conv_1/messages/stream",
+            "raw_path": b"/v1/conversations/conv_1/messages/stream",
             "query_string": b"debug=true",
             "headers": [
                 (b"host", b"testserver"),
@@ -57,7 +57,7 @@ def test_request_log_contains_ts_compatible_error_and_request_context(caplog):
     assert payload["request_context"] == {
         "request_id": "req-log-1",
         "method": "POST",
-        "url": "http://testserver/api/v1/conversations/conv_1/messages/stream?debug=true",
+        "url": "http://testserver/v1/conversations/conv_1/messages/stream?debug=true",
         "params": {},
         "query": {"debug": "true"},
         "body": {"present": True, "fields": ["api_key", "content"]},

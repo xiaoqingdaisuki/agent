@@ -4,7 +4,7 @@
  * 设计原则：
  * 1. 业务命名（conversations, knowledge）而非技术命名（agent, rag）
  * 2. 统一错误格式，不暴露内部实现
- * 3. 版本化 /api/v1/
+ * 3. 版本化 /v1/
  */
 
 import type { FastifyInstance } from "fastify";
@@ -106,7 +106,7 @@ function normalizeSessionDocuments(value: unknown): SessionDocument[] {
   }).filter((document) => document.parts.length > 0);
 }
 
-// 校验客户端幂等标识，保持旧版和 v1 接口的输入边界一致。
+// 校验客户端幂等标识，保持 v1 接口的输入边界一致。
 function normalizeClientMessageId(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.length < 1 || value.length > 128) {

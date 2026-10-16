@@ -32,7 +32,7 @@ describe("knowledge upload API", () => {
     })) as typeof app.inject;
     const response = await app.inject({
       method: "POST",
-      url: "/api/v1/knowledge/documents",
+      url: "/v1/knowledge/documents",
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
       payload,
     });

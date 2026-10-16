@@ -112,9 +112,19 @@ describe("Gateway authentication", () => {
     expect(response.status).toBe(200);
   });
 
+  it("does not serve the removed internal v1 route prefix", async () => {
+    const response = await app.request(
+      "http://gateway/internal/v1/health",
+      { headers: { Authorization: "Bearer secret" } },
+      { SERVICE_SECRET: "secret" },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
   it("returns the memory search shape consumed by both Agent clients", async () => {
     const response = await app.request(
-      "http://gateway/internal/v1/users/user-1/memories:search",
+      "http://gateway/v1/internal/users/user-1/memories:search",
       {
         method: "POST",
         headers: {
@@ -179,7 +189,7 @@ describe("Persistent identifiers and ordering", () => {
     };
 
     const response = await app.request(
-      "http://gateway/internal/v1/conversations",
+      "http://gateway/v1/internal/conversations",
       {
         method: "POST",
         headers: {
@@ -219,7 +229,7 @@ describe("Persistent identifiers and ordering", () => {
     };
 
     const response = await app.request(
-      "http://gateway/internal/v1/conversations",
+      "http://gateway/v1/internal/conversations",
       {
         method: "POST",
         headers: {

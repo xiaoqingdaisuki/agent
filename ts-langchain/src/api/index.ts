@@ -2,14 +2,10 @@ import fastify from "fastify";
 import multipart from "@fastify/multipart";
 import cors from "@fastify/cors";
 import { registerV1Routes } from "./routes/v1/index.js";
-import { registerChatRoutes } from "./routes/chat.js";
-import { registerStreamRoutes } from "./routes/stream.js";
-import { registerToolRoutes } from "./routes/tools.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerErrorMiddleware } from "./middleware/error.js";
 import { registerAgentAuthMiddleware } from "./middleware/auth.js";
 import { config } from "../config/index.js";
-import { getReadiness } from "./health.js";
 
 // 构建并配置 Fastify 应用实例，注册所有路由和中间件
 export async function buildApp() {
@@ -32,25 +28,14 @@ export async function buildApp() {
   });
   registerAgentAuthMiddleware(app);
 
-  // External API v1（前端 UI 使用）— 带 /api/v1 前缀
+  // External API v1（前端 UI 使用）— 带 /v1 前缀
   await app.register(
     async (fastify) => {
       await registerV1Routes(fastify);
+      await registerImageRoutes(fastify);
     },
-    { prefix: "/api/v1" },
+    { prefix: "/v1" },
   );
-
-  // 旧路由（保留兼容，后续迁移）
-  app.get("/health", async () => ({ status: "ok", version: "0.2.0" }));
-  app.get("/health/live", async () => ({ status: "ok", live: true, version: "0.2.0" }));
-  app.get("/health/ready", async (_request, reply) => {
-    const readiness = getReadiness();
-    return reply.status(readiness.ready ? 200 : 503).send(readiness);
-  });
-  await registerChatRoutes(app);
-  await registerStreamRoutes(app);
-  await registerToolRoutes(app);
-  await registerImageRoutes(app);
 
   registerErrorMiddleware(app);
 

@@ -1,12 +1,12 @@
 /**
  * Document Routes — 文档管理
  *
- * POST   /internal/v1/documents                    — 上传文档
- * GET    /internal/v1/documents                    — 列出用户文档
- * GET    /internal/v1/documents/:id                 — 文档详情（含块）
- * DELETE /internal/v1/documents/:id                 — 删除文档
- * POST   /internal/v1/documents/:id/reindex         — 重新索引
- * POST   /internal/v1/documents:search              — 语义搜索
+ * POST   /v1/internal/documents                    — 上传文档
+ * GET    /v1/internal/documents                    — 列出用户文档
+ * GET    /v1/internal/documents/:id                 — 文档详情（含块）
+ * DELETE /v1/internal/documents/:id                 — 删除文档
+ * POST   /v1/internal/documents/:id/reindex         — 重新索引
+ * POST   /v1/internal/documents:search              — 语义搜索
  */
 
 import {
@@ -32,7 +32,7 @@ import {
 // 创建或注册 registerDocumentRoutes 所需的数据
 export function registerDocumentRoutes(app: any) {
   // 上传文档
-  app.post("/internal/v1/documents", async (c: any) => {
+  app.post("/v1/internal/documents", async (c: any) => {
     const body = await c.req.json();
     const parsed = DocumentUploadRequestSchema.parse(body);
 
@@ -82,7 +82,7 @@ export function registerDocumentRoutes(app: any) {
   });
 
   // 列出文档
-  app.get("/internal/v1/documents", async (c: any) => {
+  app.get("/v1/internal/documents", async (c: any) => {
     const userId = c.req.query("user_id");
     if (!userId) {
       return c.json(
@@ -115,7 +115,7 @@ export function registerDocumentRoutes(app: any) {
   });
 
   // 获取文档详情
-  app.get("/internal/v1/documents/:id", async (c: any) => {
+  app.get("/v1/internal/documents/:id", async (c: any) => {
     try {
       const documentId = c.req.param("id");
       const document = await getDocument(c.env.DB, documentId);
@@ -144,7 +144,7 @@ export function registerDocumentRoutes(app: any) {
   });
 
   // 删除文档
-  app.delete("/internal/v1/documents/:id", async (c: any) => {
+  app.delete("/v1/internal/documents/:id", async (c: any) => {
     try {
       const documentId = c.req.param("id");
 
@@ -173,7 +173,7 @@ export function registerDocumentRoutes(app: any) {
   });
 
   // 重新索引文档
-  app.post("/internal/v1/documents/:id/reindex", async (c: any) => {
+  app.post("/v1/internal/documents/:id/reindex", async (c: any) => {
     try {
       const documentId = c.req.param("id");
 
@@ -296,7 +296,7 @@ export function registerDocumentRoutes(app: any) {
   });
 
   // 语义搜索
-  app.post("/internal/v1/documents:search", async (c: any) => {
+  app.post("/v1/internal/documents:search", async (c: any) => {
     const body = await c.req.json();
     const parsed = DocumentSearchRequestSchema.parse(body);
 

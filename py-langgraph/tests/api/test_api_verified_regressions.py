@@ -26,10 +26,10 @@ async def test_slow_persistence_does_not_block_other_requests(monkeypatch):
     monkeypatch.setattr(ConversationService, "get", slow_get)
     async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="http://test",
                            headers={"Authorization": "Bearer test-agent-secret", "X-Agent-User-Id": "audit-concurrent"}) as client:
-        pending = asyncio.create_task(client.get("/api/v1/conversations/slow"))
+        pending = asyncio.create_task(client.get("/v1/conversations/slow"))
         try:
             assert await asyncio.to_thread(started.wait, 1)
-            health = await client.get("/health")
+            health = await client.get("/v1/health")
             release.set()
             assert health.status_code == 200
             assert (await pending).status_code == 200
@@ -40,18 +40,17 @@ async def test_slow_persistence_does_not_block_other_requests(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.parametrize("phase", ["meta", "text", "error", "complete"])
-async def test_stream_closure_never_leaves_the_conversation_busy(monkeypatch, legacy, phase):
+async def test_stream_closure_never_leaves_the_conversation_busy(monkeypatch, phase):
     from types import SimpleNamespace
-    from src.api.routes import v1, stream as legacy_route
+    from src.api.routes import v1
     from src.repositories import InMemoryRepositories
     from src.services import BusinessError, BusinessErrorCode
 
     repository = InMemoryRepositories()
     monkeypatch.setattr(settings, "memory_enabled", False)
     monkeypatch.setattr("src.repositories.get_repositories", lambda: repository)
-    route = legacy_route if legacy else v1
+    route = v1
     monkeypatch.setattr(route, "require_agent_user_id", lambda *args: "closure-user")
     monkeypatch.setattr(route, "get_agent_tool_identity", lambda *args: {})
     monkeypatch.setattr(route, "log_request_error", lambda *args: None)
@@ -66,13 +65,10 @@ async def test_stream_closure_never_leaves_the_conversation_busy(monkeypatch, le
     monkeypatch.setattr("src.services.AgentService.chat_stream", events)
     conversation = ConversationService.create("closure", "chat", "closure-user")
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    if legacy:
-        response = await route.stream(route.StreamRequest(message="question", thread_id=conversation.id), request)
-    else:
-        payload = SimpleNamespace(content="question", user_id="closure-user", client_message_id="first")
-        monkeypatch.setattr(route, "read_send_message_payload", AsyncMock(return_value=(payload, {})))
-        monkeypatch.setattr(route, "prepare_attachment_context", AsyncMock(return_value={}))
-        response = await route.stream_message(conversation.id, request)
+    payload = SimpleNamespace(content="question", user_id="closure-user", client_message_id="first")
+    monkeypatch.setattr(route, "read_send_message_payload", AsyncMock(return_value=(payload, {})))
+    monkeypatch.setattr(route, "prepare_attachment_context", AsyncMock(return_value={}))
+    response = await route.stream_message(conversation.id, request)
     iterator = response.body_iterator
     assert "event: meta" in await anext(iterator)
     if phase in {"text", "error"}:
@@ -93,7 +89,7 @@ async def test_stream_closure_never_leaves_the_conversation_busy(monkeypatch, le
 async def test_preflight_does_not_require_service_credentials(monkeypatch, method):
     monkeypatch.setattr(settings, "cors_origin", "https://audit.example")
     async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="http://test") as client:
-        response = await client.options("/api/v1/profile", headers={
+        response = await client.options("/v1/profile", headers={
             "Origin": "https://audit.example", "Access-Control-Request-Method": method,
             "Access-Control-Request-Headers": "authorization,x-agent-user-id",
         })
@@ -113,7 +109,7 @@ async def test_json_attachment_roundtrip_preserves_non_bmp_characters(monkeypatc
     monkeypatch.setattr("src.services.AgentService.chat", chat)
     async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="http://test",
                            headers={"Authorization": "Bearer test-agent-secret", "X-Agent-User-Id": "audit-unicode"}) as client:
-        response = await client.post(f"/api/v1/conversations/{conversation.id}/messages", json={
+        response = await client.post(f"/v1/conversations/{conversation.id}/messages", json={
             "content": "请读取附件", "client_message_id": "unicode-one", "session_documents": [document],
         })
     assert response.status_code == 200
@@ -135,7 +131,7 @@ async def test_session_document_parse_endpoint_matches_ts_contract(monkeypatch):
         },
     ) as client:
         response = await client.post(
-            f"/api/v1/conversations/{conversation.id}/session-documents/parse",
+            f"/v1/conversations/{conversation.id}/session-documents/parse",
             files={"file": ("rules.md", "第一条规则\n\n第二条规则".encode(), "text/markdown")},
         )
 
@@ -158,7 +154,7 @@ async def test_completed_stream_replay_skips_attachment_upload(monkeypatch):
     monkeypatch.setattr("src.services.KnowledgeService.upload_document", upload)
     async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="http://test",
                            headers={"Authorization": "Bearer test-agent-secret", "X-Agent-User-Id": "audit-replay"}) as client:
-        response = await client.post(f"/api/v1/conversations/{conversation.id}/messages/stream", json={
+        response = await client.post(f"/v1/conversations/{conversation.id}/messages/stream", json={
             "content": "请解释附件", "client_message_id": "replay-one",
             "session_documents": [{"filename": "doc.txt", "parts": [{"content": "已有附件"}]}],
         })

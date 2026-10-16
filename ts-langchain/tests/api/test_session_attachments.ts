@@ -73,14 +73,14 @@ describe("session attachment API", () => {
     });
     const created = await request({
       method: "POST",
-      url: "/api/v1/conversations",
+      url: "/v1/conversations",
       payload: { title: "临时附件", user_id: "session-user" },
     });
     const conversationId = created.json().id;
     const boundary = "session-document-boundary";
     const parsed = await request({
       method: "POST",
-      url: `/api/v1/conversations/${conversationId}/session-documents/parse`,
+      url: `/v1/conversations/${conversationId}/session-documents/parse`,
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
       payload: Buffer.from(
         `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="rules.md"\r\n` +
@@ -93,7 +93,7 @@ describe("session attachment API", () => {
 
     const response = await request({
       method: "POST",
-      url: `/api/v1/conversations/${conversationId}/messages`,
+      url: `/v1/conversations/${conversationId}/messages`,
       payload: {
         content: "请总结规则",
         user_id: "session-user",
@@ -136,14 +136,14 @@ describe("session attachment API", () => {
     });
     const created = await request({
       method: "POST",
-      url: "/api/v1/conversations",
+      url: "/v1/conversations",
       payload: { title: "临时图片", user_id: "image-user" },
     });
     const conversationId = created.json().id;
     const boundary = "image-message-boundary";
     const response = await request({
       method: "POST",
-      url: `/api/v1/conversations/${conversationId}/messages`,
+      url: `/v1/conversations/${conversationId}/messages`,
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
       payload: Buffer.from(
         `--${boundary}\r\nContent-Disposition: form-data; name="metadata"\r\n\r\n` +
@@ -191,13 +191,13 @@ describe("session attachment API", () => {
     });
     const created = await request({
       method: "POST",
-      url: "/api/v1/conversations",
+      url: "/v1/conversations",
       payload: { title: "持久化附件", user_id: "persistent-user" },
     });
     const conversationId = created.json().id;
     const response = await request({
       method: "POST",
-      url: `/api/v1/conversations/${conversationId}/messages`,
+      url: `/v1/conversations/${conversationId}/messages`,
       payload: {
         content: "后续回答请参考政策",
         user_id: "persistent-user",

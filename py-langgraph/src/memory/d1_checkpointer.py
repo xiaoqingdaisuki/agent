@@ -7,9 +7,9 @@ D1Checkpointer — 通过 Cloudflare Memory Gateway 持久化 LangGraph checkpoi
 - 删除路径：同步删除 MemorySaver，异步 DELETE Gateway
 
 Gateway 端点：
-- POST   /internal/v1/checkpoints/{thread_id}
-- GET    /internal/v1/checkpoints/{thread_id}
-- DELETE /internal/v1/checkpoints/{thread_id}
+- POST   /v1/internal/checkpoints/{thread_id}
+- GET    /v1/internal/checkpoints/{thread_id}
+- DELETE /v1/internal/checkpoints/{thread_id}
 """
 
 from __future__ import annotations
@@ -227,7 +227,7 @@ class D1Checkpointer(BaseCheckpointSaver):
                 timeout=5.0,
             ) as client:
                 response = client.post(
-                    f"/internal/v1/checkpoints/{thread_id}",
+                    f"/v1/internal/checkpoints/{thread_id}",
                     json={
                         "checkpoint_id": checkpoint_id,
                         "checkpoint_data": {
@@ -260,7 +260,7 @@ class D1Checkpointer(BaseCheckpointSaver):
 
             client = await self._get_async_client()
             response = await client.post(
-                f"/internal/v1/checkpoints/{thread_id}",
+                f"/v1/internal/checkpoints/{thread_id}",
                 json={
                     "checkpoint_id": checkpoint_id,
                     "checkpoint_data": {
@@ -286,7 +286,7 @@ class D1Checkpointer(BaseCheckpointSaver):
                 headers={"Authorization": f"Bearer {self._gateway_secret}"},
                 timeout=5.0,
             ) as client:
-                response = client.delete(f"/internal/v1/checkpoints/{thread_id}")
+                response = client.delete(f"/v1/internal/checkpoints/{thread_id}")
                 response.raise_for_status()
         except Exception as exc:
             logger.warning("[checkpoint] Failed to delete from Gateway: %s", exc)
@@ -296,7 +296,7 @@ class D1Checkpointer(BaseCheckpointSaver):
         """异步 DELETE checkpoint 从 Gateway"""
         try:
             client = await self._get_async_client()
-            response = await client.delete(f"/internal/v1/checkpoints/{thread_id}")
+            response = await client.delete(f"/v1/internal/checkpoints/{thread_id}")
             response.raise_for_status()
         except Exception as exc:
             logger.warning("[checkpoint] Async delete from Gateway failed: %s", exc)
@@ -311,7 +311,7 @@ class D1Checkpointer(BaseCheckpointSaver):
 
         try:
             client = await self._get_async_client()
-            response = await client.get(f"/internal/v1/checkpoints/{thread_id}")
+            response = await client.get(f"/v1/internal/checkpoints/{thread_id}")
             if response.status_code == 404:
                 logger.debug("[checkpoint] No checkpoint found for thread %s", thread_id)
                 self._restored.add(thread_id)

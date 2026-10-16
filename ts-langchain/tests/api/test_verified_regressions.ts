@@ -5,7 +5,7 @@ import { AgentService, ConversationService, TurnService, BusinessError } from ".
 import { parseSessionDocument } from "../../src/services/session-documents.js";
 
 describe("verified API regressions", () => {
-  it.each([false, true])("releases a disconnected stream Turn (legacy=%s)", async (legacy) => {
+  it("releases a disconnected stream Turn", async () => {
     const memoryEnabled = config.MEMORY_ENABLED;
     config.MEMORY_ENABLED = false;
     const user = `disconnect-${crypto.randomUUID()}`;
@@ -21,9 +21,9 @@ describe("verified API regressions", () => {
     const controller = new AbortController();
     try {
       const address = await app.listen({ port: 0, host: "127.0.0.1" });
-      const response = await fetch(`${address}${legacy ? "/stream" : `/api/v1/conversations/${conversation.id}/messages/stream`}`, {
+      const response = await fetch(`${address}/v1/conversations/${conversation.id}/messages/stream`, {
         method: "POST", headers: { "content-type": "application/json", authorization: "Bearer test-agent-secret", "x-agent-user-id": user },
-        body: JSON.stringify(legacy ? { message: "question", thread_id: conversation.id } : { content: "question" }), signal: controller.signal,
+        body: JSON.stringify({ content: "question" }), signal: controller.signal,
       });
       const reader = response.body!.getReader();
       const first = await reader.read();
@@ -42,7 +42,7 @@ describe("verified API regressions", () => {
     }
   });
 
-  it.each([false, true])("settles an upstream error before delivering it (legacy=%s)", async (legacy) => {
+  it("settles an upstream error before delivering it", async () => {
     const memoryEnabled = config.MEMORY_ENABLED;
     config.MEMORY_ENABLED = false;
     const user = `failed-${crypto.randomUUID()}`;
@@ -53,9 +53,9 @@ describe("verified API regressions", () => {
     });
     const app = await buildApp();
     try {
-      const response = await app.inject({ method: "POST", url: legacy ? "/stream" : `/api/v1/conversations/${conversation.id}/messages/stream`,
+      const response = await app.inject({ method: "POST", url: `/v1/conversations/${conversation.id}/messages/stream`,
         headers: { authorization: "Bearer test-agent-secret", "x-agent-user-id": user },
-        payload: legacy ? { message: "question", thread_id: conversation.id } : { content: "question" },
+        payload: { content: "question" },
       });
       expect(response.body).toContain("MODEL_RESPONSE_INVALID");
       expect((await TurnService.begin(conversation.id, user, "next", "second")).created).toBe(true);
@@ -78,7 +78,7 @@ describe("verified API regressions", () => {
     const app = await buildApp();
     try {
       const response = await app.inject({
-        method: "POST", url: `/api/v1/conversations/${conversation.id}/messages`,
+        method: "POST", url: `/v1/conversations/${conversation.id}/messages`,
         headers: { authorization: "Bearer test-agent-secret", "x-agent-user-id": user },
         payload: { content: "请读取附件", client_message_id: "unicode-one", session_documents: [document] },
       });
@@ -97,7 +97,7 @@ describe("verified API regressions", () => {
     const app = await buildApp();
     try {
       const response = await app.inject({
-        method: "OPTIONS", url: "/api/v1/profile",
+        method: "OPTIONS", url: "/v1/profile",
         headers: { origin: "https://audit.example", "access-control-request-method": method,
           "access-control-request-headers": "authorization,x-agent-user-id" },
       });

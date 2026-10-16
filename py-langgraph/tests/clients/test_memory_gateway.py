@@ -23,9 +23,9 @@ async def test_sync_repository_calls_reuse_one_event_loop():
 async def test_preserves_gateway_not_found_codes():
     """404 必须保留网关错误码，供各资源的缺失分支识别。"""
     error_codes = {
-        "/internal/v1/users/missing/profile": "MEMORY_USER_NOT_FOUND",
-        "/internal/v1/conversations/missing": "MEMORY_CONVERSATION_NOT_FOUND",
-        "/internal/v1/documents/missing": "DOCUMENT_NOT_FOUND",
+        "/v1/internal/users/missing/profile": "MEMORY_USER_NOT_FOUND",
+        "/v1/internal/conversations/missing": "MEMORY_CONVERSATION_NOT_FOUND",
+        "/v1/internal/documents/missing": "DOCUMENT_NOT_FOUND",
     }
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -139,7 +139,7 @@ async def test_encodes_identifiers_as_single_path_segments():
     )
     try:
         assert await client.get_profile("tenant/user") is None
-        assert observed_path == "/internal/v1/users/tenant%2Fuser/profile"
+        assert observed_path == "/v1/internal/users/tenant%2Fuser/profile"
     finally:
         await client.close()
 

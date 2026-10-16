@@ -1,9 +1,9 @@
 /**
  * Checkpoint Routes — LangGraph 图状态持久化
  *
- * POST   /internal/v1/checkpoints/{thread_id}    — 保存 checkpoint
- * GET    /internal/v1/checkpoints/{thread_id}    — 获取最新 checkpoint
- * DELETE /internal/v1/checkpoints/{thread_id}    — 删除线程所有 checkpoints
+ * POST   /v1/internal/checkpoints/{thread_id}    — 保存 checkpoint
+ * GET    /v1/internal/checkpoints/{thread_id}    — 获取最新 checkpoint
+ * DELETE /v1/internal/checkpoints/{thread_id}    — 删除线程所有 checkpoints
  */
 
 import {
@@ -15,7 +15,7 @@ import {
 // 创建或注册 registerCheckpointRoutes 所需的数据
 export function registerCheckpointRoutes(app: any) {
   // 保存或更新 checkpoint（upsert）
-  app.post("/internal/v1/checkpoints/:thread_id", async (c: any) => {
+  app.post("/v1/internal/checkpoints/:thread_id", async (c: any) => {
     try {
       const threadId = c.req.param("thread_id");
       const body = await c.req.json();
@@ -52,7 +52,7 @@ export function registerCheckpointRoutes(app: any) {
   });
 
   // 获取最新 checkpoint
-  app.get("/internal/v1/checkpoints/:thread_id", async (c: any) => {
+  app.get("/v1/internal/checkpoints/:thread_id", async (c: any) => {
     try {
       const threadId = c.req.param("thread_id");
       const checkpoint = await getLatestCheckpoint(c.env.DB, threadId);
@@ -87,7 +87,7 @@ export function registerCheckpointRoutes(app: any) {
   });
 
   // 删除线程所有 checkpoints
-  app.delete("/internal/v1/checkpoints/:thread_id", async (c: any) => {
+  app.delete("/v1/internal/checkpoints/:thread_id", async (c: any) => {
     try {
       const threadId = c.req.param("thread_id");
       await deleteThreadCheckpoints(c.env.DB, threadId);

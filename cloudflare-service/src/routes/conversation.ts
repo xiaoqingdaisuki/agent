@@ -1,10 +1,10 @@
 /**
  * Conversation Routes — 会话管理
  *
- * POST   /internal/v1/conversations                          — 创建会话
- * GET    /internal/v1/users/{user_id}/conversations          — 用户会话列表
- * GET    /internal/v1/conversations/{conversation_id}        — 会话详情
- * DELETE /internal/v1/conversations/{conversation_id}        — 删除会话
+ * POST   /v1/internal/conversations                          — 创建会话
+ * GET    /v1/internal/users/{user_id}/conversations          — 用户会话列表
+ * GET    /v1/internal/conversations/{conversation_id}        — 会话详情
+ * DELETE /v1/internal/conversations/{conversation_id}        — 删除会话
  */
 
 import { createConversation, getConversation, listConversationsByUser, deleteConversation } from "../repositories/conversation.js";
@@ -14,7 +14,7 @@ import { ConversationCreateSchema } from "../schemas/memory-models.js";
 // 创建或注册 registerConversationRoutes 所需的数据
 export function registerConversationRoutes(app: any) {
   // 创建会话
-  app.post("/internal/v1/conversations", async (c: any) => {
+  app.post("/v1/internal/conversations", async (c: any) => {
     const body = await c.req.json();
     const parsed = ConversationCreateSchema.parse(body);
 
@@ -40,7 +40,7 @@ export function registerConversationRoutes(app: any) {
   });
 
   // 列出用户会话
-  app.get("/internal/v1/users/:user_id/conversations", async (c: any) => {
+  app.get("/v1/internal/users/:user_id/conversations", async (c: any) => {
     const userId = c.req.param("user_id");
     const limit = Math.min(parseInt((c.req.query("limit") as string) || "20", 10), 100);
     const offset = Math.max(parseInt((c.req.query("offset") as string) || "0", 10), 0);
@@ -56,7 +56,7 @@ export function registerConversationRoutes(app: any) {
   });
 
   // 获取会话详情
-  app.get("/internal/v1/conversations/:conversation_id", async (c: any) => {
+  app.get("/v1/internal/conversations/:conversation_id", async (c: any) => {
     const id = c.req.param("conversation_id");
     const conv = await getConversation(c.env.DB, id);
 
@@ -81,7 +81,7 @@ export function registerConversationRoutes(app: any) {
   });
 
   // 删除会话
-  app.delete("/internal/v1/conversations/:conversation_id", async (c: any) => {
+  app.delete("/v1/internal/conversations/:conversation_id", async (c: any) => {
     const id = c.req.param("conversation_id");
     const deleted = await deleteConversation(c.env.DB, id);
 

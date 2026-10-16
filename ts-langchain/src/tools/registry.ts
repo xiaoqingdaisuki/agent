@@ -4,7 +4,7 @@
  * 职责:
  * 1. 注册所有可用工具及其 Descriptor
  * 2. 根据用户权限动态裁剪可见工具集
- * 3. 提供工具元数据查询（/tools API 使用）
+ * 3. 提供工具元数据查询（/v1/capabilities API 使用）
  */
 
 import type { ToolDescriptor } from "./contracts.js";

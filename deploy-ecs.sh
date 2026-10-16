@@ -99,11 +99,11 @@ PY_PORT="${PY_PORT:-6002}"
 
 if [ "$TARGET" = "typescript" ] || [ "$TARGET" = "all" ]; then
   echo "TypeScript container: agent-typescript"
-  echo "TypeScript local health check: http://127.0.0.1:$TS_PORT/api/v1/health"
-  echo "TypeScript frontend API: http://<ECS-public-IP>:$TS_PORT/api/v1"
+  echo "TypeScript local health check: http://127.0.0.1:$TS_PORT/v1/health"
+  echo "TypeScript frontend API: http://<ECS-public-IP>:$TS_PORT/v1"
 fi
 if [ "$TARGET" = "python" ] || [ "$TARGET" = "all" ]; then
   echo "Python container: agent-python"
-  echo "Python local health check: http://127.0.0.1:$PY_PORT/api/v1/health"
-  echo "Python frontend API: http://<ECS-public-IP>:$PY_PORT/api/v1"
+  echo "Python local health check: http://127.0.0.1:$PY_PORT/v1/health"
+  echo "Python frontend API: http://<ECS-public-IP>:$PY_PORT/v1"
 fi

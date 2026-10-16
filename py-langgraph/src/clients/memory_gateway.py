@@ -175,7 +175,7 @@ class CloudflareMemoryClient:
     async def get_profile(self, user_id: str) -> dict | None:
         """获取用户画像"""
         try:
-            result = await self._request("GET", f"/internal/v1/users/{_path_segment(user_id)}/profile")
+            result = await self._request("GET", f"/v1/internal/users/{_path_segment(user_id)}/profile")
             data = result.get("data")
             return UserProfileData.model_validate(data).model_dump() if data else None
         except MemoryGatewayError as e:
@@ -191,7 +191,7 @@ class CloudflareMemoryClient:
             body["name"] = name
         if preferences is not None:
             body["preferences"] = preferences
-        result = await self._request("PUT", f"/internal/v1/users/{_path_segment(user_id)}/profile", body)
+        result = await self._request("PUT", f"/v1/internal/users/{_path_segment(user_id)}/profile", body)
         return UserProfileData.model_validate(result["data"]).model_dump()
 
     # ============ Conversation ============
@@ -212,13 +212,13 @@ class CloudflareMemoryClient:
         }
         if conversation_id:
             body["id"] = conversation_id
-        result = await self._request("POST", "/internal/v1/conversations", body)
+        result = await self._request("POST", "/v1/internal/conversations", body)
         return ConversationData.model_validate(result["data"]).model_dump()
 
     # 获取 list conversations 对应的数据
     async def list_conversations(self, user_id: str, limit: int = 20, offset: int = 0) -> list[dict]:
         """列出用户的会话"""
-        result = await self._request("GET", f"/internal/v1/users/{_path_segment(user_id)}/conversations?limit={limit}&offset={offset}")
+        result = await self._request("GET", f"/v1/internal/users/{_path_segment(user_id)}/conversations?limit={limit}&offset={offset}")
         data = result.get("data", [])
         return [ConversationData.model_validate(item).model_dump() for item in data]
 
@@ -226,7 +226,7 @@ class CloudflareMemoryClient:
     async def get_conversation(self, conversation_id: str) -> dict | None:
         """获取会话详情"""
         try:
-            result = await self._request("GET", f"/internal/v1/conversations/{_path_segment(conversation_id)}")
+            result = await self._request("GET", f"/v1/internal/conversations/{_path_segment(conversation_id)}")
             data = result.get("data")
             return ConversationData.model_validate(data).model_dump() if data else None
         except MemoryGatewayError as e:
@@ -238,7 +238,7 @@ class CloudflareMemoryClient:
     async def delete_conversation(self, conversation_id: str) -> bool:
         """删除会话"""
         try:
-            await self._request("DELETE", f"/internal/v1/conversations/{_path_segment(conversation_id)}")
+            await self._request("DELETE", f"/v1/internal/conversations/{_path_segment(conversation_id)}")
             return True
         except MemoryGatewayError as e:
             if e.code == "MEMORY_CONVERSATION_NOT_FOUND":
@@ -250,7 +250,7 @@ class CloudflareMemoryClient:
     # 创建或注册 create messages batch 所需的数据
     async def create_messages_batch(self, conversation_id: str, user_id: str, messages: list[dict]) -> None:
         """批量写入消息"""
-        await self._request("POST", f"/internal/v1/conversations/{_path_segment(conversation_id)}/messages:batch", {
+        await self._request("POST", f"/v1/internal/conversations/{_path_segment(conversation_id)}/messages:batch", {
             "user_id": user_id,
             "messages": messages,
         })
@@ -262,7 +262,7 @@ class CloudflareMemoryClient:
         """获取会话消息"""
         result = await self._request(
             "GET",
-            f"/internal/v1/conversations/{_path_segment(conversation_id)}/messages?limit={limit}&offset={offset}&direction={direction}",
+            f"/v1/internal/conversations/{_path_segment(conversation_id)}/messages?limit={limit}&offset={offset}&direction={direction}",
         )
         page = MessagesPageData.model_validate(result.get("data", {}))
         return [msg.model_dump() for msg in page.messages], page.total
@@ -270,7 +270,7 @@ class CloudflareMemoryClient:
     # 删除或清理 clear messages 对应的数据
     async def clear_messages(self, conversation_id: str) -> None:
         """清空会话消息"""
-        await self._request("DELETE", f"/internal/v1/conversations/{_path_segment(conversation_id)}/messages")
+        await self._request("DELETE", f"/v1/internal/conversations/{_path_segment(conversation_id)}/messages")
 
     # 原子创建或复用客户端消息对应的 Turn。
     async def create_or_get_turn(
@@ -282,7 +282,7 @@ class CloudflareMemoryClient:
     ) -> tuple[dict, bool]:
         result = await self._request(
             "POST",
-            f"/internal/v1/conversations/{_path_segment(conversation_id)}/turns",
+            f"/v1/internal/conversations/{_path_segment(conversation_id)}/turns",
             {"id": turn_id, "user_id": user_id, "client_message_id": client_message_id},
             idempotency_key=client_message_id,
         )
@@ -301,7 +301,7 @@ class CloudflareMemoryClient:
     ) -> tuple[dict, dict, bool]:
         result = await self._request(
             "POST",
-            f"/internal/v1/conversations/{_path_segment(conversation_id)}/turns:begin",
+            f"/v1/internal/conversations/{_path_segment(conversation_id)}/turns:begin",
             {
                 "id": turn_id,
                 "user_id": user_id,
@@ -328,7 +328,7 @@ class CloudflareMemoryClient:
     ) -> dict:
         result = await self._request(
             "POST",
-            f"/internal/v1/turns/{_path_segment(turn_id)}/complete",
+            f"/v1/internal/turns/{_path_segment(turn_id)}/complete",
             {
                 "user_id": user_id,
                 "assistant_message_id": message["id"],
@@ -345,7 +345,7 @@ class CloudflareMemoryClient:
         try:
             result = await self._request(
                 "GET",
-                f"/internal/v1/turns/{_path_segment(turn_id)}?user_id={quote(user_id, safe='')}",
+                f"/v1/internal/turns/{_path_segment(turn_id)}?user_id={quote(user_id, safe='')}",
             )
             return TurnData.model_validate(result["data"]).model_dump(mode="json")
         except MemoryGatewayError as error:
@@ -357,7 +357,7 @@ class CloudflareMemoryClient:
     async def update_turn(self, turn_id: str, user_id: str, **changes) -> dict:
         result = await self._request(
             "PATCH",
-            f"/internal/v1/turns/{_path_segment(turn_id)}",
+            f"/v1/internal/turns/{_path_segment(turn_id)}",
             {"user_id": user_id, **changes},
             idempotency_key=f"{turn_id}:{changes['status']}",
         )
@@ -371,7 +371,7 @@ class CloudflareMemoryClient:
         idempotency_key = hashlib.sha256(f"{user_id}:{content}".encode()).hexdigest()[:32]
         result = await self._request(
             "PUT",
-            f"/internal/v1/users/{_path_segment(user_id)}/memories/{_path_segment(memory_id)}",
+            f"/v1/internal/users/{_path_segment(user_id)}/memories/{_path_segment(memory_id)}",
             {
                 "content": content,
                 "category": category,
@@ -389,7 +389,7 @@ class CloudflareMemoryClient:
         params = f"?limit={limit}"
         if category:
             params += f"&category={category}"
-        result = await self._request("GET", f"/internal/v1/users/{_path_segment(user_id)}/memories{params}")
+        result = await self._request("GET", f"/v1/internal/users/{_path_segment(user_id)}/memories{params}")
         data = result.get("data", [])
         return [MemoryData.model_validate(item).model_dump() for item in data]
 
@@ -405,7 +405,7 @@ class CloudflareMemoryClient:
             body["importance"] = importance
 
         try:
-            result = await self._request("PATCH", f"/internal/v1/users/{_path_segment(user_id)}/memories/{_path_segment(memory_id)}", body)
+            result = await self._request("PATCH", f"/v1/internal/users/{_path_segment(user_id)}/memories/{_path_segment(memory_id)}", body)
             data = result.get("data")
             return MemoryData.model_validate(data).model_dump() if data else None
         except MemoryGatewayError as e:
@@ -419,7 +419,7 @@ class CloudflareMemoryClient:
         body: dict[str, Any] = {"query": query, "limit": limit, "min_score": min_score}
         if category:
             body["category"] = category
-        result = await self._request("POST", f"/internal/v1/users/{_path_segment(user_id)}/memories:search", body)
+        result = await self._request("POST", f"/v1/internal/users/{_path_segment(user_id)}/memories:search", body)
         data = result.get("data", {})
         # 兼容旧版 Worker 曾返回的 results 字段。
         if "items" not in data and "results" in data:
@@ -439,7 +439,7 @@ class CloudflareMemoryClient:
         }
         if file_type:
             body["file_type"] = file_type
-        result = await self._request("POST", "/internal/v1/documents", body)
+        result = await self._request("POST", "/v1/internal/documents", body)
         return DocumentData.model_validate(result.get("data", {}).get("document")).model_dump()
 
     # 获取 list documents 对应的数据
@@ -453,7 +453,7 @@ class CloudflareMemoryClient:
         if category:
             params["category"] = category
         result = await self._request(
-            "GET", f"/internal/v1/documents?{urlencode(params)}"
+            "GET", f"/v1/internal/documents?{urlencode(params)}"
         )
         data = result.get("data", {})
         return {
@@ -465,7 +465,7 @@ class CloudflareMemoryClient:
     async def get_document(self, document_id: str) -> dict | None:
         """获取文档详情"""
         try:
-            result = await self._request("GET", f"/internal/v1/documents/{_path_segment(document_id)}")
+            result = await self._request("GET", f"/v1/internal/documents/{_path_segment(document_id)}")
             data = result.get("data", {})
             return {
                 "document": DocumentData.model_validate(data.get("document")).model_dump(),
@@ -480,7 +480,7 @@ class CloudflareMemoryClient:
     async def delete_document(self, document_id: str) -> bool:
         """删除文档"""
         try:
-            await self._request("DELETE", f"/internal/v1/documents/{_path_segment(document_id)}")
+            await self._request("DELETE", f"/v1/internal/documents/{_path_segment(document_id)}")
             return True
         except MemoryGatewayError as e:
             if e.code == "DOCUMENT_NOT_FOUND":
@@ -492,7 +492,7 @@ class CloudflareMemoryClient:
         """原地重建文档索引"""
         result = await self._request(
             "POST",
-            f"/internal/v1/documents/{_path_segment(document_id)}/reindex",
+            f"/v1/internal/documents/{_path_segment(document_id)}/reindex",
         )
         return result.get("data", {})
 
@@ -514,14 +514,14 @@ class CloudflareMemoryClient:
         }
         if document_ids:
             body["document_ids"] = document_ids
-        result = await self._request("POST", "/internal/v1/documents:search", body)
+        result = await self._request("POST", "/v1/internal/documents:search", body)
         return DocumentSearchResponseData.model_validate(result.get("data", {})).model_dump()
 
     # 删除或清理 delete memory 对应的数据
     async def delete_memory(self, user_id: str, memory_id: str) -> bool:
         """删除记忆（软删除）"""
         try:
-            await self._request("DELETE", f"/internal/v1/users/{_path_segment(user_id)}/memories/{_path_segment(memory_id)}")
+            await self._request("DELETE", f"/v1/internal/users/{_path_segment(user_id)}/memories/{_path_segment(memory_id)}")
             return True
         except MemoryGatewayError as e:
             if e.code == "MEMORY_NOT_FOUND":
@@ -532,7 +532,7 @@ class CloudflareMemoryClient:
     async def write_audit_logs(self, entries: list[dict]) -> None:
         """批量写入审计日志（不阻塞主流程）"""
         try:
-            await self._request("POST", "/internal/v1/audit-logs", {"entries": entries})
+            await self._request("POST", "/v1/internal/audit-logs", {"entries": entries})
         except Exception:
             pass  # 审计日志写入失败不影响主流程
 
@@ -540,13 +540,13 @@ class CloudflareMemoryClient:
     async def write_tool_metrics(self, entries: list[dict]) -> None:
         """批量写入工具指标（不阻塞主流程）"""
         try:
-            await self._request("POST", "/internal/v1/tool-metrics", {"entries": entries})
+            await self._request("POST", "/v1/internal/tool-metrics", {"entries": entries})
         except Exception:
             pass  # 指标写入失败不影响主流程
 
     # 获取 list user memories 对应的数据
     async def list_user_memories(self, user_id: str, limit: int = 100) -> list[dict]:
         """列出用户所有记忆（用于清空）"""
-        result = await self._request("GET", f"/internal/v1/users/{_path_segment(user_id)}/memories?limit={limit}")
+        result = await self._request("GET", f"/v1/internal/users/{_path_segment(user_id)}/memories?limit={limit}")
         data = result.get("data", [])
         return [MemoryData.model_validate(item).model_dump() for item in data]

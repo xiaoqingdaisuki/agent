@@ -1,7 +1,7 @@
 /**
  * OpenAPI 规范路由
  *
- * GET /internal/v1/openapi.json
+ * GET /v1/internal/openapi.json
  * 自动生成 Gateway 的 OpenAPI 3.0.3 规范
  * 替代 contracts/memory/gateway.openapi.yaml
  *
@@ -165,7 +165,7 @@ function getOpenApiSpec(): Record<string, unknown> {
     openapi: "3.0.3",
     info: {
       title: "Cloudflare Service API",
-      description: "Agent 长期存储统一服务内部 API。所有路径前缀 /internal/v1。响应格式: { ok, data, error, meta }。",
+      description: "Agent 长期存储统一服务内部 API。所有路径前缀 /v1/internal。响应格式: { ok, data, error, meta }。",
       version: "1.0.0",
       contact: { name: "Agent Memory Team" },
     },
@@ -263,7 +263,7 @@ function getOpenApiSpec(): Record<string, unknown> {
       },
     },
     paths: {
-      "/internal/v1/health": {
+      "/v1/internal/health": {
         get: {
           tags: ["Health"],
           summary: "健康检查",
@@ -285,7 +285,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/users/{user_id}/profile": {
+      "/v1/internal/users/{user_id}/profile": {
         put: {
           tags: ["Profile"],
           summary: "创建或更新用户画像",
@@ -337,7 +337,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/conversations": {
+      "/v1/internal/conversations": {
         post: {
           tags: ["Conversation"],
           summary: "创建会话",
@@ -362,7 +362,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/users/{user_id}/conversations": {
+      "/v1/internal/users/{user_id}/conversations": {
         get: {
           tags: ["Conversation"],
           summary: "列出用户的所有会话",
@@ -388,7 +388,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/conversations/{conversation_id}": {
+      "/v1/internal/conversations/{conversation_id}": {
         get: {
           tags: ["Conversation"],
           summary: "获取会话详情",
@@ -418,7 +418,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/conversations/{conversation_id}/turns": {
+      "/v1/internal/conversations/{conversation_id}/turns": {
         post: {
           tags: ["Turn"],
           summary: "创建或复用幂等 Turn",
@@ -449,7 +449,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/turns/{turn_id}": {
+      "/v1/internal/turns/{turn_id}": {
         get: {
           tags: ["Turn"],
           summary: "读取 Turn 状态",
@@ -494,7 +494,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/conversations/{conversation_id}/messages:batch": {
+      "/v1/internal/conversations/{conversation_id}/messages:batch": {
         post: {
           tags: ["Message"],
           summary: "批量写入消息（完整 turn）",
@@ -518,7 +518,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/conversations/{conversation_id}/messages": {
+      "/v1/internal/conversations/{conversation_id}/messages": {
         get: {
           tags: ["Message"],
           summary: "获取会话消息列表",
@@ -560,7 +560,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/users/{user_id}/memories": {
+      "/v1/internal/users/{user_id}/memories": {
         get: {
           tags: ["Memory"],
           summary: "列出用户的长期记忆",
@@ -601,7 +601,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/users/{user_id}/memories/{memory_id}": {
+      "/v1/internal/users/{user_id}/memories/{memory_id}": {
         put: {
           tags: ["Memory"],
           summary: "保存记忆（幂等）",
@@ -690,7 +690,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/users/{user_id}/memories:search": {
+      "/v1/internal/users/{user_id}/memories:search": {
         post: {
           tags: ["Memory"],
           summary: "语义搜索记忆",
@@ -737,7 +737,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           },
         },
       },
-      "/internal/v1/documents": {
+      "/v1/internal/documents": {
         post: {
           tags: ["Document"],
           summary: "上传并索引文档",
@@ -756,7 +756,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           responses: { "200": { description: "文档列表", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } } },
         },
       },
-      "/internal/v1/documents/{document_id}": {
+      "/v1/internal/documents/{document_id}": {
         get: {
           tags: ["Document"],
           summary: "获取文档及分块",
@@ -770,7 +770,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           responses: { "200": { description: "文档已删除", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } }, "404": { $ref: "#/components/responses/NotFound" } },
         },
       },
-      "/internal/v1/documents/{document_id}/reindex": {
+      "/v1/internal/documents/{document_id}/reindex": {
         post: {
           tags: ["Document"],
           summary: "重建文档索引",
@@ -778,7 +778,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           responses: { "200": { description: "索引已重建", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } }, "404": { $ref: "#/components/responses/NotFound" } },
         },
       },
-      "/internal/v1/documents:search": {
+      "/v1/internal/documents:search": {
         post: {
           tags: ["Document"],
           summary: "语义搜索文档",
@@ -786,7 +786,7 @@ function getOpenApiSpec(): Record<string, unknown> {
           responses: { "200": { description: "文档搜索结果", content: { "application/json": { schema: { $ref: "#/components/schemas/GatewayResponse" } } } } },
         },
       },
-      "/internal/v1/checkpoints/{thread_id}": {
+      "/v1/internal/checkpoints/{thread_id}": {
         post: {
           tags: ["Checkpoint"],
           summary: "保存 LangGraph checkpoint",
@@ -817,7 +817,7 @@ function getOpenApiSpec(): Record<string, unknown> {
 
 // 创建或注册 registerOpenApiRoute 所需的数据
 export function registerOpenApiRoute(app: any) {
-  app.get("/internal/v1/openapi.json", async (c: any) => {
+  app.get("/v1/internal/openapi.json", async (c: any) => {
     const spec = getOpenApiSpec();
     return c.json(spec);
   });

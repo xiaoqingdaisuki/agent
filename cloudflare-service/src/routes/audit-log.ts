@@ -1,9 +1,9 @@
 /**
  * Audit Log Routes — 工具调用审计日志
  *
- * POST   /internal/v1/audit-logs          — 批量写入审计日志
- * GET    /internal/v1/audit-logs          — 查询审计日志（需认证）
- * DELETE /internal/v1/audit-logs          — 清空审计日志
+ * POST   /v1/internal/audit-logs          — 批量写入审计日志
+ * GET    /v1/internal/audit-logs          — 查询审计日志（需认证）
+ * DELETE /v1/internal/audit-logs          — 清空审计日志
  */
 
 import { createAuditLogs, getAuditLogs, clearAuditLogs } from "../repositories/audit-log.js";
@@ -11,7 +11,7 @@ import { createAuditLogs, getAuditLogs, clearAuditLogs } from "../repositories/a
 // 创建或注册 registerAuditLogRoutes 所需的数据
 export function registerAuditLogRoutes(app: any) {
   // 批量写入审计日志
-  app.post("/internal/v1/audit-logs", async (c: any) => {
+  app.post("/v1/internal/audit-logs", async (c: any) => {
     try {
       const body = await c.req.json();
       const entries = body.entries as Array<{
@@ -53,7 +53,7 @@ export function registerAuditLogRoutes(app: any) {
   });
 
   // 查询审计日志
-  app.get("/internal/v1/audit-logs", async (c: any) => {
+  app.get("/v1/internal/audit-logs", async (c: any) => {
     try {
       const userId = c.req.query("user_id");
       const limit = Math.min(parseInt((c.req.query("limit") as string) || "50", 10), 200);
@@ -84,7 +84,7 @@ export function registerAuditLogRoutes(app: any) {
   });
 
   // 清空审计日志
-  app.delete("/internal/v1/audit-logs", async (c: any) => {
+  app.delete("/v1/internal/audit-logs", async (c: any) => {
     try {
       const userId = c.req.query("user_id");
       if (!userId) {

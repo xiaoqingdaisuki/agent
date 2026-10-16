@@ -1,7 +1,7 @@
 /**
  * Health check — 报告 Gateway 及各依赖组件状态
  *
- * GET /internal/v1/health
+ * GET /v1/internal/health
  * 无需认证
  */
 
@@ -9,7 +9,7 @@ import { isPublicPath } from "../middleware/auth.js";
 
 // 执行 healthRoute 对应的业务逻辑
 export async function healthRoute(app: any) {
-  app.get("/internal/v1/health", async (c: any) => {
+  app.get("/v1/internal/health", async (c: any) => {
     const components: Record<string, string> = {
       gateway: "ok",
       d1: "unknown",

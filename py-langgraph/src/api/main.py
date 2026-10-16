@@ -14,7 +14,7 @@ from src.services import BusinessError, BusinessErrorCode
 from src.api.request_logging import log_request_error
 
 from .auth import agent_auth_middleware
-from .routes import chat, images, stream, tools
+from .routes import images
 from .routes.v1 import router as v1_router
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ async def _lifespan(_app: FastAPI):
 async def _timeout_middleware(request: Request, call_next):
     """请求级超时中间件：非流式路由使用服务端配置的外层超时。"""
     path = request.url.path
-    is_stream = path == "/stream" or path.endswith("/messages/stream")
+    is_stream = path.endswith("/messages/stream")
 
     if is_stream:
         return await call_next(request)
@@ -152,32 +152,9 @@ def create_app() -> FastAPI:
         )
 
     # External API v1（前端 UI 使用）
-    app.include_router(v1_router, prefix="/api/v1", tags=["v1"])
+    app.include_router(v1_router, prefix="/v1", tags=["v1"])
 
-    @app.get("/health")
-    # 执行 legacy health 对应的业务逻辑
-    async def legacy_health():
-        return {"status": "ok", "version": "0.2.0"}
-
-    @app.get("/health/live")
-    # 报告进程存活，不依赖外部服务。
-    async def live_health():
-        return {"status": "ok", "live": True, "version": "0.2.0"}
-
-    @app.get("/health/ready")
-    # 报告关键依赖配置是否满足接流条件。
-    async def ready_health():
-        from fastapi.responses import JSONResponse
-        from src.api.health import get_readiness
-
-        readiness = get_readiness()
-        return JSONResponse(status_code=200 if readiness["ready"] else 503, content=readiness)
-
-    # 旧路由（保留兼容）
-    app.include_router(chat.router, prefix="/chat", tags=["chat"])
-    app.include_router(stream.router, prefix="/stream", tags=["stream"])
-    app.include_router(tools.router, prefix="/tools", tags=["tools"])
-    app.include_router(images.router, prefix="/images", tags=["images"])
+    app.include_router(images.router, prefix="/v1/images", tags=["images"])
 
     return app
 

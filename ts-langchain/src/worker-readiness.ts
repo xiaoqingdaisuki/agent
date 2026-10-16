@@ -20,7 +20,9 @@ export function getWorkerReadiness(env: WorkerConfiguration) {
 // 公开存活探针始终可用；未就绪时阻止业务请求进入不完整的 Worker。
 export function workerConfigurationResponse(request: Request, env: WorkerConfiguration): Response | undefined {
   const pathname = new URL(request.url).pathname;
-  const healthPath = pathname.replace(/^\/api\/v1/, "");
+  const healthPath = pathname.startsWith("/v1/")
+    ? pathname.slice("/v1".length)
+    : "";
   if ((request.method === "GET" || request.method === "HEAD") && ["/health", "/health/live"].includes(healthPath)) {
     return Response.json({ status: "ok", live: true, version: "0.2.0" });
   }

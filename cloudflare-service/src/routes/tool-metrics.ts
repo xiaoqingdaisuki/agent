@@ -1,9 +1,9 @@
 /**
  * Tool Metrics Routes — 工具调用性能指标
  *
- * POST   /internal/v1/tool-metrics         — 批量写入指标
- * GET    /internal/v1/tool-metrics         — 查询指标（需认证）
- * GET    /internal/v1/tool-metrics/snapshot — 获取指标快照
+ * POST   /v1/internal/tool-metrics         — 批量写入指标
+ * GET    /v1/internal/tool-metrics         — 查询指标（需认证）
+ * GET    /v1/internal/tool-metrics/snapshot — 获取指标快照
  */
 
 import { createToolMetrics, getToolMetrics, getToolMetricsSnapshot } from "../repositories/tool-metrics.js";
@@ -11,7 +11,7 @@ import { createToolMetrics, getToolMetrics, getToolMetricsSnapshot } from "../re
 // 创建或注册 registerToolMetricsRoutes 所需的数据
 export function registerToolMetricsRoutes(app: any) {
   // 批量写入指标
-  app.post("/internal/v1/tool-metrics", async (c: any) => {
+  app.post("/v1/internal/tool-metrics", async (c: any) => {
     try {
       const body = await c.req.json();
       const entries = body.entries as Array<{
@@ -50,7 +50,7 @@ export function registerToolMetricsRoutes(app: any) {
   });
 
   // 查询指标
-  app.get("/internal/v1/tool-metrics", async (c: any) => {
+  app.get("/v1/internal/tool-metrics", async (c: any) => {
     try {
       const toolName = c.req.query("tool_name") || undefined;
       const limit = Math.min(parseInt((c.req.query("limit") as string) || "100", 10), 500);
@@ -74,7 +74,7 @@ export function registerToolMetricsRoutes(app: any) {
   });
 
   // 指标快照
-  app.get("/internal/v1/tool-metrics/snapshot", async (c: any) => {
+  app.get("/v1/internal/tool-metrics/snapshot", async (c: any) => {
     try {
       const sinceHours = parseInt((c.req.query("since_hours") as string) || "24", 10);
       const snapshot = await getToolMetricsSnapshot(c.env.DB, sinceHours);

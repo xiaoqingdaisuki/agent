@@ -9,7 +9,7 @@ describe("request error logging", () => {
       {
         id: "req-log-1",
         method: "POST",
-        url: "/api/v1/conversations/conv_1/messages/stream",
+        url: "/v1/conversations/conv_1/messages/stream",
         params: { id: "conv_1" },
         query: {},
         body: {

@@ -160,7 +160,7 @@ npm start
 ### 4. 验证
 
 ```bash
-curl http://localhost:6001/api/v1/health
+curl http://localhost:6001/v1/health
 ```
 
 ## 部署
@@ -219,45 +219,48 @@ docker-compose logs -f ts-agent
 **6. 验证**
 
 ```bash
-curl http://localhost:6001/api/v1/health
+curl http://localhost:6001/v1/health
 ```
 
 ## API 接口
 
 ### External API（前端 UI 使用）
 
-除 `/health` 和 `/api/v1/health` 外，请求必须携带 `Authorization: Bearer <AGENT_API_SECRET>`。涉及用户数据时还必须由可信服务端设置 `X-Agent-User-Id`；请求中的 `user_id` 只能与该身份一致。
+除 `/v1/health`、`/v1/health/live` 和 `/v1/health/ready` 外，请求必须携带 `Authorization: Bearer <AGENT_API_SECRET>`。涉及用户数据时还必须由可信服务端设置 `X-Agent-User-Id`；请求中的 `user_id` 只能与该身份一致。
 
 ```
-GET  /api/v1/health                    健康检查
-GET  /api/v1/health/live               进程存活探针
-GET  /api/v1/health/ready              依赖配置就绪探针
-GET  /api/v1/capabilities              可用能力列表
+GET  /v1/health                    健康检查
+GET  /v1/health/live               进程存活探针
+GET  /v1/health/ready              依赖配置就绪探针
+GET  /v1/capabilities              可用能力列表
+POST /v1/images/generations        图片生成
 
-POST /api/v1/conversations             创建会话
-GET  /api/v1/conversations             列出会话
-GET  /api/v1/conversations/:id         获取会话详情
-DELETE /api/v1/conversations/:id       删除会话
-POST /api/v1/conversations/:id/messages 发送消息
-POST /api/v1/conversations/:id/messages/stream 流式发送消息（SSE）
-GET  /api/v1/conversations/:id/messages 获取历史
-DELETE /api/v1/conversations/:id/messages 清空消息
-POST /api/v1/conversations/:id/session-documents/parse 解析临时文档（关闭持久化时）
+POST /v1/conversations             创建会话
+GET  /v1/conversations             列出会话
+GET  /v1/conversations/:id         获取会话详情
+DELETE /v1/conversations/:id       删除会话
+POST /v1/conversations/:id/messages 发送消息
+POST /v1/conversations/:id/messages/stream 流式发送消息（SSE）
+GET  /v1/conversations/:id/messages 获取历史
+DELETE /v1/conversations/:id/messages 清空消息
+POST /v1/conversations/:id/session-documents/parse 解析临时文档（关闭持久化时）
 
-POST /api/v1/knowledge/documents       上传文档（multipart/form-data）
-GET  /api/v1/knowledge/documents       文档列表
-GET  /api/v1/knowledge/documents/:id   文档详情
-DELETE /api/v1/knowledge/documents/:id 删除文档
-POST /api/v1/knowledge/documents/:id/reindex 重新索引
-POST /api/v1/knowledge/search          知识检索
+POST /v1/knowledge/documents       上传文档（multipart/form-data）
+GET  /v1/knowledge/documents       文档列表
+GET  /v1/knowledge/documents/:id   文档详情
+DELETE /v1/knowledge/documents/:id 删除文档
+POST /v1/knowledge/documents/:id/reindex 重新索引
+POST /v1/knowledge/search          知识检索
 
-GET  /api/v1/profile                   用户画像
-PATCH /api/v1/profile                  更新画像
-GET  /api/v1/memory                    记忆列表
-POST /api/v1/memory                    添加记忆
-DELETE /api/v1/memory                  删除记忆
-GET  /api/v1/history                   问答历史
+GET  /v1/profile                   用户画像
+PATCH /v1/profile                  更新画像
+GET  /v1/memory                    记忆列表
+POST /v1/memory                    添加记忆
+DELETE /v1/memory                  删除记忆
+GET  /v1/history                   问答历史
 ```
+
+旧的 `/api/v1/*`、`/internal/v1/*` 以及未版本化的 `/chat`、`/stream`、`/tools`、`/images/generations` 路由均已移除，调用方必须使用上述新地址。
 
 临时文档解析接口接收 multipart 字段 `file`，支持 `txt`、`md`、`markdown`、`json`、`csv`、`pdf` 和 `docx`。`MEMORY_ENABLED=false` 时结果只用于当前消息；开启持久化后应随消息提交并写入知识库。
 

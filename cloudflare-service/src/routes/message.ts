@@ -1,9 +1,9 @@
 /**
  * Message Routes — 消息管理
  *
- * POST   /internal/v1/conversations/{id}/messages:batch  — 批量写入消息
- * GET    /internal/v1/conversations/{id}/messages        — 查询消息
- * DELETE /internal/v1/conversations/{id}/messages        — 清空消息
+ * POST   /v1/internal/conversations/{id}/messages:batch  — 批量写入消息
+ * GET    /v1/internal/conversations/{id}/messages        — 查询消息
+ * DELETE /v1/internal/conversations/{id}/messages        — 清空消息
  */
 
 import {
@@ -55,7 +55,7 @@ function formatMessageBatch(
 // 创建或注册 registerMessageRoutes 所需的数据
 export function registerMessageRoutes(app: any) {
   // 批量写入消息
-  app.post("/internal/v1/conversations/:conversation_id/messages:batch", async (c: any) => {
+  app.post("/v1/internal/conversations/:conversation_id/messages:batch", async (c: any) => {
     const conversationId = c.req.param("conversation_id");
     const body = await c.req.json();
     const parsed = MessageBatchSchema.parse(body);
@@ -104,7 +104,7 @@ export function registerMessageRoutes(app: any) {
   });
 
   // 查询消息
-  app.get("/internal/v1/conversations/:conversation_id/messages", async (c: any) => {
+  app.get("/v1/internal/conversations/:conversation_id/messages", async (c: any) => {
     const conversationId = c.req.param("conversation_id");
     const limit = parseInt((c.req.query("limit") as string) || "50", 10);
     const offset = parseInt((c.req.query("offset") as string) || "0", 10);
@@ -124,7 +124,7 @@ export function registerMessageRoutes(app: any) {
   });
 
   // 清空消息
-  app.delete("/internal/v1/conversations/:conversation_id/messages", async (c: any) => {
+  app.delete("/v1/internal/conversations/:conversation_id/messages", async (c: any) => {
     const conversationId = c.req.param("conversation_id");
     if (!await getConversation(c.env.DB, conversationId)) {
       return c.json({ ok: false, data: null, error: { code: "MEMORY_CONVERSATION_NOT_FOUND", message: "会话不存在" }, meta: { request_id: c.get("requestId") } }, 404);

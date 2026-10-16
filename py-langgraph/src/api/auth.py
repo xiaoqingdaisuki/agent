@@ -11,12 +11,9 @@ from src.config.settings import settings
 from src.services import BusinessError, BusinessErrorCode
 
 PUBLIC_PATHS = {
-    "/health",
-    "/health/live",
-    "/health/ready",
-    "/api/v1/health",
-    "/api/v1/health/live",
-    "/api/v1/health/ready",
+    "/v1/health",
+    "/v1/health/live",
+    "/v1/health/ready",
 }
 USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9:_-]{1,128}$")

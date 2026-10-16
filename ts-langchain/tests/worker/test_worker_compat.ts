@@ -16,11 +16,11 @@ describe("Worker runtime compatibility", () => {
     try {
       app = await buildApp();
       await app.ready();
-      expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
-      expect((await app.inject({ method: "GET", url: "/api/v1/conversations/missing/messages", headers: {
+      expect((await app.inject({ method: "GET", url: "/v1/health" })).statusCode).toBe(200);
+      expect((await app.inject({ method: "GET", url: "/v1/conversations/missing/messages", headers: {
         authorization: "Bearer test-agent-secret", "x-agent-user-id": "worker-router-user",
       } })).statusCode).toBe(404);
-      expect((await app.inject({ method: "GET", url: "/tools" })).statusCode).toBe(401);
+      expect((await app.inject({ method: "GET", url: "/v1/capabilities" })).statusCode).toBe(401);
     } finally {
       globalThis.Function = original;
       await app?.close();

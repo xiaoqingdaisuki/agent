@@ -20,7 +20,7 @@ describe("Workers AI image models through AI Gateway", () => {
     vi.stubGlobal("fetch", upstream);
     const app = await buildApp();
     try {
-      const response = await app.inject({ method: "POST", url: "/images/generations",
+      const response = await app.inject({ method: "POST", url: "/v1/images/generations",
         headers: { authorization: "Bearer test-agent-secret" }, payload: { prompt: "Blue mountain" } });
       expect(response.statusCode).toBe(200);
       expect(response.json().image_data_url).toBe(`data:image/png;base64,${Buffer.from(bytes).toString("base64")}`);
@@ -39,7 +39,7 @@ describe("Workers AI image models through AI Gateway", () => {
     vi.stubGlobal("fetch", upstream);
     const app = await buildApp();
     try {
-      const response = await app.inject({ method: "POST", url: "/images/generations",
+      const response = await app.inject({ method: "POST", url: "/v1/images/generations",
         headers: { authorization: "Bearer test-agent-secret" }, payload: { prompt: "Blue mountain" } });
       expect(response.statusCode).toBe(200);
       expect(response.json().image_data_url).toBe("data:image/jpeg;base64,/9j/test");
@@ -60,7 +60,7 @@ describe("Workers AI image models through AI Gateway", () => {
     const app = await buildApp();
     try {
       const response = await runWithRequestRuntime({ waitUntil: () => undefined, generateImage: binding }, async () =>
-        await app.inject({ method: "POST", url: "/images/generations", headers: { authorization: "Bearer test-agent-secret" }, payload: { prompt: "Blue mountain" } }));
+        await app.inject({ method: "POST", url: "/v1/images/generations", headers: { authorization: "Bearer test-agent-secret" }, payload: { prompt: "Blue mountain" } }));
       expect(response.statusCode).toBe(200);
       expect(response.json().image_data_url).toBe("data:image/jpeg;base64,/9j/binding");
       expect(binding).toHaveBeenCalledWith(config.IMAGE_MODEL, expect.any(FormData));
@@ -74,7 +74,7 @@ describe("Workers AI image models through AI Gateway", () => {
     const app = await buildApp();
     try {
       const response = await runWithRequestRuntime({ waitUntil: () => undefined, generateImage: binding }, async () =>
-        await app.inject({ method: "POST", url: "/images/generations", headers: { authorization: "Bearer test-agent-secret" }, payload: { prompt: "Blue mountain" } }));
+        await app.inject({ method: "POST", url: "/v1/images/generations", headers: { authorization: "Bearer test-agent-secret" }, payload: { prompt: "Blue mountain" } }));
       expect(response.statusCode).toBe(429);
       expect(response.json().code).toBe("WORKERS_AI_QUOTA_EXHAUSTED");
       expect(binding).toHaveBeenCalledTimes(1);

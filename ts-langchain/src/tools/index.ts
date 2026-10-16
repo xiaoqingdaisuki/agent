@@ -77,7 +77,7 @@ export {
 // MEMORY_ENABLED 仅影响存储后端（Cloudflare Gateway 持久化 vs 进程内易失），
 // 不改变 Agent 可见的工具与能力集合，因此记忆类读取工具始终注册。
 // 注：memory_user_save / memory_user_delete 为 approval_policy=always 写工具，
-// 按设计规范不进入 Agent 默认可调用列表（仅在 /tools 元数据可见）。
+// 按设计规范不进入 Agent 默认可调用列表（仅在 /v1/capabilities 元数据可见）。
 const directTools = [
   weatherTool,
   webSearchTool,

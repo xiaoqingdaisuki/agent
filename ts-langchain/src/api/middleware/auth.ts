@@ -8,12 +8,9 @@ import {
 } from "../../services/index.js";
 
 const PUBLIC_PATHS = new Set([
-  "/health",
-  "/health/live",
-  "/health/ready",
-  "/api/v1/health",
-  "/api/v1/health/live",
-  "/api/v1/health/ready",
+  "/v1/health",
+  "/v1/health/live",
+  "/v1/health/ready",
 ]);
 const USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const TENANT_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;

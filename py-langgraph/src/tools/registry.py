@@ -4,7 +4,7 @@ Tool Registry — 工具注册、发现和动态裁剪
 职责:
 1. 注册所有可用工具及其 Descriptor
 2. 根据用户权限动态裁剪可见工具集
-3. 提供工具元数据查询（/tools API 使用）
+3. 提供工具元数据查询（/v1/capabilities API 使用）
 """
 
 from __future__ import annotations
@@ -236,9 +236,9 @@ def get_tools_for_user(user_permissions: list[str] | None = None) -> list[Any]:
     return _registry.get_visible_tools(user_permissions)
 
 
-# 获取工具元数据（供 /tools API 使用）
+# 获取工具元数据（供 /v1/capabilities API 使用）
 def get_tool_metadata_for_user(user_permissions: list[str] | None = None) -> list[dict[str, Any]]:
-    """获取工具元数据（供 /tools API 使用）"""
+    """获取工具元数据（供 /v1/capabilities API 使用）"""
     if user_permissions is None:
         user_permissions = list(permissions_for_roles())
     return _registry.get_visible_descriptors(user_permissions)

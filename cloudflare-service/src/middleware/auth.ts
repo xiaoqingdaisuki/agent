@@ -56,7 +56,7 @@ export async function authMiddleware(c: any, next: any) {
 }
 
 // 公开路径（无需认证）
-export const PUBLIC_PATHS = ["/internal/v1/health"];
+export const PUBLIC_PATHS = ["/v1/internal/health"];
 
 // 判断是否为公开路径
 export function isPublicPath(path: string): boolean {

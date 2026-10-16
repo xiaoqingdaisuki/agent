@@ -149,7 +149,7 @@ describe("CloudflareMemoryClient", () => {
 
   describe("Profile API", () => {
     it("getProfile sends GET with auth header", async () => {
-      mockSetup.setMockResponse("/internal/v1/users/usr_001/profile", 200, validProfile());
+      mockSetup.setMockResponse("/v1/internal/users/usr_001/profile", 200, validProfile());
 
       const profile = await client.getProfile("usr_001");
       expect(profile).toBeDefined();
@@ -160,7 +160,7 @@ describe("CloudflareMemoryClient", () => {
     });
 
     it("getProfile returns null for 404 user not found", async () => {
-      mockSetup.setMockResponse("/internal/v1/users/unknown/profile", 404, {
+      mockSetup.setMockResponse("/v1/internal/users/unknown/profile", 404, {
         error: { code: "MEMORY_USER_NOT_FOUND", message: "用户不存在" },
       });
 
@@ -169,7 +169,7 @@ describe("CloudflareMemoryClient", () => {
     });
 
     it("putProfile sends PUT with body", async () => {
-      mockSetup.setMockResponse("/internal/v1/users/usr_001/profile", 200, validProfile({ name: "Alice", preferences_json: '{"theme":"dark"}' }));
+      mockSetup.setMockResponse("/v1/internal/users/usr_001/profile", 200, validProfile({ name: "Alice", preferences_json: '{"theme":"dark"}' }));
 
       const result = await client.putProfile("usr_001", "Alice", { theme: "dark" });
       expect(result.user_id).toBe("usr_001");
@@ -184,7 +184,7 @@ describe("CloudflareMemoryClient", () => {
 
   describe("Conversation API", () => {
     it("createConversation sends POST with user_id, title, mode", async () => {
-      mockSetup.setMockResponse("/internal/v1/conversations", 201, validConversation({ id: "conv_001", title: "New Chat" }));
+      mockSetup.setMockResponse("/v1/internal/conversations", 201, validConversation({ id: "conv_001", title: "New Chat" }));
 
       const conv = await client.createConversation("usr_001", "New Chat", "chat");
       expect(conv.id).toBe("conv_001");
@@ -192,7 +192,7 @@ describe("CloudflareMemoryClient", () => {
     });
 
     it("listConversations returns array of conversations", async () => {
-      mockSetup.setMockResponse("/internal/v1/users/usr_001/conversations", 200, [
+      mockSetup.setMockResponse("/v1/internal/users/usr_001/conversations", 200, [
         validConversation({ id: "c1", title: "Chat 1" }),
         validConversation({ id: "c2", title: "Chat 2" }),
       ]);
@@ -202,7 +202,7 @@ describe("CloudflareMemoryClient", () => {
     });
 
     it("listConversations passes limit and offset in URL", async () => {
-      mockSetup.setMockResponse("/internal/v1/users/usr_001/conversations", 200, []);
+      mockSetup.setMockResponse("/v1/internal/users/usr_001/conversations", 200, []);
 
       await client.listConversations("usr_001", 50, 10);
       // Verify fetch was called with correct URL containing pagination params
@@ -212,14 +212,14 @@ describe("CloudflareMemoryClient", () => {
     });
 
     it("deleteConversation returns true on success", async () => {
-      mockSetup.setMockResponse("/internal/v1/conversations/conv_001", 200, validConversation({ id: "conv_001" }));
+      mockSetup.setMockResponse("/v1/internal/conversations/conv_001", 200, validConversation({ id: "conv_001" }));
 
       const result = await client.deleteConversation("conv_001");
       expect(result).toBe(true);
     });
 
     it("deleteConversation returns false for 404", async () => {
-      mockSetup.setMockResponse("/internal/v1/conversations/unknown", 404, {
+      mockSetup.setMockResponse("/v1/internal/conversations/unknown", 404, {
         error: { code: "MEMORY_CONVERSATION_NOT_FOUND", message: "会话不存在" },
       });
 
@@ -233,7 +233,7 @@ describe("CloudflareMemoryClient", () => {
   describe("Message API", () => {
     it("createMessagesBatch sends batch of messages", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/conversations/conv_001/messages:batch",
+        "/v1/internal/conversations/conv_001/messages:batch",
         200,
         { count: 2 },
       );
@@ -251,7 +251,7 @@ describe("CloudflareMemoryClient", () => {
 
     it("getMessages returns messages with total", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/conversations/conv_001/messages",
+        "/v1/internal/conversations/conv_001/messages",
         200,
         {
           messages: [validMessage()],
@@ -270,7 +270,7 @@ describe("CloudflareMemoryClient", () => {
   describe("Memory API", () => {
     it("saveMemory sends PUT with memory data", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/usr_001/memories/mem_001",
+        "/v1/internal/users/usr_001/memories/mem_001",
         200,
         validMemory({ content: "Test memory" }),
       );
@@ -289,7 +289,7 @@ describe("CloudflareMemoryClient", () => {
 
     it("saveMemory includes idempotency key when provided", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/usr_001/memories/mem_001",
+        "/v1/internal/users/usr_001/memories/mem_001",
         200,
         validMemory(),
       );
@@ -311,7 +311,7 @@ describe("CloudflareMemoryClient", () => {
 
     it("searchMemories sends POST with query", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/usr_001/memories:search",
+        "/v1/internal/users/usr_001/memories:search",
         200,
         {
           items: [validMemory({ id: "mem_001", content: "Found memory", semantic_score: 0.9, final_score: 0.85 })],
@@ -334,7 +334,7 @@ describe("CloudflareMemoryClient", () => {
 
     it("listMemories supports category filter", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/usr_001/memories",
+        "/v1/internal/users/usr_001/memories",
         200,
         [
           validMemory({ id: "m1", category: "preference" }),
@@ -348,7 +348,7 @@ describe("CloudflareMemoryClient", () => {
 
     it("deleteMemory returns true on success", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/usr_001/memories/mem_001",
+        "/v1/internal/users/usr_001/memories/mem_001",
         200,
         validMemory(),
       );
@@ -359,7 +359,7 @@ describe("CloudflareMemoryClient", () => {
 
     it("deleteMemory returns false for 404", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/usr_001/memories/unknown",
+        "/v1/internal/users/usr_001/memories/unknown",
         404,
         {
           error: { code: "MEMORY_NOT_FOUND", message: "记忆不存在" },
@@ -372,7 +372,7 @@ describe("CloudflareMemoryClient", () => {
 
     it("updateMemory updates memory fields", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/usr_001/memories/mem_001",
+        "/v1/internal/users/usr_001/memories/mem_001",
         200,
         validMemory({ content: "Updated content", category: "preference", importance: 5 }),
       );
@@ -391,7 +391,7 @@ describe("CloudflareMemoryClient", () => {
 
   describe("Error Handling", () => {
     it.each([400, 500, 503])("preserves the Gateway error code for HTTP %i", async (status) => {
-      mockSetup.setMockResponse("/internal/v1/documents", status, {
+      mockSetup.setMockResponse("/v1/internal/documents", status, {
         error: { code: "DOCUMENT_UPLOAD_FAILED", message: "upload failed" },
       });
       await expect(client.uploadDocument("audit", "broken.txt", "%%%"))
@@ -408,7 +408,7 @@ describe("CloudflareMemoryClient", () => {
     });
 
     it("throws MemoryGatewayError on 401", async () => {
-      mockSetup.setMockResponse("/internal/v1/users/usr_001/profile", 401, {
+      mockSetup.setMockResponse("/v1/internal/users/usr_001/profile", 401, {
         error: { code: "MEMORY_UNAUTHENTICATED", message: "认证失败" },
       });
 
@@ -416,7 +416,7 @@ describe("CloudflareMemoryClient", () => {
     });
 
     it("throws MemoryGatewayError on 403", async () => {
-      mockSetup.setMockResponse("/internal/v1/users/usr_001/profile", 403, {
+      mockSetup.setMockResponse("/v1/internal/users/usr_001/profile", 403, {
         error: { code: "MEMORY_FORBIDDEN", message: "无权访问" },
       });
 
@@ -454,7 +454,7 @@ describe("CloudflareMemoryClient", () => {
   describe("URL Construction", () => {
     it("encodes special characters in user_id", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/user%40example.com/profile",
+        "/v1/internal/users/user%40example.com/profile",
         200,
         validProfile({ user_id: "user@example.com" }),
       );
@@ -468,7 +468,7 @@ describe("CloudflareMemoryClient", () => {
 
     it("includes query params for listConversations", async () => {
       mockSetup.setMockResponse(
-        "/internal/v1/users/usr_001/conversations",
+        "/v1/internal/users/usr_001/conversations",
         200,
         [],
       );
