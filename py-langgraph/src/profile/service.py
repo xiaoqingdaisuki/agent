@@ -119,6 +119,25 @@ class MemoryService:
         ]
 
     @staticmethod
+    # 异步读取用户的高优先级记忆，避免流式请求阻塞事件循环。
+    async def get_relevant_async(user_id: str, max_items: int = 10) -> list[Memory]:
+        """异步获取用户的高优先级记忆。"""
+        repos = _get_repositories()
+        items = await repos.list_memories_async(user_id, limit=max_items)
+        return [
+            Memory(
+                id=m["id"],
+                user_id=user_id,
+                content=m["content"],
+                category=m["category"],
+                importance=m["importance"],
+                created_at=m.get("created_at", ""),
+                updated_at=m.get("updated_at", ""),
+            )
+            for m in items[:max_items]
+        ]
+
+    @staticmethod
     # 获取 get by category 对应的数据
     def get_by_category(user_id: str, category: str) -> list[Memory]:
         repos = _get_repositories()

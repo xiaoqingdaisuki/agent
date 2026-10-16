@@ -317,6 +317,15 @@ const TOOL_INTENT_PATTERNS = [
   /(?:get_weather|get_current_time|convert_timezone|calculator|knowledge_search|file_search)/i,
 ];
 
+const MEMORY_RECALL_PATTERNS = [
+  /^(?:你(?:还)?记得|你知道|你了解).{0,24}(?:我|我的(?:信息|偏好|记忆|习惯)|关于我).{0,8}[吗么?？.!！。]*$/i,
+  /^(?:我有哪些|关于我的|我的(?:长期)?).{0,16}(?:记忆|信息|偏好|习惯).{0,8}[吗么?？.!！。]*$/i,
+  /^(?:你对我了解多少|你记得我什么)[吗么?？.!！。]*$/i,
+  /^(?:what do you remember about me|what do you know about me|what are my memories)[?!. ]*$/i,
+];
+
+const MEMORY_MUTATION_PATTERN = /(?:记住|保存|添加|记录|删除|忘记|更新|修改).{0,24}(?:记忆|偏好|信息|习惯|我)|^(?:please\s+)?(?:remember|save|store|delete|forget|update|change)\b.{0,24}(?:memory|preference|information|about me)/i;
+
 // 仅白名单明确的普通生成任务进入无工具路径，未识别请求继续走保守路由。
 const DIRECT_CHAT_PATTERNS = [
   /^(?:你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好|你是谁|你叫什么|介绍一下你自己|你能做什么|你会做什么|你的能力是什么)[！!。.?？]?$/i,
@@ -331,6 +340,14 @@ const DIRECT_CHAT_PATTERNS = [
 export function requiresToolMessage(content: string): boolean {
   const normalized = content.trim().toLowerCase();
   return TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+// 判断消息是否只是查询用户长期记忆，避免为确定性读取启动两轮模型工具编排。
+export function isMemoryRecallMessage(content: string): boolean {
+  const normalized = content.trim().toLowerCase().replace(/\s+/g, " ");
+  return Boolean(normalized)
+    && !MEMORY_MUTATION_PATTERN.test(normalized)
+    && MEMORY_RECALL_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 // 判断消息是否可安全走无工具的快速对话路径，避免普通回答携带完整工具定义。

@@ -156,6 +156,32 @@ TOOL_INTENT_PATTERNS = (
     ),
 )
 
+MEMORY_RECALL_PATTERNS = (
+    re.compile(
+        r"^(?:你(?:还)?记得|你知道|你了解).{0,24}"
+        r"(?:我|我的(?:信息|偏好|记忆|习惯)|关于我).{0,8}[吗么?？.!！。]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:我有哪些|关于我的|我的(?:长期)?).{0,16}"
+        r"(?:记忆|信息|偏好|习惯).{0,8}[吗么?？.!！。]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^(?:你对我了解多少|你记得我什么)[吗么?？.!！。]*$", re.IGNORECASE),
+    re.compile(
+        r"^(?:what do you remember about me|what do you know about me|"
+        r"what are my memories)[?!. ]*$",
+        re.IGNORECASE,
+    ),
+)
+MEMORY_MUTATION_PATTERN = re.compile(
+    r"(?:记住|保存|添加|记录|删除|忘记|更新|修改).{0,24}"
+    r"(?:记忆|偏好|信息|习惯|我)|"
+    r"^(?:please\s+)?(?:remember|save|store|delete|forget|update|change)\b.{0,24}"
+    r"(?:memory|preference|information|about me)",
+    re.IGNORECASE,
+)
+
 # 仅白名单明确的普通生成任务进入无工具路径，未识别请求继续走保守路由。
 DIRECT_CHAT_PATTERNS = (
     re.compile(
@@ -189,6 +215,14 @@ DIRECT_CHAT_PATTERNS = (
 def requires_tool_message(content: str) -> bool:
     normalized = content.strip().lower()
     return any(pattern.search(normalized) for pattern in TOOL_INTENT_PATTERNS)
+
+
+# 判断消息是否只是查询用户长期记忆，避免为确定性读取启动两轮模型工具编排。
+def is_memory_recall_message(content: str) -> bool:
+    normalized = re.sub(r"\s+", " ", content.strip().lower())
+    return bool(normalized) and not MEMORY_MUTATION_PATTERN.search(normalized) and any(
+        pattern.search(normalized) for pattern in MEMORY_RECALL_PATTERNS
+    )
 
 
 # 判断消息是否可跳过完整工具 schema，避免普通回答触发 ReAct 编排开销。

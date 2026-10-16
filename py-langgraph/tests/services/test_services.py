@@ -228,6 +228,25 @@ class TestConversationService:
 
 class TestAgentService:
     @pytest.mark.asyncio
+    async def test_direct_memory_recall_reads_persistent_records_without_model(self, monkeypatch):
+        from src.config.settings import settings
+        from src.profile.models import Memory
+        from src.profile.service import MemoryService
+        from src.services import get_memory_recall_answer
+
+        monkeypatch.setattr(settings, "memory_enabled", True)
+
+        async def fake_get_relevant(_user_id, _max_items=10):
+            return [Memory("memory-1", "recall-user", "喜欢简洁回答", "preference", 5)]
+
+        monkeypatch.setattr(MemoryService, "get_relevant_async", fake_get_relevant)
+
+        answer = await get_memory_recall_answer("recall-user")
+
+        assert "喜欢简洁回答" in answer
+        assert "我目前记得" in answer
+
+    @pytest.mark.asyncio
     async def test_direct_protocol_response_upgrades_to_tool_agent(self, monkeypatch):
         from unittest.mock import AsyncMock
         from src.agents import graph_agents

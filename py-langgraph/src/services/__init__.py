@@ -355,6 +355,29 @@ def should_load_knowledge_context(
     )
 
 
+# 直接读取用户长期记忆并生成确定性答复，避免记忆查询经过两轮模型调用而超时。
+async def get_memory_recall_answer(user_id: str | None) -> str:
+    if not settings.memory_enabled:
+        return "当前未启用长期记忆（MEMORY_ENABLED=false），本次只能使用会话记忆。"
+    if not user_id:
+        return "当前对话没有关联用户身份，因此无法读取你的长期记忆。"
+    try:
+        from src.profile.service import MemoryService
+
+        memories = await MemoryService.get_relevant_async(user_id, 10)
+        lines = [f"- {memory.content.strip()}" for memory in memories if memory.content.strip()]
+        if not lines:
+            return "我目前没有保存关于你的长期记忆。你可以明确告诉我“请记住……”来保存偏好、习惯或个人信息。"
+        return (
+            "我目前记得这些关于你的信息：\n"
+            + "\n".join(lines)
+            + "\n\n如果有变化，可以直接告诉我更新或删除。"
+        )
+    except Exception as error:
+        logger.warning("Direct memory recall failed: %s", error)
+        return "我暂时无法读取你的长期记忆，本次没有修改任何记忆，请稍后重试。"
+
+
 XML_TOOL_STREAM_MARKERS = ("<invoke", "<function=", "<dots_function_call")
 
 
@@ -1522,6 +1545,7 @@ class AgentService:
                 build_tool_agent,
                 get_fast_path_answer,
                 is_direct_chat_message,
+                is_memory_recall_message,
             )
             from src.agents.deadline import AgentDeadline
             from src.agents.response_handler import (
@@ -1536,6 +1560,17 @@ class AgentService:
             if fast_answer:
                 schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
                 return Message("assistant", fast_answer)
+
+            if not attachment_present and is_memory_recall_message(content):
+                memory_answer = await get_memory_recall_answer(user_id)
+                schedule_answer_persistence(
+                    conversation_id,
+                    content,
+                    memory_answer,
+                    user_id or "",
+                    extract_memory=False,
+                )
+                return Message("assistant", memory_answer)
 
             conversation = await asyncio.to_thread(ConversationService.get, conversation_id)
             if (
@@ -1739,6 +1774,7 @@ class AgentService:
                 build_tool_agent,
                 get_fast_path_answer,
                 is_direct_chat_message,
+                is_memory_recall_message,
             )
             from src.agents.deadline import AgentDeadline
             from src.agents.response_handler import (
@@ -1753,6 +1789,18 @@ class AgentService:
             if fast_answer:
                 schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
                 yield {"type": "text", "text": fast_answer}
+                return
+
+            if not attachment_present and is_memory_recall_message(content):
+                memory_answer = await get_memory_recall_answer(user_id)
+                schedule_answer_persistence(
+                    conversation_id,
+                    content,
+                    memory_answer,
+                    user_id or "",
+                    extract_memory=False,
+                )
+                yield {"type": "text", "text": memory_answer}
                 return
 
             conversation = await asyncio.to_thread(ConversationService.get, conversation_id)

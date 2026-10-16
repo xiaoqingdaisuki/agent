@@ -11,6 +11,7 @@ vi.mock("../../src/agents/tool-agent.js", () => ({
   createDirectChatAgent: createDirectChatAgentMock,
   getFastPathAnswer: getFastPathAnswerMock,
   isDirectChatMessage: (content: string) => content === "你好",
+  isMemoryRecallMessage: () => false,
 }));
 
 import {

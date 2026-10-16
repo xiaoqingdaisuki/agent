@@ -180,6 +180,27 @@ def test_direct_chat_routing_skips_tools_for_ordinary_answer_styles():
     assert graph_agents.is_direct_chat_message("随便聊点什么") is False
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "你还记得我的信息吗",
+        "你记得我的偏好吗？",
+        "我有哪些长期记忆",
+        "what do you remember about me?",
+    ],
+)
+def test_recognizes_deterministic_memory_recall(question):
+    assert graph_agents.is_memory_recall_message(question) is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["请记住我喜欢咖啡", "删除我的长期记忆", "update my preferences"],
+)
+def test_does_not_classify_memory_mutations_as_recall(question):
+    assert graph_agents.is_memory_recall_message(question) is False
+
+
 def test_model_messages_keep_runtime_state_and_add_conversation_history():
     """会话记录应作为补充上下文加入模型输入，而不是替换当前状态。"""
     messages = graph_agents._model_messages(

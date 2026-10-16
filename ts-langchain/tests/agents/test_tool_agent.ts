@@ -11,6 +11,7 @@ import {
   convertXmlToolCalls,
   getFastPathAnswer,
   isDirectChatMessage,
+  isMemoryRecallMessage,
   createToolAgent,
   invalidateToolAgentCache,
   createReActPolicyMiddleware,
@@ -206,6 +207,23 @@ describe("tool agent", () => {
     expect(isDirectChatMessage("总结我刚上传的 PDF")).toBe(false);
     expect(isDirectChatMessage("明天呢？")).toBe(false);
     expect(isDirectChatMessage("随便聊点什么")).toBe(false);
+  });
+
+  it.each([
+    "你还记得我的信息吗",
+    "你记得我的偏好吗？",
+    "我有哪些长期记忆",
+    "what do you remember about me?",
+  ])("recognizes deterministic memory recall: %s", (question) => {
+    expect(isMemoryRecallMessage(question)).toBe(true);
+  });
+
+  it.each([
+    "请记住我喜欢咖啡",
+    "删除我的长期记忆",
+    "update my preferences",
+  ])("does not classify memory mutations as recall: %s", (question) => {
+    expect(isMemoryRecallMessage(question)).toBe(false);
   });
 
   it("never returns a location-specific recommendation from the static fast path", () => {
