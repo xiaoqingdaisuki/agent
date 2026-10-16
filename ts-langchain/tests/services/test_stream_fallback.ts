@@ -505,7 +505,7 @@ describe("AgentService empty streams", () => {
     expect(events.filter((event) => event.type === "text")).toHaveLength(0);
   });
 
-  it("returns visible text when a tool-enabled request times out before any answer", async () => {
+  it("returns a structured timeout error before any answer", async () => {
     createToolAgentMock.mockResolvedValue({
       streamEvents: async function* () {
         throw new AgentDeadlineError(30_000);
@@ -514,14 +514,13 @@ describe("AgentService empty streams", () => {
 
     const conversation = await ConversationService.create("timeout stream");
     const events = [];
-    for await (const event of AgentService.chatStream(conversation.id, "流式超时测试")) {
-      events.push(event);
-    }
+    await expect((async () => {
+      for await (const event of AgentService.chatStream(conversation.id, "流式超时测试")) {
+        events.push(event);
+      }
+    })()).rejects.toMatchObject({ code: "AGENT_TIMEOUT", statusCode: 504 });
 
-    expect(events).toContainEqual({
-      type: "text",
-      text: "AI助手响应超时，请稍后重试。",
-    });
+    expect(events.filter((event) => event.type === "text")).toHaveLength(0);
   });
 
   it("does not resend streamed text when a request times out", async () => {

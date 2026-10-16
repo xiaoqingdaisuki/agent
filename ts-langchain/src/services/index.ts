@@ -39,6 +39,7 @@ import {
   AgentDeadline,
   isClientAbortError,
   isAgentDeadlineError,
+  isModelTimeoutError,
   runWithAgentDeadline,
 } from "../agents/deadline.js";
 import {
@@ -132,6 +133,10 @@ export interface AttachmentContext {
   sessionDocuments?: SessionDocument[];
   documentIds?: string[];
   images?: AttachmentImage[];
+}
+
+export interface AnswerPersistenceOptions {
+  extractMemory?: boolean;
 }
 
 // 将后台任务加入有界队列，队列饱和时优先保护用户请求关键路径。
@@ -455,6 +460,7 @@ export function scheduleAnswerPersistence(
   content: string,
   answer: string,
   userId?: string,
+  options: AnswerPersistenceOptions = {},
 ): Promise<void> {
   const label = `answer:${conversationId}`;
   const previous = backgroundChains.get(label);
@@ -469,7 +475,7 @@ export function scheduleAnswerPersistence(
       await appendMessage(agentHistoryThreadId, new AIMessage(answer));
       if (userId) {
         try {
-          if (config.MEMORY_AUTO_EXTRACT) {
+          if (options.extractMemory !== false && config.MEMORY_AUTO_EXTRACT) {
             await MemoryService.extractMemoriesFromConversation(userId, content, answer);
           }
           invalidateMemoryContext(userId);
@@ -1104,6 +1110,18 @@ function isExplicitKnowledgeQuery(content: string): boolean {
     || /(?:知识库|资料库).{0,10}(?:查询|搜索|检索|查找)/.test(normalized);
 }
 
+// 判断本轮是否需要同步召回持久知识库，普通写作请求不再触发网关查询。
+function shouldLoadKnowledgeContext(
+  content: string,
+  documentIds?: string[],
+): boolean {
+  return config.MEMORY_ENABLED
+    && (
+      isExplicitKnowledgeQuery(content)
+      || Boolean(documentIds?.length)
+    );
+}
+
 export class AgentService {
   // 执行单轮对话，处理工具调用、记忆提取和错误转换
   static async chat(
@@ -1151,9 +1169,11 @@ export class AgentService {
 
       // 注入用户记忆，但不让记忆网关拖慢模型首响应。
       if (userId) memoryContext.push(...(await loadMemoryContext(userId)));
-      memoryContext.push(
-        ...(await loadKnowledgeContext(content, userId, attachmentContext?.documentIds)),
-      );
+      if (shouldLoadKnowledgeContext(content, attachmentContext?.documentIds)) {
+        memoryContext.push(
+          ...(await loadKnowledgeContext(content, userId, attachmentContext?.documentIds)),
+        );
+      }
       const agentContent = buildAttachmentContent(content, attachmentContext);
 
       const agent =
@@ -1238,7 +1258,7 @@ export class AgentService {
         errorMessage: error?.message,
         errorStack: error?.stack,
       });
-      if (isAgentDeadlineError(error)) {
+      if (isAgentDeadlineError(error) || isModelTimeoutError(error)) {
         throw new BusinessError(
           BusinessErrorCode.AGENT_TIMEOUT,
           "AI助手响应超时，请稍后重试。",
@@ -1285,6 +1305,7 @@ export class AgentService {
     let fullAnswer = "";
     let streamTextBuffer = "";
     let agentHistoryThreadId = conversationId;
+    const startedAt = Date.now();
     try {
       await waitForConversationPersistence(conversationId);
       const hasAttachments = Boolean(
@@ -1319,9 +1340,11 @@ export class AgentService {
 
       // 注入用户记忆，但不让记忆网关拖慢模型首响应。
       if (userId) memoryContext.push(...(await loadMemoryContext(userId)));
-      memoryContext.push(
-        ...(await loadKnowledgeContext(content, userId, attachmentContext?.documentIds)),
-      );
+      if (shouldLoadKnowledgeContext(content, attachmentContext?.documentIds)) {
+        memoryContext.push(
+          ...(await loadKnowledgeContext(content, userId, attachmentContext?.documentIds)),
+        );
+      }
       const agentContent = buildAttachmentContent(content, attachmentContext);
 
       if (conversation?.mode === "knowledge" && !hasAttachments) {
@@ -1576,7 +1599,16 @@ export class AgentService {
       if (error instanceof ModelResponseError) {
         throw new BusinessError(BusinessErrorCode.MODEL_RESPONSE_INVALID, error.message, 502);
       }
-      if (isAgentDeadlineError(error)) {
+      if (isAgentDeadlineError(error) || isModelTimeoutError(error)) {
+        console.error("Agent stream timeout", {
+          event: "agent_stream_timeout",
+          conversationId,
+          userId,
+          timeoutSource: isAgentDeadlineError(error) ? "agent_deadline" : "model_client",
+          elapsedMs: Date.now() - startedAt,
+          errorName: error?.name,
+          errorMessage: error?.message,
+        });
         // 超时但有部分结果 → 返回部分内容 + 继续提示
         if (fullAnswer.trim()) {
           const partial = appendContinuationHint(fullAnswer);
@@ -1586,6 +1618,7 @@ export class AgentService {
             content,
             partial,
             userId,
+            { extractMemory: false },
           );
           yield {
             type: "text",
@@ -1594,16 +1627,11 @@ export class AgentService {
           };
           return;
         }
-        const timeoutAnswer = "AI助手响应超时，请稍后重试。";
-        scheduleAnswerPersistence(
-          conversationId,
-          agentHistoryThreadId,
-          content,
-          timeoutAnswer,
-          userId,
+        throw new BusinessError(
+          BusinessErrorCode.AGENT_TIMEOUT,
+          "AI助手响应超时，请稍后重试。",
+          504,
         );
-        yield { type: "text", text: timeoutAnswer };
-        return;
       }
       console.error("Agent stream failed", {
         conversationId,

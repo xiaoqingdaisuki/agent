@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 from datetime import datetime
 from typing import Any
 
@@ -192,13 +191,8 @@ class MemoryService:
             except Exception:
                 pass
 
-        # 第二层：LLM 异步提取（不阻塞主流程）
-        thread = threading.Thread(
-            target=MemoryService._extract_with_llm,
-            args=(user_id, question, answer),
-            daemon=True,
-        )
-        thread.start()
+        # 第二层：由调用方的后台线程等待 LLM 提取，确保 D1 写入完成。
+        MemoryService._extract_with_llm(user_id, question, answer)
 
         return regex_memories
 

@@ -187,6 +187,7 @@ describe("tool agent", () => {
     expect(isDirectChatMessage("请用三句话解释递归")).toBe(true);
     expect(isDirectChatMessage("请解释1990年的计算机发展历史")).toBe(true);
     expect(isDirectChatMessage("写一个发生在2020年的故事")).toBe(true);
+    expect(isDirectChatMessage("请写一篇5000字左右的都市恋爱短篇文章")).toBe(true);
     expect(isDirectChatMessage("解释内存地址的含义")).toBe(true);
     expect(isDirectChatMessage("写两句温和的欢迎语")).toBe(true);
     expect(isDirectChatMessage("写一个 Python 去重函数")).toBe(true);

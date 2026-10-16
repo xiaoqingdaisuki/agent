@@ -20,6 +20,7 @@ import {
   createQARecord,
 } from "./index.js";
 import { config } from "../config/index.js";
+import { retainBackgroundTask } from "../runtime.js";
 import { getRepositories } from "../repositories/index.js";
 import type { MemorySearchResultData } from "../repositories/types.js";
 
@@ -246,10 +247,11 @@ export class MemoryService {
       }
     }
 
-    // 第二层：LLM 异步提取（不阻塞主流程）
-    MemoryService._extractWithLLM(userId, question, answer).catch(() => {
+    // 第二层：注册到 Worker 生命周期，确保后台 LLM 提取完成后再结束 D1 写入。
+    const extraction = MemoryService._extractWithLLM(userId, question, answer).catch(() => {
       // LLM 提取失败静默降级
     });
+    retainBackgroundTask(extraction);
   }
 
   /**

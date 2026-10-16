@@ -41,7 +41,7 @@ const envSchema = z.object({
     .int()
     .min(30_000)
     .max(300_000)
-    .default(120_000).transform(capAgentDeadline),
+    .default(240_000).transform(capAgentDeadline),
   AGENT_DEADLINE_WITH_TOOLS_MS: z.coerce
     .number()
     .int()
@@ -59,8 +59,8 @@ const envSchema = z.object({
     .int()
     .min(5_000)
     .max(120_000)
-    .default(30_000),
-  LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(2).default(1),
+    .default(120_000),
+  LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(2).default(0),
   LLM_MAX_CONTEXT_TOKENS: z.coerce.number().int().min(1_024).max(128_000).default(128_000),
   LLM_MAX_INPUT_TOKENS: z.coerce.number().int().min(1_024).max(48_000).default(48_000),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(16_000).default(16_000),
@@ -131,7 +131,7 @@ const envSchema = z.object({
       (v) => v === "hybrid" || v === "sql",
       { message: "MEMORY_SEARCH_MODE must be 'hybrid' or 'sql'" },
     ),
-  MEMORY_AUTO_EXTRACT: z.preprocess(parseBooleanEnv, z.boolean()).default(false),
+  MEMORY_AUTO_EXTRACT: z.preprocess(parseBooleanEnv, z.boolean()).default(true),
   MEMORY_MAX_ACTIVE_PER_USER: z.coerce.number().int().min(1).max(200).default(50),
   MEMORY_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(15_000),
   BACKGROUND_TASK_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),

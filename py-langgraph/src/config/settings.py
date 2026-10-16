@@ -14,11 +14,11 @@ class Settings(BaseSettings):
         "https://api.cloudflare.com/client/v4/accounts/572890169551ba29ece8e74c7b27c215/ai/run"
     )
     image_model: str = "@cf/black-forest-labs/flux-2-dev"
-    agent_deadline_ms: int = Field(default=120000, ge=30000, le=300000)
+    agent_deadline_ms: int = Field(default=240000, ge=30000, le=300000)
     agent_deadline_with_tools_ms: int = Field(default=240000, ge=60000, le=600000)
     server_request_timeout_ms: int = Field(default=310000, ge=60000, le=600000)
-    llm_timeout_ms: int = Field(default=30000, ge=5000, le=120000)
-    llm_max_retries: int = Field(default=1, ge=0, le=2)
+    llm_timeout_ms: int = Field(default=120000, ge=5000, le=120000)
+    llm_max_retries: int = Field(default=0, ge=0, le=2)
     llm_max_context_tokens: int = Field(default=128000, ge=1024, le=128000)
     llm_max_input_tokens: int = Field(default=48000, ge=1024, le=48000)
     llm_max_output_tokens: int = Field(default=16000, ge=256, le=16000)
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
         ),
     )
     memory_search_mode: Literal["hybrid", "sql"] = "hybrid"
-    memory_auto_extract: bool = False
+    memory_auto_extract: bool = True
     memory_max_active_per_user: int = Field(default=50, ge=1, le=200)
     memory_request_timeout_ms: int = Field(default=15000, ge=1000, le=30000)
 

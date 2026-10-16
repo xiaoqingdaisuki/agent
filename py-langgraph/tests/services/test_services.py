@@ -770,8 +770,8 @@ class TestAgentService:
         assert error.value.status_code == 502
 
     @pytest.mark.asyncio
-    async def test_stream_returns_visible_text_when_tool_request_times_out(self, monkeypatch):
-        """A timeout before the first answer must not become an empty SSE stream."""
+    async def test_stream_returns_structured_timeout_when_tool_request_times_out(self, monkeypatch):
+        """A timeout before the first answer must become a retriable business error."""
         from src.agents import graph_agents
 
         class FakeAgent:
@@ -782,14 +782,16 @@ class TestAgentService:
         conversation = ConversationService.create("timeout stream")
         monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
 
-        events = [
-            event
-            async for event in AgentService.chat_stream(
-                conversation.id, "南山有什么好吃的？"
-            )
-        ]
+        with pytest.raises(BusinessError) as error:
+            [
+                event
+                async for event in AgentService.chat_stream(
+                    conversation.id, "南山有什么好吃的？"
+                )
+            ]
 
-        assert events == [{"type": "text", "text": "AI助手响应超时，请稍后重试。"}]
+        assert error.value.code == BusinessErrorCode.AGENT_TIMEOUT
+        assert error.value.status_code == 504
 
     @pytest.mark.asyncio
     async def test_stream_timeout_does_not_resend_streamed_text(self, monkeypatch):

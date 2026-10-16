@@ -170,7 +170,7 @@ DIRECT_CHAT_PATTERNS = (
     ),
     re.compile(r"(?:翻译|译成|\btranslate\b)", re.IGNORECASE),
     re.compile(
-        r"(?:(?:写|撰写|改写|润色|创作|生成).{0,24}(?:文案|欢迎语|故事|邮件|摘要|代码|函数|脚本|sql|正则)|"
+        r"(?:(?:写|撰写|改写|润色|创作|生成).{0,24}(?:文案|欢迎语|故事|文章|小说|短篇|长文|邮件|摘要|代码|函数|脚本|sql|正则)|"
         r"(?:代码|函数|脚本|sql|正则).{0,20}(?:写|实现|示例)|"
         r"\b(?:write|implement).{0,24}(?:code|function|script|regex|sql))",
         re.IGNORECASE,

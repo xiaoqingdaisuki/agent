@@ -234,7 +234,17 @@ def is_model_timeout_error(error: BaseException) -> bool:
     visited: set[int] = set()
     while current is not None and id(current) not in visited:
         visited.add(id(current))
-        if current.__class__.__name__ in {"APITimeoutError", "ReadTimeout"}:
+        if current.__class__.__name__ in {
+            "APITimeoutError",
+            "ConnectTimeout",
+            "ConnectTimeoutError",
+            "ReadTimeout",
+            "ReadTimeoutError",
+        } or re.search(
+            r"timed? out|timeout|ETIMEDOUT|connect timeout|read timeout",
+            str(current),
+            re.IGNORECASE,
+        ):
             return True
         current = current.__cause__ or current.__context__
     return False
@@ -286,7 +296,7 @@ def build_attachment_content(content: str, attachments: dict[str, Any] | None) -
     ]
 
 
-# 在记忆启用时按用户范围自动召回知识库，保证后续普通对话也能使用已上传文档。
+# 仅在显式知识库请求或指定文档时召回知识库，避免普通请求阻塞模型响应。
 async def load_knowledge_context(
     content: str,
     user_id: str | None,
@@ -328,6 +338,20 @@ def has_attachments(attachments: dict[str, Any] | None) -> bool:
         attachments.get("session_documents")
         or attachments.get("document_ids")
         or attachments.get("images")
+    )
+
+
+# 判断本轮是否需要同步召回持久知识库，普通写作请求不再触发网关查询。
+def should_load_knowledge_context(
+    content: str,
+    document_ids: list[str] | None = None,
+) -> bool:
+    return bool(
+        settings.memory_enabled
+        and (
+            is_explicit_knowledge_query(content)
+            or bool(document_ids)
+        )
     )
 
 
@@ -386,13 +410,14 @@ def schedule_answer_persistence(
     content: str,
     answer: str,
     user_id: str = "",
+    extract_memory: bool = True,
 ) -> asyncio.Task[None]:
     # 同步写入会话、问答历史、记忆和画像。
     def persist() -> None:
         if user_id:
             from src.profile.service import MemoryService, ProfileService
 
-            if settings.memory_auto_extract:
+            if extract_memory and settings.memory_auto_extract:
                 MemoryService.extract_memories_from_conversation(user_id, content, answer)
             ProfileService.update(user_id)
 
@@ -1488,6 +1513,7 @@ class AgentService:
         tool_identity: dict[str, str | list[str]] | None = None,
         attachment_context: dict[str, Any] | None = None,
     ) -> Message:
+        started_at = asyncio.get_running_loop().time()
         try:
             await wait_for_conversation_persistence(conversation_id)
             from src.agents.graph_agents import (
@@ -1525,7 +1551,10 @@ class AgentService:
                 return Message("assistant", reply_content)
 
             knowledge_context = ""
-            if not conversation or conversation.mode != "knowledge" or attachment_present:
+            if should_load_knowledge_context(
+                content,
+                (attachment_context or {}).get("document_ids"),
+            ):
                 knowledge_context = await load_knowledge_context(
                     content,
                     user_id,
@@ -1614,7 +1643,18 @@ class AgentService:
 
             return reply
 
-        except TimeoutError:
+        except TimeoutError as error:
+            logger.error(
+                "Agent chat timeout",
+                extra={
+                    "event": "agent_chat_timeout",
+                    "conversation_id": conversation_id,
+                    "user_id": user_id,
+                    "elapsed_ms": round((asyncio.get_running_loop().time() - started_at) * 1000),
+                    "error_type": error.__class__.__name__,
+                    "error_message": str(error),
+                },
+            )
             raise BusinessError(
                 BusinessErrorCode.AGENT_TIMEOUT,
                 "AI助手响应超时，请稍后重试。",
@@ -1631,6 +1671,23 @@ class AgentService:
                     BusinessErrorCode.RATE_LIMITED,
                     "AI 服务并发已满，请稍后重试",
                     429,
+                ) from error
+            if is_model_timeout_error(error):
+                logger.error(
+                    "Agent chat model timeout",
+                    extra={
+                        "event": "agent_chat_model_timeout",
+                        "conversation_id": conversation_id,
+                        "user_id": user_id,
+                        "elapsed_ms": round((asyncio.get_running_loop().time() - started_at) * 1000),
+                        "error_type": error.__class__.__name__,
+                        "error_message": str(error),
+                    },
+                )
+                raise BusinessError(
+                    BusinessErrorCode.AGENT_TIMEOUT,
+                    "AI助手响应超时，请稍后重试。",
+                    504,
                 ) from error
             if "rate limit" in error_msg.lower() or "429" in error_msg:
                 raise BusinessError(
@@ -1666,11 +1723,11 @@ class AgentService:
         tool_identity: dict[str, str | list[str]] | None = None,
         attachment_context: dict[str, Any] | None = None,
     ):
+        started_at = asyncio.get_running_loop().time()
         full_answer = ""
         stream_text_buffer = ""
         emitted_text = False
         observed_tool_event = False
-        last_tool_output = ""
         react_summary = None
         root_answer = ""
         stream_finish_reason = None
@@ -1713,7 +1770,10 @@ class AgentService:
                 return
 
             knowledge_context = ""
-            if not conversation or conversation.mode != "knowledge" or attachment_present:
+            if should_load_knowledge_context(
+                content,
+                (attachment_context or {}).get("document_ids"),
+            ):
                 knowledge_context = await load_knowledge_context(
                     content,
                     user_id,
@@ -1902,11 +1962,6 @@ class AgentService:
                                 ):
                                     continue
                                 observed_tool_event = True
-                                tool_output = get_stream_text(
-                                    event.get("data", {}).get("output")
-                                ).strip()
-                                if tool_output:
-                                    last_tool_output = tool_output
                                 yield {
                                     "type": "tool",
                                     "tool_name": event.get("name") or "tool",
@@ -2045,11 +2100,27 @@ class AgentService:
                     "react": react_summary,
                 }
 
-        except TimeoutError:
+        except TimeoutError as error:
+            logger.error(
+                "Agent stream timeout",
+                extra={
+                    "event": "agent_stream_timeout",
+                    "conversation_id": conversation_id,
+                    "user_id": user_id,
+                    "timeout_source": "agent_deadline",
+                    "elapsed_ms": round((asyncio.get_running_loop().time() - started_at) * 1000),
+                    "error_type": error.__class__.__name__,
+                    "error_message": str(error),
+                },
+            )
             if full_answer.strip():
                 partial = append_continuation_hint(full_answer)
                 schedule_answer_persistence(
-                    conversation_id, content, partial, user_id or ""
+                    conversation_id,
+                    content,
+                    partial,
+                    user_id or "",
+                    extract_memory=False,
                 )
                 yield {
                     "type": "text",
@@ -2057,11 +2128,11 @@ class AgentService:
                     "partial": True,
                 }
             else:
-                timeout_answer = "AI助手响应超时，请稍后重试。"
-                schedule_answer_persistence(
-                    conversation_id, content, timeout_answer, user_id or ""
+                raise BusinessError(
+                    BusinessErrorCode.AGENT_TIMEOUT,
+                    "AI助手响应超时，请稍后重试。",
+                    504,
                 )
-                yield {"type": "text", "text": timeout_answer}
         except BusinessError:
             raise
         except ModelResponseError as error:
@@ -2075,17 +2146,33 @@ class AgentService:
                     429,
                 ) from error
             if is_model_timeout_error(error):
+                logger.error(
+                    "Agent stream model timeout",
+                    extra={
+                        "event": "agent_stream_model_timeout",
+                        "conversation_id": conversation_id,
+                        "user_id": user_id,
+                        "timeout_source": "model_client",
+                        "elapsed_ms": round((asyncio.get_running_loop().time() - started_at) * 1000),
+                        "error_type": error.__class__.__name__,
+                        "error_message": str(error),
+                    },
+                )
                 if full_answer.strip():
                     timeout_answer = append_continuation_hint(full_answer)
                     suffix = timeout_answer[len(full_answer) :]
-                elif last_tool_output:
-                    timeout_answer = last_tool_output
-                    suffix = timeout_answer
                 else:
-                    timeout_answer = "AI助手响应超时，请稍后重试。"
-                    suffix = timeout_answer
+                    raise BusinessError(
+                        BusinessErrorCode.AGENT_TIMEOUT,
+                        "AI助手响应超时，请稍后重试。",
+                        504,
+                    ) from error
                 schedule_answer_persistence(
-                    conversation_id, content, timeout_answer, user_id or ""
+                    conversation_id,
+                    content,
+                    timeout_answer,
+                    user_id or "",
+                    extract_memory=False,
                 )
                 if suffix:
                     yield {"type": "text", "text": suffix, "partial": True}

@@ -108,21 +108,35 @@ export async function runWithAgentDeadline<T>(
   }
 }
 
-// 判断错误是否为 Agent 超时或中断错误
+// 判断错误是否由 Agent 自身的总时限触发。
 export function isAgentDeadlineError(error: unknown): boolean {
-  return (
-    error instanceof AgentDeadlineError ||
-    (error instanceof Error &&
-      (error.name === "AbortError" || error.name === "TimeoutError"))
-  );
+  return error instanceof AgentDeadlineError;
+}
+
+// 判断错误链中是否包含模型客户端或上游网络超时。
+export function isModelTimeoutError(error: unknown): boolean {
+  let current: unknown = error;
+  const visited = new Set<unknown>();
+  while (current instanceof Error && !visited.has(current)) {
+    visited.add(current);
+    if (
+      current.name === "TimeoutError"
+      || current.name === "ConnectTimeoutError"
+      || /timed? out|timeout|ETIMEDOUT|UND_ERR_(?:CONNECT|HEADERS|BODY)_TIMEOUT/i.test(current.message)
+    ) {
+      return true;
+    }
+    current = (current as Error & { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 // 判断错误是否由客户端主动断开请求引起。
 export function isClientAbortError(error: unknown): boolean {
   return (
     error instanceof Error &&
-    (error.name === "AbortError" ||
-      error.message === "Client disconnected" ||
-      error.message === "The operation was aborted")
+    /^(?:Client disconnected|The operation was aborted|This operation was aborted|Request aborted)$/i.test(
+      error.message,
+    )
   );
 }

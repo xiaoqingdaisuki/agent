@@ -12,8 +12,12 @@
   "vars": {
     "AGENT_RUNTIME": "workers",
     "MEMORY_ENABLED": "true",
-    "MEMORY_AUTO_EXTRACT": "false",
+    "MEMORY_AUTO_EXTRACT": "true",
     "MEMORY_REQUEST_TIMEOUT_MS": "30000",
+    "AGENT_DEADLINE_MS": "240000",
+    "AGENT_DEADLINE_WITH_TOOLS_MS": "240000",
+    "LLM_TIMEOUT_MS": "120000",
+    "LLM_MAX_RETRIES": "0",
     "OPENAI_MODEL": "dots3-note-prev",
     "CLOUDFLARE_AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/572890169551ba29ece8e74c7b27c215/default/custom-agent-dots/v1",
     "IMAGE_MODEL": "@cf/black-forest-labs/flux-2-dev",
