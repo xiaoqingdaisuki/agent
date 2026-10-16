@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import aclosing
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
@@ -6,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from src.api.auth import get_agent_tool_identity, require_agent_user_id
 from src.api.request_logging import log_request_error
-from src.api.sse import SseEventSequencer, encode_sse_heartbeat, with_sse_heartbeats
+from src.api.sse import SseEventSequencer, encode_sse_heartbeat, with_sse_heartbeats, terminate_stream_turn, begin_stream_turn
 from src.services import (
     AgentService,
     BusinessError,
@@ -33,13 +34,14 @@ async def stream(payload: StreamRequest, request: Request):
     """流式对话 — 使用 Server-Sent Events"""
     from fastapi.responses import StreamingResponse
 
+    request_deadline = asyncio.get_running_loop().time() + 270
     trusted_user_id = require_agent_user_id(request, payload.user_id)
     tool_identity = get_agent_tool_identity(request, payload.user_id)
     thread_id = payload.thread_id or str(uuid4())
 
     # 确保会话存在于当前仓储，并校验传入 thread_id 的用户归属。
-    ConversationService.ensure(thread_id, trusted_user_id)
-    turn, created = TurnService.begin(
+    await asyncio.to_thread(ConversationService.ensure, thread_id, trusted_user_id)
+    turn, created = await begin_stream_turn(
         thread_id, trusted_user_id, payload.message, payload.client_message_id
     )
     completed = None if created else TurnService.completed_message(turn)
@@ -51,10 +53,10 @@ async def stream(payload: StreamRequest, request: Request):
         sse_events = SseEventSequencer(turn["id"])
         full_answer = ""
         turn_completed = completed is not None
-        yield sse_events.event(
-            "meta", {"conversation_id": thread_id, "thread_id": thread_id, "turn_id": turn["id"]}
-        )
         try:
+            yield sse_events.event(
+                "meta", {"conversation_id": thread_id, "thread_id": thread_id, "turn_id": turn["id"]}
+            )
             if completed:
                 yield sse_events.event(
                     "text",
@@ -65,43 +67,45 @@ async def stream(payload: StreamRequest, request: Request):
             events = AgentService.chat_stream(
                 thread_id, payload.message, user_id=trusted_user_id, tool_identity=tool_identity
             )
-            async for event in with_sse_heartbeats(events):
-                if await request.is_disconnected():
-                    TurnService.terminate(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
-                    return
-                if event is None:
-                    yield encode_sse_heartbeat()
-                    continue
-                if event["type"] == "text":
-                    full_answer += event["text"]
-                    response_payload = {
-                        "delta": event["text"],
-                        "text": event["text"],
-                        "partial": event.get("partial", False),
-                    }
-                    event_name = "text"
-                elif event["type"] == "tool":
-                    response_payload = {
-                        "event": "tool",
-                        "tool_name": event["tool_name"],
-                        "status": event["status"],
-                        "call_id": event["call_id"],
-                        "duration_ms": event.get("duration_ms"),
-                    }
-                    event_name = "tool"
-                else:
-                    response_payload = {
-                        "state": event.get("state"),
-                        "stop_reason": event.get("stop_reason"),
-                        "react": event.get("react"),
-                    }
-                    event_name = event.get("event", "agent")
-                yield sse_events.event(
-                    event_name,
-                    response_payload,
-                )
+            async with aclosing(with_sse_heartbeats(events, timeout_seconds=max(0.001, request_deadline - asyncio.get_running_loop().time()))) as stream_events:
+                async for event in stream_events:
+                    if await request.is_disconnected():
+                        await terminate_stream_turn(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
+                        turn_completed = True
+                        return
+                    if event is None:
+                        yield encode_sse_heartbeat()
+                        continue
+                    if event["type"] == "text":
+                        full_answer += event["text"]
+                        response_payload = {
+                            "delta": event["text"],
+                            "text": event["text"],
+                            "partial": event.get("partial", False),
+                        }
+                        event_name = "text"
+                    elif event["type"] == "tool":
+                        response_payload = {
+                            "event": "tool",
+                            "tool_name": event["tool_name"],
+                            "status": event["status"],
+                            "call_id": event["call_id"],
+                            "duration_ms": event.get("duration_ms"),
+                        }
+                        event_name = "tool"
+                    else:
+                        response_payload = {
+                            "state": event.get("state"),
+                            "stop_reason": event.get("stop_reason"),
+                            "react": event.get("react"),
+                        }
+                        event_name = event.get("event", "agent")
+                    yield sse_events.event(
+                        event_name,
+                        response_payload,
+                    )
             assistant = Message("assistant", full_answer)
-            TurnService.complete(turn["id"], trusted_user_id, assistant)
+            await asyncio.to_thread(TurnService.complete, turn["id"], trusted_user_id, assistant)
             turn_completed = True
         except BusinessError as error:
             log_request_error(
@@ -109,18 +113,25 @@ async def stream(payload: StreamRequest, request: Request):
                 error,
                 {"thread_id": thread_id, "user_id": trusted_user_id, "stream": True},
             )
+            if not turn_completed:
+                try:
+                    await terminate_stream_turn(turn["id"], trusted_user_id, False, error.code.value)
+                    turn_completed = True
+                except Exception:
+                    pass
             yield sse_events.event(
                 "error", {"ok": False, "error": error.to_dict().get("error", error.to_dict())}
             )
+
+        except TimeoutError:
+            await terminate_stream_turn(turn["id"], trusted_user_id, False, "AGENT_TIMEOUT")
+            turn_completed = True
+            yield sse_events.event("error", {"error": {"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"}})
+        except (asyncio.CancelledError, GeneratorExit):
             if not turn_completed:
                 try:
-                    TurnService.terminate(turn["id"], trusted_user_id, False, error.code.value)
-                except Exception:
-                    pass
-        except asyncio.CancelledError:
-            if not turn_completed:
-                try:
-                    TurnService.terminate(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
+                    await terminate_stream_turn(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
+                    turn_completed = True
                 except Exception:
                     pass
             log_request_error(
@@ -133,15 +144,19 @@ async def stream(payload: StreamRequest, request: Request):
             log_request_error(
                 request, error, {"thread_id": thread_id, "user_id": trusted_user_id, "stream": True}
             )
+            if not turn_completed:
+                try:
+                    await terminate_stream_turn(turn["id"], trusted_user_id, False, "INTERNAL_ERROR")
+                    turn_completed = True
+                except Exception:
+                    pass
             yield sse_events.event(
                 "error",
                 {"ok": False, "error": {"code": "INTERNAL_ERROR", "message": "处理请求时发生错误"}},
             )
+        finally:
             if not turn_completed:
-                try:
-                    TurnService.terminate(turn["id"], trusted_user_id, False, "INTERNAL_ERROR")
-                except Exception:
-                    pass
+                await terminate_stream_turn(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
         yield sse_events.done()
 
     return StreamingResponse(

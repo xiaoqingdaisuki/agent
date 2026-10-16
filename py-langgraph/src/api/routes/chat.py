@@ -13,7 +13,7 @@ from src.agents.graph_agents import (
 from src.agents.react_policy import summarize_react_state
 from src.agents.deadline import AgentDeadline
 from src.config.settings import settings
-from src.agents.response_handler import get_finish_reason, is_likely_truncated, maybe_append_continuation_hint
+from src.agents.response_handler import ModelResponseError, get_finish_reason, is_likely_truncated, maybe_append_continuation_hint
 from src.api.auth import get_agent_tool_identity, require_agent_user_id
 from src.api.request_logging import log_request_error
 from src.services import (
@@ -122,8 +122,16 @@ async def chat(payload: ChatRequest, request: Request):
                     },
                     config=config,
                 )
+                if is_direct_chat_message(payload.message) and not extract_agent_output_text(result).strip():
+                    result = await build_tool_agent().ainvoke(
+                        {"messages": [{"role": "user", "content": payload.message}],
+                         "conversation_history": conversation_history, "user_id": trusted_user_id},
+                        config=config,
+                    )
 
-        reply_text = extract_agent_output_text(result) or "抱歉，我没有理解您的问题。"
+        reply_text = extract_agent_output_text(result)
+        if not reply_text.strip():
+            raise ModelResponseError()
         react_summary = summarize_react_state(result)
 
         # 检测 LLM 输出截断（finish_reason=length 或文本 abrupt ending）
@@ -156,6 +164,10 @@ async def chat(payload: ChatRequest, request: Request):
             react=react_summary,
             turn_id=turn["id"],
         )
+    except ModelResponseError as error:
+        if active_turn_id:
+            TurnService.terminate(active_turn_id, trusted_user_id, False, error.code)
+        raise HTTPException(status_code=502, detail={"code": error.code, "message": str(error)}) from error
     except BusinessError as error:
         if active_turn_id:
             try:

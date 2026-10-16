@@ -1,0 +1,42 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ts-langchain-agent",
+  "account_id": "572890169551ba29ece8e74c7b27c215",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat", "enable_nodejs_http_server_modules"],
+  "workers_dev": true,
+  "alias": { "pino": "./node_modules/pino/pino.js" },
+  "services": [{ "binding": "MEMORY_GATEWAY", "service": "cloudflare-service" }],
+  "ai": { "binding": "AI" },
+  "vars": {
+    "AGENT_RUNTIME": "workers",
+    "MEMORY_ENABLED": "true",
+    "MEMORY_AUTO_EXTRACT": "false",
+    "MEMORY_REQUEST_TIMEOUT_MS": "30000",
+    "OPENAI_MODEL": "dots3-note-prev",
+    "CLOUDFLARE_AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/572890169551ba29ece8e74c7b27c215/default/custom-agent-dots/v1",
+    "IMAGE_MODEL": "@cf/black-forest-labs/flux-2-dev",
+    "IMAGE_BASE_URL": "https://api.cloudflare.com/client/v4/accounts/572890169551ba29ece8e74c7b27c215/ai/run",
+    "CLOUDFLARE_MEMORY_BASE_URL": "https://cloudflare-service.internal",
+    "LLM_MAX_CONCURRENCY": "2",
+    "BACKGROUND_TASK_CONCURRENCY": "2",
+    "LLM_MAX_INPUT_TOKENS": "16000",
+    "HISTORY_CONTEXT_TOKEN_BUDGET": "12000"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "persist": true,
+      "head_sampling_rate": 1
+    }
+  }
+}

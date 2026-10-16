@@ -9,6 +9,7 @@
 import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 import { getRepositories } from "../repositories/index.js";
 import { config } from "../config/index.js";
+import { createRuntimeCache } from "./runtime-cache.js";
 
 export const MAX_HISTORY_TOKENS = Math.min(
   config.HISTORY_CONTEXT_TOKEN_BUDGET,
@@ -17,7 +18,8 @@ export const MAX_HISTORY_TOKENS = Math.min(
 const HISTORY_LOAD_PAGE_SIZE = 200;
 
 // 进程内对话历史（仅当前运行上下文使用）
-const conversations = new Map<string, BaseMessage[]>();
+const conversations = createRuntimeCache<string, BaseMessage[]>(64, 4_000_000,
+  (messages) => messages.reduce((bytes, message) => bytes + messageContentToText(message.content).length * 2, 0));
 
 // 将多种 LangChain 消息内容归一化为可估算 token 的文本。
 function messageContentToText(content: BaseMessage["content"]): string {

@@ -22,6 +22,34 @@ import {
 } from "../../src/agents/react-policy.js";
 
 describe("tool agent", () => {
+  it.each([
+    "你知道2026 APEC吗 能给我做个详细的介绍吗",
+    "给我介绍点深圳特色美食具体到门店限定在福田区和南山区内以及在深圳的生活小技巧",
+    "介绍2027年的展会", "介绍南山餐厅门店地址",
+  ])("keeps search available for factual introductions: %s", (question) => {
+    expect(isDirectChatMessage(question)).toBe(false);
+  });
+
+  it.each([
+    "<dots_function_call><search><query>APEC</query></invoke></dots_function_call>",
+    '<dots_function_call><invoke="search"><<arg_key>query</arg_key><arg_value>APEC</arg_value></invoke></dots_function_call>',
+  ])("rejects malformed provider calls without executing them", (xml) => {
+    expect(() => convertXmlToolCalls(new AIMessage(xml))).toThrow("无法解析的工具调用");
+  });
+
+  it("retries invalid protocol once and executes only the corrected call", async () => {
+    const calculate = vi.fn(async () => "4");
+    const calculator = tool(calculate, { name: "calculator", description: "Calculate", schema: z.object({ expression: z.string() }) });
+    const model = new FakeListChatModel({ responses: [
+      "<dots_function_call><search></invoke></dots_function_call>",
+      '<invoke name="calculator"><parameter name="expression">2+2</parameter></invoke>', "4",
+    ] });
+    vi.spyOn(model, "bindTools").mockImplementation(() => model as any);
+    const agent = createAgent({ model, tools: [calculator], middleware: [createReActPolicyMiddleware()] });
+    const result = await agent.invoke({ messages: [{ role: "user", content: "计算2+2" }] });
+    expect(result.messages.at(-1)?.content).toBe("4");
+    expect(calculate).toHaveBeenCalledTimes(1);
+  });
   const originalApiKey = process.env.OPENAI_API_KEY;
 
   beforeAll(() => {

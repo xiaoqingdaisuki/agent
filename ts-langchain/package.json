@@ -8,7 +8,10 @@
     "start": "node dist/index.js",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "dev:worker": "wrangler dev",
+    "build:worker": "wrangler deploy --dry-run",
+    "deploy:worker": "wrangler deploy"
   },
   "dependencies": {
     "@fastify/cors": "^8.4",
@@ -19,15 +22,18 @@
     "@langchain/openai": "^1.5.10",
     "dotenv": "^16.3",
     "fastify": "^4.26",
+    "find-my-way": "8.2.2",
     "langchain": "^1.5.10",
     "mammoth": "^1.12.2",
-    "pdf-parse": "^2.4.5",
+    "unpdf": "^1.9.0",
     "zod": "^3.23"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261016.1",
     "@types/node": "^22.0",
     "tsx": "^4.7",
     "typescript": "^5.5",
-    "vitest": "^2.0"
+    "vitest": "^2.0",
+    "wrangler": "^4.118.0"
   }
 }

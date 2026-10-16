@@ -4,6 +4,7 @@ External API v1 — 给前端 UI 使用
 
 import json
 import asyncio
+from contextlib import aclosing
 import base64
 import hashlib
 from datetime import datetime
@@ -15,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from src.api.auth import get_agent_tool_identity, require_agent_user_id
 from src.api.request_logging import log_request_error
-from src.api.sse import SseEventSequencer, encode_sse_heartbeat, with_sse_heartbeats
+from src.api.sse import SseEventSequencer, encode_sse_heartbeat, with_sse_heartbeats, terminate_stream_turn, begin_stream_turn
 from src.config.settings import settings
 from src.services.document_parser import (
     DocumentParseError,
@@ -341,7 +342,7 @@ async def send_message(conv_id: str, request: Request):
     active_turn_id = None
     try:
         # 确保会话存在于当前仓储并校验用户归属。
-        ConversationService.ensure(conv_id, trusted_user_id)
+        await asyncio.to_thread(ConversationService.ensure, conv_id, trusted_user_id)
 
         conv = ConversationService.get(conv_id)
         if not conv:
@@ -353,11 +354,11 @@ async def send_message(conv_id: str, request: Request):
         # 启用记忆网关时尝试恢复 checkpoint；本地模式会安全跳过。
         try:
             from src.memory import get_default_checkpointer
-            await get_default_checkpointer().restore_from_gateway(conv_id)
+            await asyncio.wait_for(get_default_checkpointer().restore_from_gateway(conv_id), timeout=5)
         except Exception:
             pass  # 恢复失败不影响主流程
 
-        turn, created = TurnService.begin(
+        turn, created = await begin_stream_turn(
             conv_id, trusted_user_id, turn_content, req.client_message_id
         )
         if not created:
@@ -379,6 +380,10 @@ async def send_message(conv_id: str, request: Request):
         active_turn_id = None
 
         return {**reply.to_dict(), "turn_id": turn["id"]}
+    except asyncio.CancelledError:
+        if active_turn_id:
+            await terminate_stream_turn(active_turn_id, trusted_user_id, True, "CLIENT_CANCELLED")
+        raise
     except BusinessError as e:
         if active_turn_id:
             try:
@@ -403,6 +408,7 @@ async def send_message(conv_id: str, request: Request):
 @router.post("/conversations/{conv_id}/messages/stream")
 # 向会话发送消息并流式返回 AI 回复
 async def stream_message(conv_id: str, request: Request):
+    request_deadline = asyncio.get_running_loop().time() + 270
     req, attachment_context = await read_send_message_payload(request)
     trusted_user_id = require_agent_user_id(request, req.user_id)
     tool_identity = get_agent_tool_identity(request, req.user_id)
@@ -419,7 +425,7 @@ async def stream_message(conv_id: str, request: Request):
         )
     turn_content = content or "请分析我上传的附件"
     # 确保会话存在于当前仓储并校验已有 thread_id 的用户归属。
-    ConversationService.ensure(conv_id, trusted_user_id)
+    await asyncio.to_thread(ConversationService.ensure, conv_id, trusted_user_id)
 
     conversation = ConversationService.get(conv_id)
     if not conversation:
@@ -431,12 +437,12 @@ async def stream_message(conv_id: str, request: Request):
     # 启用记忆网关时尝试恢复 checkpoint；本地模式会安全跳过。
     try:
         from src.memory import get_default_checkpointer
-        await get_default_checkpointer().restore_from_gateway(conv_id)
+        await asyncio.wait_for(get_default_checkpointer().restore_from_gateway(conv_id), timeout=5)
     except Exception:
         pass  # 恢复失败不影响主流程
 
     await wait_for_conversation_persistence(conv_id)
-    turn, created = TurnService.begin(
+    turn, created = await begin_stream_turn(
         conv_id, trusted_user_id, turn_content, req.client_message_id
     )
     completed = None if created else TurnService.completed_message(turn)
@@ -445,12 +451,18 @@ async def stream_message(conv_id: str, request: Request):
         raise HTTPException(status_code=error.status_code, detail=error.to_dict())
     try:
         if created:
-            attachment_context = await prepare_attachment_context(attachment_context, trusted_user_id)
+            attachment_context = await asyncio.wait_for(prepare_attachment_context(attachment_context, trusted_user_id), timeout=max(0.001, request_deadline - asyncio.get_running_loop().time()))
+    except TimeoutError as error:
+        await terminate_stream_turn(turn["id"], trusted_user_id, False, "AGENT_TIMEOUT")
+        raise HTTPException(status_code=504, detail={"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"}) from error
+    except asyncio.CancelledError:
+        await terminate_stream_turn(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
+        raise
     except BusinessError as error:
-        TurnService.terminate(turn["id"], trusted_user_id, False, error.code.value)
+        await terminate_stream_turn(turn["id"], trusted_user_id, False, error.code.value)
         raise HTTPException(status_code=error.status_code, detail=error.to_dict()) from error
     except Exception as error:
-        TurnService.terminate(turn["id"], trusted_user_id, False, "INTERNAL_ERROR")
+        await terminate_stream_turn(turn["id"], trusted_user_id, False, "INTERNAL_ERROR")
         raise HTTPException(
             status_code=500,
             detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": "附件处理失败"},
@@ -460,10 +472,10 @@ async def stream_message(conv_id: str, request: Request):
         sse_events = SseEventSequencer(turn["id"])
         full_answer = ""
         turn_completed = completed is not None
-        yield sse_events.event(
-            "meta", {"conversation_id": conv_id, "thread_id": conv_id, "turn_id": turn["id"]}
-        )
         try:
+            yield sse_events.event(
+                "meta", {"conversation_id": conv_id, "thread_id": conv_id, "turn_id": turn["id"]}
+            )
             if completed:
                 yield sse_events.event(
                     "text",
@@ -478,52 +490,54 @@ async def stream_message(conv_id: str, request: Request):
                 tool_identity=tool_identity,
                 attachment_context=attachment_context,
             )
-            async for event in with_sse_heartbeats(events):
-                if await request.is_disconnected():
-                    TurnService.terminate(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
-                    return
-                if event is None:
-                    yield encode_sse_heartbeat()
-                    continue
-                if event["type"] == "text":
-                    full_answer += event["text"]
-                    payload = json.dumps(
-                        {
-                            "delta": event["text"],
-                            "text": event["text"],
-                            "partial": event.get("partial", False),
-                        },
-                        ensure_ascii=False,
+            async with aclosing(with_sse_heartbeats(events, timeout_seconds=max(0.001, request_deadline - asyncio.get_running_loop().time()))) as stream_events:
+                async for event in stream_events:
+                    if await request.is_disconnected():
+                        await terminate_stream_turn(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
+                        turn_completed = True
+                        return
+                    if event is None:
+                        yield encode_sse_heartbeat()
+                        continue
+                    if event["type"] == "text":
+                        full_answer += event["text"]
+                        payload = json.dumps(
+                            {
+                                "delta": event["text"],
+                                "text": event["text"],
+                                "partial": event.get("partial", False),
+                            },
+                            ensure_ascii=False,
+                        )
+                        event_name = "text"
+                    elif event["type"] == "tool":
+                        payload = json.dumps(
+                            {
+                                "event": "tool",
+                                "tool_name": event["tool_name"],
+                                "status": event["status"],
+                                "call_id": event["call_id"],
+                                "duration_ms": event.get("duration_ms"),
+                            },
+                            ensure_ascii=False,
+                        )
+                        event_name = "tool"
+                    else:
+                        payload = json.dumps(
+                            {
+                                "state": event.get("state"),
+                                "stop_reason": event.get("stop_reason"),
+                                "react": event.get("react"),
+                            },
+                            ensure_ascii=False,
+                        )
+                        event_name = event.get("event", "agent")
+                    yield sse_events.event(
+                        event_name,
+                        json.loads(payload),
                     )
-                    event_name = "text"
-                elif event["type"] == "tool":
-                    payload = json.dumps(
-                        {
-                            "event": "tool",
-                            "tool_name": event["tool_name"],
-                            "status": event["status"],
-                            "call_id": event["call_id"],
-                            "duration_ms": event.get("duration_ms"),
-                        },
-                        ensure_ascii=False,
-                    )
-                    event_name = "tool"
-                else:
-                    payload = json.dumps(
-                        {
-                            "state": event.get("state"),
-                            "stop_reason": event.get("stop_reason"),
-                            "react": event.get("react"),
-                        },
-                        ensure_ascii=False,
-                    )
-                    event_name = event.get("event", "agent")
-                yield sse_events.event(
-                    event_name,
-                    json.loads(payload),
-                )
             assistant = Message("assistant", full_answer)
-            TurnService.complete(turn["id"], trusted_user_id, assistant)
+            await asyncio.to_thread(TurnService.complete, turn["id"], trusted_user_id, assistant)
             turn_completed = True
         except BusinessError as error:
             log_request_error(
@@ -531,18 +545,25 @@ async def stream_message(conv_id: str, request: Request):
                 error,
                 {"conversation_id": conv_id, "user_id": trusted_user_id, "stream": True},
             )
+            if not turn_completed:
+                try:
+                    await terminate_stream_turn(turn["id"], trusted_user_id, False, error.code.value)
+                    turn_completed = True
+                except Exception:
+                    pass
             yield sse_events.event(
                 "error", {"ok": False, "error": error.to_dict().get("error", error.to_dict())}
             )
+
+        except TimeoutError:
+            await terminate_stream_turn(turn["id"], trusted_user_id, False, "AGENT_TIMEOUT")
+            turn_completed = True
+            yield sse_events.event("error", {"error": {"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"}})
+        except (asyncio.CancelledError, GeneratorExit):
             if not turn_completed:
                 try:
-                    TurnService.terminate(turn["id"], trusted_user_id, False, error.code.value)
-                except Exception:
-                    pass
-        except asyncio.CancelledError:
-            if not turn_completed:
-                try:
-                    TurnService.terminate(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
+                    await terminate_stream_turn(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
+                    turn_completed = True
                 except Exception:
                     pass
             log_request_error(
@@ -555,15 +576,19 @@ async def stream_message(conv_id: str, request: Request):
             log_request_error(
                 request, error, {"conversation_id": conv_id, "user_id": trusted_user_id, "stream": True}
             )
+            if not turn_completed:
+                try:
+                    await terminate_stream_turn(turn["id"], trusted_user_id, False, "INTERNAL_ERROR")
+                    turn_completed = True
+                except Exception:
+                    pass
             yield sse_events.event(
                 "error",
                 {"ok": False, "error": {"code": "INTERNAL_ERROR", "message": "处理请求时发生错误"}},
             )
+        finally:
             if not turn_completed:
-                try:
-                    TurnService.terminate(turn["id"], trusted_user_id, False, "INTERNAL_ERROR")
-                except Exception:
-                    pass
+                await terminate_stream_turn(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
         yield sse_events.done()
 
     return StreamingResponse(

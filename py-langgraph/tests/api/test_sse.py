@@ -7,6 +7,21 @@ from src.api.sse import SseEventSequencer, encode_sse_heartbeat, with_sse_heartb
 
 
 @pytest.mark.asyncio
+async def test_heartbeats_cannot_extend_the_request_deadline():
+    closed = asyncio.Event()
+    async def stalled():
+        try:
+            await asyncio.sleep(10)
+            yield {"type": "text", "text": "late"}
+        finally:
+            closed.set()
+    with pytest.raises(TimeoutError):
+        async for _event in with_sse_heartbeats(stalled(), 0.002, timeout_seconds=0.02):
+            pass
+    assert closed.is_set()
+
+
+@pytest.mark.asyncio
 async def test_sse_heartbeats_arrive_while_upstream_is_idle():
     async def delayed_events():
         await asyncio.sleep(0.02)

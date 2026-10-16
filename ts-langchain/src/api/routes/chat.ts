@@ -15,6 +15,7 @@ import {
   getFinishReason,
   isLikelyTruncated,
   maybeAppendContinuationHint,
+  ModelResponseError,
 } from "../../agents/response-handler.js";
 import {
   BusinessError,
@@ -103,15 +104,21 @@ export async function registerChatRoutes(app: FastifyInstance) {
           (deadline) =>
             runWithToolCallContext(
               toolContext,
-              () =>
-                (agent as any).invoke(
+              // 在同一时限和工具上下文中处理轻量 Agent 的工具升级。
+              async () => {
+                const result = await (agent as any).invoke(
                   {
                     input: message,
                     chat_history: history,
                     memory_context: memoryContext,
                   },
                   { signal: deadline.signal },
-                ),
+                );
+                if (isDirectChatMessage(message) && !extractAgentOutputText(result).trim()) {
+                  return (await createToolAgent()).invoke({ input: message, chat_history: history, memory_context: memoryContext }, { signal: deadline.signal });
+                }
+                return result;
+              },
               {
                 onToolProgress: (event) =>
                   event.type === "started" && deadline.enableToolBudget(),
@@ -121,7 +128,8 @@ export async function registerChatRoutes(app: FastifyInstance) {
           config.AGENT_DEADLINE_MS,
         );
 
-        let replyText = extractAgentOutputText(result) || "抱歉，我没有理解您的问题。";
+        let replyText = extractAgentOutputText(result);
+        if (!replyText.trim()) throw new ModelResponseError();
 
         // 检测 LLM 输出截断（finish_reason=length 或文本 abrupt ending）
         const finishReason = getFinishReason(result as any);
@@ -152,6 +160,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
           await TurnService.terminate(activeTurn.id, activeTurn.userId, false, error?.code || "INTERNAL_ERROR").catch(() => undefined);
         }
         logRequestError(request, error);
+        if (error instanceof ModelResponseError) {
+          return reply.status(502).send({ error: { code: error.code, message: error.message } });
+        }
         if (error instanceof BusinessError) {
           return reply.status(error.statusCode).send(error.toJSON());
         }

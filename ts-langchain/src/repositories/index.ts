@@ -162,6 +162,12 @@ export const inMemoryRepositories: Repositories = {
   turn: {
     // 原子创建进程内 Turn 并追加用户消息。
     async begin(conversationId, userId, clientMessageId, content, turnId = crypto.randomUUID(), userMessageId = crypto.randomUUID()) {
+      for (const active of inMemoryTurns.values()) {
+        if (active.conversation_id === conversationId && (active.status === "pending" || active.status === "streaming") && Date.now() - Date.parse(active.updated_at) > 330_000) {
+          const now = new Date().toISOString();
+          Object.assign(active, { status: "failed", error_code: "AGENT_RESTART_RECOVERY", updated_at: now, completed_at: now });
+        }
+      }
       const key = `${conversationId}\u0000${clientMessageId}`;
       const existingId = inMemoryTurnKeys.get(key);
       if (existingId) {

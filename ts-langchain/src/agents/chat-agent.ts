@@ -1,3 +1,4 @@
+import { getModelConfiguration } from "../config/model.js";
 import { ChatOpenAI } from "@langchain/openai";
 import { AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages";
 import { SYSTEM_PROMPT } from "../prompts/system.js";
@@ -20,10 +21,7 @@ export function createChatAgent(): ChatOpenAI {
 
   chatAgent = new ChatOpenAI({
     modelName: process.env.OPENAI_MODEL || "step-3.7-flash",
-    configuration: {
-      baseURL: process.env.OPENAI_BASE_URL,
-      apiKey: process.env.OPENAI_API_KEY,
-    },
+    configuration: getModelConfiguration(),
   });
 
   return chatAgent;

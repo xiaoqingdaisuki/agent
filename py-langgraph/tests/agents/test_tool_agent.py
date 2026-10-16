@@ -8,6 +8,63 @@ from langgraph.checkpoint.memory import MemorySaver
 from src.agents import graph_agents
 
 
+@pytest.mark.parametrize("question", [
+    "你知道2026 APEC吗 能给我做个详细的介绍吗",
+    "给我介绍点深圳特色美食具体到门店限定在福田区和南山区内以及在深圳的生活小技巧",
+    "介绍2027年的展会", "介绍南山餐厅门店地址",
+])
+def test_factual_introductions_keep_search_available(question):
+    assert not graph_agents.is_direct_chat_message(question)
+
+
+@pytest.mark.parametrize("xml", [
+    "<dots_function_call><search><query>APEC</query></invoke></dots_function_call>",
+    '<dots_function_call><invoke="search"><<arg_key>query</arg_key><arg_value>APEC</arg_value></invoke></dots_function_call>',
+])
+def test_malformed_provider_calls_are_not_silently_hidden(xml):
+    from src.agents.response_handler import ModelResponseError
+    with pytest.raises(ModelResponseError):
+        graph_agents._convert_xml_tool_calls(AIMessage(content=xml))
+
+
+@pytest.mark.asyncio
+async def test_tool_protocol_retry_executes_only_validated_call(monkeypatch):
+    model = ToolCapableFakeModel(responses=[
+        AIMessage(content="<dots_function_call><search></invoke></dots_function_call>"),
+        AIMessage(content="", tool_calls=[{"name": "calculator", "args": {"expression": "2+2"}, "id": "fixed-call"}]),
+        AIMessage(content="4"),
+    ])
+    monkeypatch.setattr(graph_agents, "get_llm", lambda **kwargs: model)
+    agent = graph_agents.build_tool_agent(checkpointer=MemorySaver())
+    result = await agent.ainvoke({"messages": [HumanMessage(content="计算2+2")]}, config={"configurable": {"thread_id": "protocol-retry"}})
+    assert result["messages"][-1].content == "4"
+    assert len([message for message in result["messages"] if message.type == "tool"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_failure_returns_to_model_instead_of_aborting_graph(monkeypatch):
+    from langchain_core.tools import tool
+    import src.tools
+
+    @tool
+    async def failing_search(query: str) -> str:
+        """Search an unavailable provider."""
+        raise RuntimeError("Search temporarily unavailable")
+
+    model = ToolCapableFakeModel(responses=[
+        AIMessage(content="", tool_calls=[{"name": "failing_search", "args": {"query": "APEC"}, "id": "search-failed"}]),
+        AIMessage(content="检索暂时不可用，请稍后重试。"),
+    ])
+    monkeypatch.setattr(src.tools, "tools", [failing_search])
+    monkeypatch.setattr(graph_agents, "get_llm", lambda **kwargs: model)
+    result = await graph_agents.build_tool_agent(checkpointer=MemorySaver()).ainvoke(
+        {"messages": [HumanMessage(content="介绍APEC")]},
+        config={"configurable": {"thread_id": "recover-tool-error"}},
+    )
+    assert result["tool_errors"] == 1
+    assert result["messages"][-1].content == "检索暂时不可用，请稍后重试。"
+
+
 class ToolCapableFakeModel(FakeMessagesListChatModel):
     bound_tool_names: list[str] = []
 

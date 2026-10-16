@@ -12,8 +12,9 @@ import json
 import logging
 import threading
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
+from functools import wraps
 
 from src.config.settings import settings
 
@@ -62,7 +63,11 @@ def _run_sync(coro) -> Any:
     """在同步上下文中运行异步协程"""
     loop = _get_or_create_event_loop()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return future.result()
+    try:
+        return future.result(timeout=min(settings.memory_request_timeout_ms / 1000 * 3 + 2, 47))
+    except BaseException:
+        future.cancel()
+        raise
 
 
 # 返回当前配置对应的仓储单例，确保同一进程共享会话与记忆状态。
@@ -100,11 +105,22 @@ async def close_repositories() -> None:
     _sync_loop_thread = None
 
 
+# 在线程卸载仓储操作后仍原子执行 Turn 状态变更，避免并发创建多个活动轮次。
+def _serialize_turn(operation):
+    @wraps(operation)
+    # 使用同一仓储实例的可重入锁保护一次完整的状态变更。
+    def execute(self, *args, **kwargs):
+        with self._turn_lock:
+            return operation(self, *args, **kwargs)
+    return execute
+
+
 class InMemoryRepositories:
     """关闭 Cloudflare 记忆模式时使用的进程内仓储。"""
 
     # 初始化进程内 profile、会话、消息和长期记忆存储
     def __init__(self):
+        self._turn_lock = threading.RLock()
         self._profiles: dict[str, dict] = {}
         self._conversations: dict[str, dict] = {}
         self._messages: dict[str, list[dict]] = {}
@@ -117,7 +133,7 @@ class InMemoryRepositories:
         profile = self._profiles.get(user_id)
         if profile:
             return dict(profile)
-        now = datetime.now().isoformat()
+        now = datetime.now(UTC).isoformat()
         profile = {
             "user_id": user_id,
             "name": name,
@@ -141,14 +157,14 @@ class InMemoryRepositories:
             import json
 
             profile["preferences_json"] = json.dumps(preferences, ensure_ascii=False)
-        profile["updated_at"] = datetime.now().isoformat()
+        profile["updated_at"] = datetime.now(UTC).isoformat()
         self._profiles[user_id] = profile
         return dict(profile)
 
     # 创建会话
     def create_conversation(self, user_id: str, title: str, mode: str = "chat", conversation_id: str | None = None) -> dict:
         conversation_id = conversation_id or str(uuid.uuid4())
-        now = datetime.now().isoformat()
+        now = datetime.now(UTC).isoformat()
         conversation = {
             "id": conversation_id,
             "user_id": user_id,
@@ -185,7 +201,7 @@ class InMemoryRepositories:
         conversation = self._conversations.get(conversation_id)
         if not conversation or conversation.get("deleted_at"):
             return False
-        conversation["deleted_at"] = datetime.now().isoformat()
+        conversation["deleted_at"] = datetime.now(UTC).isoformat()
         self._messages.pop(conversation_id, None)
         return True
 
@@ -240,7 +256,7 @@ class InMemoryRepositories:
             raise MemoryGatewayError(
                 "MEMORY_CONVERSATION_BUSY", "会话中已有请求正在处理", 409
             )
-        now = datetime.now().isoformat()
+        now = datetime.now(UTC).isoformat()
         turn_id = turn_id or str(uuid.uuid4())
         turn = {
             "id": turn_id, "conversation_id": conversation_id, "user_id": user_id,
@@ -253,6 +269,7 @@ class InMemoryRepositories:
         self._turns[turn_id] = turn
         return dict(turn), True
 
+    @_serialize_turn
     # 原子创建进程内 Turn 并追加用户消息。
     def begin_turn(
         self,
@@ -263,6 +280,15 @@ class InMemoryRepositories:
         turn_id: str | None = None,
         user_message_id: str | None = None,
     ) -> tuple[dict, dict, bool]:
+        now_utc = datetime.now(UTC)
+        for active in self._turns.values():
+            if active["conversation_id"] != conversation_id or active["status"] not in {"pending", "streaming"}:
+                continue
+            updated = datetime.fromisoformat(active["updated_at"])
+            if updated.tzinfo is None:
+                updated = updated.astimezone()
+            if (now_utc - updated).total_seconds() > 330:
+                active.update(status="failed", error_code="AGENT_RESTART_RECOVERY", updated_at=now_utc.isoformat(), completed_at=now_utc.isoformat())
         key = (conversation_id, client_message_id)
         existing_id = self._turn_keys.get(key)
         if existing_id:
@@ -283,7 +309,7 @@ class InMemoryRepositories:
             raise MemoryGatewayError(
                 "MEMORY_CONVERSATION_BUSY", "会话中已有请求正在处理", 409
             )
-        now = datetime.now().isoformat()
+        now = datetime.now(UTC).isoformat()
         turn_id = turn_id or str(uuid.uuid4())
         user_message_id = user_message_id or str(uuid.uuid4())
         messages = self._messages.setdefault(conversation_id, [])
@@ -316,6 +342,7 @@ class InMemoryRepositories:
         self._turns[turn_id] = turn
         return dict(turn), dict(message), True
 
+    @_serialize_turn
     # 原子追加进程内助手消息并完成 Turn。
     def complete_turn(self, turn_id: str, user_id: str, message: dict) -> dict:
         turn = self._turns.get(turn_id)
@@ -334,7 +361,7 @@ class InMemoryRepositories:
         }
         if not any(item["id"] == message["id"] for item in messages):
             messages.append(stored)
-        now = datetime.now().isoformat()
+        now = datetime.now(UTC).isoformat()
         turn.update(
             {
                 "status": "completed",
@@ -359,6 +386,7 @@ class InMemoryRepositories:
         turn = self._turns.get(turn_id)
         return dict(turn) if turn and turn["user_id"] == user_id else None
 
+    @_serialize_turn
     # 按不可逆状态机更新进程内 Turn。
     def update_turn(self, turn_id: str, user_id: str, **changes) -> dict:
         turn = self._turns.get(turn_id)
@@ -377,7 +405,7 @@ class InMemoryRepositories:
         for field in ("status", "user_message_id", "assistant_message_id", "assistant_content_json", "error_code"):
             if field in changes and changes[field] is not None:
                 turn[field] = changes[field]
-        turn["updated_at"] = datetime.now().isoformat()
+        turn["updated_at"] = datetime.now(UTC).isoformat()
         if requested in {"completed", "failed", "cancelled"}:
             turn["completed_at"] = turn["updated_at"]
         return dict(turn)
@@ -389,7 +417,7 @@ class InMemoryRepositories:
         for memory in memories:
             if memory["normalized_content"] == normalized and memory["status"] == "active":
                 return dict(memory)
-        now = datetime.now().isoformat()
+        now = datetime.now(UTC).isoformat()
         memory = {
             "id": str(uuid.uuid4()),
             "user_id": user_id,
@@ -457,7 +485,7 @@ class InMemoryRepositories:
             for field in ("category", "importance"):
                 if changes.get(field) is not None:
                     memory[field] = changes[field]
-            memory["updated_at"] = datetime.now().isoformat()
+            memory["updated_at"] = datetime.now(UTC).isoformat()
             return dict(memory)
         return None
 
@@ -469,7 +497,7 @@ class InMemoryRepositories:
         for item in self._memories[user_id]:
             if item["id"] == memory_id:
                 item["status"] = "deleted"
-                item["updated_at"] = datetime.now().isoformat()
+                item["updated_at"] = datetime.now(UTC).isoformat()
         return True
 
     # 清空用户长期记忆

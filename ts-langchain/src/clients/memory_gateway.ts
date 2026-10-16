@@ -28,6 +28,7 @@ export class MemoryGatewayError extends Error {
 
 import { z } from "zod";
 import { config } from "../config/index.js";
+import { fetchMemoryGateway } from "../runtime.js";
 import {
   type UserProfileData,
   type ConversationData,
@@ -159,9 +160,9 @@ export class CloudflareMemoryClient {
 
   // 初始化当前对象
   constructor(options: MemoryGatewayClientOptions = {}) {
-    this.baseUrl = (options.baseUrl || "").replace(/\/$/, "");
-    this.secret = options.secret || "";
-    this.timeoutMs = options.timeoutMs || 5_000;
+    this.baseUrl = (options.baseUrl ?? config.CLOUDFLARE_MEMORY_BASE_URL).replace(/\/$/, "");
+    this.secret = options.secret ?? config.CLOUDFLARE_MEMORY_SECRET;
+    this.timeoutMs = options.timeoutMs ?? config.MEMORY_REQUEST_TIMEOUT_MS;
   }
 
   // ============ 内部请求方法 ============
@@ -201,7 +202,7 @@ export class CloudflareMemoryClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const response = await fetch(url, {
+      const response = await fetchMemoryGateway(url, {
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,

@@ -1,6 +1,6 @@
 import path from "node:path";
 import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
+import { getDocumentProxy } from "unpdf";
 
 export interface SessionDocumentPart {
   partIndex: number;
@@ -51,25 +51,34 @@ function buildSessionDocumentParts(
 
 // 解析 PDF 页面文本，保留页码供模型定位来源。
 async function parsePdfDocument(buffer: Buffer): Promise<SessionDocumentPart[]> {
-  const parser = new PDFParse({ data: buffer });
+  const parser = await getDocumentProxy(new Uint8Array(buffer));
   try {
-    const result = await parser.getText();
+    if (parser.numPages > 200) throw new Error("PDF_PAGE_LIMIT_EXCEEDED");
     let partIndex = 0;
-    return result.pages.flatMap((page) => {
-      const pageParts = buildSessionDocumentParts(page.text, page.num).map((part) => ({
+    let textBytes = 0;
+    const parts: SessionDocumentPart[] = [];
+    for (let pageNumber = 1; pageNumber <= parser.numPages; pageNumber += 1) {
+      const page = await parser.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const text = content.items.map((item) => "str" in item ? `${item.str}${item.hasEOL ? "\n" : ""}` : "").join("");
+      textBytes += Buffer.byteLength(text, "utf8");
+      if (textBytes > SESSION_DOCUMENT_MAX_TEXT_BYTES) throw new Error("SESSION_DOCUMENT_TEXT_TOO_LARGE");
+      const pageParts = buildSessionDocumentParts(text, pageNumber).map((part) => ({
         ...part,
         partIndex: partIndex++,
       }));
-      return pageParts;
-    });
+      parts.push(...pageParts);
+      page.cleanup();
+    }
+    return parts;
   } finally {
-    await parser.destroy();
+    await parser.loadingTask.destroy();
   }
 }
 
 // 解析 DOCX 正文，去除格式后保留段落内容供模型使用。
 async function parseDocxDocument(buffer: Buffer): Promise<SessionDocumentPart[]> {
-  const result = await mammoth.extractRawText({ buffer });
+  const result = await mammoth.extractRawText({ buffer, arrayBuffer: new Uint8Array(buffer).buffer });
   return buildSessionDocumentParts(result.value);
 }
 

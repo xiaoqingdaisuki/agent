@@ -4,6 +4,7 @@
  */
 
 import OpenAI from "openai";
+import { getModelConfiguration } from "../config/model.js";
 
 export interface EmbeddingOptions {
   model?: string;
@@ -18,8 +19,7 @@ export class Embedder {
   // 初始化 OpenAI Embedding 客户端
   constructor(options: EmbeddingOptions = {}) {
     this.client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-      baseURL: process.env.OPENAI_BASE_URL,
+      ...getModelConfiguration(),
     });
     this.model = options.model || "text-embedding-3-small";
     this.dimensions = options.dimensions || 1536;

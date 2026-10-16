@@ -4,6 +4,34 @@ import json
 import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
+import logging
+import anyio
+
+
+# 在独立线程收敛 Turn，避免仓储网络请求阻塞事件循环或被断连取消。
+async def terminate_stream_turn(turn_id: str, user_id: str, cancelled: bool, code: str) -> None:
+    from src.services import TurnService
+
+    try:
+        with anyio.CancelScope(shield=True):
+            await asyncio.shield(asyncio.to_thread(TurnService.terminate, turn_id, user_id, cancelled, code))
+    except Exception:
+        logging.getLogger(__name__).exception("Failed to settle stream Turn %s", turn_id)
+
+
+# 保证取消发生在 Turn 创建期间时，也能清理线程中已经提交的活动轮次。
+async def begin_stream_turn(conversation_id: str, user_id: str, content: str, client_message_id: str | None):
+    from src.services import TurnService
+
+    task = asyncio.create_task(asyncio.to_thread(TurnService.begin, conversation_id, user_id, content, client_message_id))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        with anyio.CancelScope(shield=True):
+            turn, created = await asyncio.shield(task)
+            if created:
+                await terminate_stream_turn(turn["id"], user_id, True, "CLIENT_CANCELLED")
+        raise
 
 
 # 统一编码 SSE 事件，兼容旧客户端继续读取 data 字段。
@@ -45,7 +73,7 @@ def encode_sse_heartbeat() -> str:
 
 # 在上游事件等待期间定期发送心跳，并在关闭时取消未完成的读取任务。
 async def with_sse_heartbeats(
-    events: AsyncIterator[dict], interval_seconds: float = 15.0
+    events: AsyncIterator[dict], interval_seconds: float = 15.0, timeout_seconds: float = 270.0
 ) -> AsyncIterator[dict | None]:
     sentinel = object()
     queue: asyncio.Queue[dict | object] = asyncio.Queue(maxsize=1)
@@ -56,8 +84,9 @@ async def with_sse_heartbeats(
     async def produce() -> None:
         nonlocal producer_error
         try:
-            async for event in events:
-                await queue.put(event)
+            async with asyncio.timeout(timeout_seconds):
+                async for event in events:
+                    await queue.put(event)
         except BaseException as error:
             producer_error = error
         finally:

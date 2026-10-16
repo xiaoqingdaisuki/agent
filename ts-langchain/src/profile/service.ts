@@ -1,3 +1,4 @@
+import { getModelConfiguration } from "../config/model.js";
 /**
  * Profile Service — 用户画像 + 长期记忆 + 问答历史
  *
@@ -319,10 +320,7 @@ export class MemoryService {
     try {
       const llm = new ChatOpenAI({
         modelName: config.OPENAI_MODEL,
-        configuration: {
-          baseURL: config.OPENAI_BASE_URL,
-          apiKey: config.OPENAI_API_KEY,
-        },
+        configuration: getModelConfiguration(),
       });
 
       const prompt = `你是一个记忆提取助手。分析以下对话，判断是否有值得长期记住的用户信息。

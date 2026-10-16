@@ -43,12 +43,15 @@ import {
 } from "../agents/deadline.js";
 import {
   appendContinuationHint,
+  ModelResponseError,
   getFinishReasonFromOutput,
   isLikelyTruncated,
   maybeAppendContinuationHint,
 } from "../agents/response-handler.js";
 import type { ReActRunSummary } from "../agents/react-policy.js";
 import { config } from "../config/index.js";
+import { retainBackgroundTask } from "../runtime.js";
+import { createRuntimeCache } from "../memory/runtime-cache.js";
 import { formatSessionDocumentContext, SessionDocument } from "./session-documents.js";
 
 // ============ 类型定义 ============
@@ -150,6 +153,7 @@ function scheduleBackgroundTask(label: string, task: () => Promise<void>): void 
     .catch(() => undefined)
     .then(() => enqueueBackgroundTask(label, task));
   backgroundTasks.add(work);
+  retainBackgroundTask(work);
   backgroundChains.set(label, work);
   void work.finally(() => backgroundTasks.delete(work));
   void work.finally(() => {
@@ -479,6 +483,7 @@ export function scheduleAnswerPersistence(
       }
     });
   backgroundTasks.add(work);
+  retainBackgroundTask(work);
   backgroundChains.set(label, work);
   void work.finally(() => backgroundTasks.delete(work)).catch(() => undefined);
   void work.finally(() => {
@@ -635,6 +640,7 @@ export enum BusinessErrorCode {
   INTERNAL_ERROR = "INTERNAL_ERROR",
   SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE",
   AGENT_TIMEOUT = "AGENT_TIMEOUT",
+  MODEL_RESPONSE_INVALID = "MODEL_RESPONSE_INVALID",
   TURN_IN_PROGRESS = "TURN_IN_PROGRESS",
   TURN_ALREADY_FINISHED = "TURN_ALREADY_FINISHED",
 }
@@ -663,8 +669,9 @@ export class BusinessError extends Error {
 
 // ============ Conversation Service ============
 
-const conversations = new Map<string, Conversation>();
-const conversationMessages = new Map<string, Message[]>();
+const conversations = createRuntimeCache<string, Conversation>();
+const conversationMessages = createRuntimeCache<string, Message[]>(64, 4_000_000,
+  (messages) => messages.reduce((bytes, message) => bytes + message.content.length * 2, 0));
 const DEFAULT_CONVERSATION_USER_ID = "anonymous";
 
 export class ConversationService {
@@ -1162,15 +1169,22 @@ export class AgentService {
           ? KnowledgeService.chat(content, history, userId)
           : runWithToolCallContext(
               toolContext,
-              () =>
-                (agent as any).invoke(
+              // 在同一时限和工具上下文中处理轻量 Agent 的工具升级。
+              async () => {
+                const input = { input: agentContent, chat_history: history, memory_context: memoryContext };
+                const result = await (agent as any).invoke(
                   {
                     input: agentContent,
                     chat_history: history,
                     memory_context: memoryContext,
                   },
                   { signal: deadline.signal },
-                ),
+                );
+                if (isDirectChatMessage(content) && !extractAgentOutputText(result).trim()) {
+                  return (await createToolAgent()).invoke(input, { signal: deadline.signal });
+                }
+                return result;
+              },
               {
                 onToolProgress: (event) =>
                   event.type === "started" && deadline.enableToolBudget(),
@@ -1181,11 +1195,12 @@ export class AgentService {
       const reply: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: extractAgentOutputText(result) || "抱歉，我没有理解您的问题。",
+        content: extractAgentOutputText(result),
         createdAt: new Date().toISOString(),
       };
 
       // 检测 LLM 输出截断（finish_reason=length 或文本 abrupt ending）
+      if (!reply.content.trim()) throw new ModelResponseError();
       const finishReason = getFinishReasonFromOutput(result);
       if (isLikelyTruncated(reply.content, finishReason)) {
         reply.content = maybeAppendContinuationHint(reply.content, finishReason);
@@ -1202,6 +1217,9 @@ export class AgentService {
       return reply;
     } catch (error: any) {
       if (error instanceof BusinessError) throw error;
+      if (error instanceof ModelResponseError) {
+        throw new BusinessError(BusinessErrorCode.MODEL_RESPONSE_INVALID, error.message, 502);
+      }
       console.error("Agent chat failed", {
         conversationId,
         userId,
@@ -1301,8 +1319,9 @@ export class AgentService {
           () => KnowledgeService.chat(content, history, userId),
           requestSignal,
         );
+        if (!String(result.output || "").trim()) throw new ModelResponseError();
         fullAnswer = maybeAppendContinuationHint(
-          String(result.output || "抱歉，我没有理解您的问题。"),
+          String(result.output),
           getFinishReasonFromOutput(result),
         );
         scheduleAnswerPersistence(
@@ -1494,9 +1513,10 @@ export class AgentService {
           !observedToolEvent &&
           typeof (agent as any).invoke === "function"
         ) {
+          const fallbackAgent = directChat ? await createToolAgent() : agent;
           const fallbackResult = await deadline.run<any>(
             scope.run(() =>
-              (agent as any).invoke(input, { signal: deadline.signal }),
+              (fallbackAgent as any).invoke(input, { signal: deadline.signal }),
             ),
           );
           fullAnswer = stripXmlToolStream(extractAgentOutputText(fallbackResult));
@@ -1518,9 +1538,7 @@ export class AgentService {
       }
       // 工具调用或模型空响应不能让 SSE 以无文本事件结束，否则前端会误判接口失败。
       if (!fullAnswer.trim()) {
-        fullAnswer = "抱歉，我没有理解您的问题。";
-        emittedText = true;
-        yield { type: "text", text: fullAnswer };
+        throw new ModelResponseError();
       }
       const finalAnswer = maybeAppendContinuationHint(fullAnswer, streamFinishReason);
       if (finalAnswer !== fullAnswer) {
@@ -1545,6 +1563,9 @@ export class AgentService {
     } catch (error: any) {
       if (isClientAbortError(error) || requestSignal?.aborted) throw error;
       if (error instanceof BusinessError) throw error;
+      if (error instanceof ModelResponseError) {
+        throw new BusinessError(BusinessErrorCode.MODEL_RESPONSE_INVALID, error.message, 502);
+      }
       if (isAgentDeadlineError(error)) {
         // 超时但有部分结果 → 返回部分内容 + 继续提示
         if (fullAnswer.trim()) {
@@ -1603,12 +1624,13 @@ export class AgentService {
 // ============ Knowledge Service ============
 
 // MEMORY_ENABLED=false 时保存进程内文档、原文、分块及字符倒排索引，进程重启后数据清空。
-const documents = new Map<string, Document>();
-const documentContents = new Map<
+const documents = createRuntimeCache<string, Document>();
+const documentContents = createRuntimeCache<
   string,
   { content: string; filename: string }
->();
-const documentChunks = new Map<string, string[]>();
+>(16, 4_000_000, (document) => document.content.length * 2);
+const documentChunks = createRuntimeCache<string, string[]>(16, 4_000_000,
+  (chunks) => chunks.reduce((bytes, chunk) => bytes + chunk.length * 2, 0));
 // 描述单个本地分块的检索元数据，供倒排候选召回与相关度计算复用。
 interface LocalSearchEntry {
   documentId: string;
@@ -1621,7 +1643,7 @@ const localSearchEntries = new Map<string, LocalSearchEntry>();
 const localSearchPostings = new Map<string, Set<string>>();
 const localDocumentSearchKeys = new Map<string, Set<string>>();
 
-const documentOwners = new Map<string, string>();
+const documentOwners = createRuntimeCache<string, string>();
 const LOCAL_KNOWLEDGE_SCOPE = "local";
 
 // 移除单个本地文档的倒排检索项，避免删除或重建后残留。
@@ -1755,7 +1777,7 @@ export class KnowledgeService {
         ? await this.client.uploadDocument(
             userId,
             filename,
-            sourceBuffer.toString("base64"),
+            Buffer.from(doc.content, "utf8").toString("base64"),
             undefined,
             category || "general",
           )
@@ -1773,9 +1795,11 @@ export class KnowledgeService {
 
       documents.set(document.id, document);
       documentOwners.set(document.id, userId);
-      documentContents.set(document.id, { content: doc.content, filename });
-      documentChunks.set(document.id, chunks.map((chunk) => chunk.text));
-      replaceLocalDocumentSearchIndex(document.id, chunks.map((chunk) => chunk.text));
+      if (!config.MEMORY_ENABLED) {
+        documentContents.set(document.id, { content: doc.content, filename });
+        documentChunks.set(document.id, chunks.map((chunk) => chunk.text));
+        replaceLocalDocumentSearchIndex(document.id, chunks.map((chunk) => chunk.text));
+      }
       return document;
     } catch (error: any) {
       const parseErrors: Record<string, { statusCode: number; message: string }> = {

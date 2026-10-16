@@ -5,6 +5,27 @@ from src.services.document_parser import DocumentParseError, parse_document
 import pytest
 
 
+def test_orphan_recovery_preserves_active_turn_protection():
+    from datetime import UTC, datetime, timedelta
+    from src.clients.memory_gateway import MemoryGatewayError
+
+    repository = InMemoryRepositories()
+    repository.create_conversation("user-1", "orphan", conversation_id="orphan-conv")
+    first, _, _ = repository.begin_turn("orphan-conv", "user-1", "message-1", "first")
+    with pytest.raises(MemoryGatewayError):
+        repository.begin_turn("orphan-conv", "user-1", "message-2", "second")
+    repository._turns[first["id"]]["updated_at"] = (datetime.now(UTC) - timedelta(seconds=331)).isoformat()
+    _, _, created = repository.begin_turn("orphan-conv", "user-1", "message-2", "second")
+    assert created
+    assert repository.get_turn(first["id"], "user-1")["status"] == "failed"
+    assert repository.get_turn(first["id"], "user-1")["error_code"] == "AGENT_RESTART_RECOVERY"
+
+
+def test_new_message_timestamps_always_include_a_timezone():
+    from datetime import datetime
+    assert datetime.fromisoformat(Message("assistant", "answer").created_at).utcoffset() is not None
+
+
 def test_long_document_retains_every_character():
     text = "A" * 40_003 + "TAIL_MARKER"
     document = parse_document(text.encode(), "long.txt")

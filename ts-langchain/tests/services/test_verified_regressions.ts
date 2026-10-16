@@ -6,6 +6,16 @@ import { getHistoryBeforeInput } from "../../src/memory/conversation.js";
 import { parseSessionDocument } from "../../src/services/session-documents.js";
 
 describe("verified local runtime regressions", () => {
+  it("recovers old local Turns while rejecting a concurrent live request", async () => {
+    config.MEMORY_ENABLED = false;
+    const user = `orphan-${crypto.randomUUID()}`;
+    const conversation = await ConversationService.create("orphan", "chat", user);
+    const first = await TurnService.begin(conversation.id, user, "first", "one");
+    await expect(TurnService.begin(conversation.id, user, "second", "two")).rejects.toMatchObject({ code: "TURN_IN_PROGRESS" });
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 331_000);
+    expect((await TurnService.begin(conversation.id, user, "second", "two")).created).toBe(true);
+    expect((await getRepositories().turn.get(first.turn.id, user))?.status).toBe("failed");
+  });
   const memoryEnabled = config.MEMORY_ENABLED;
   afterEach(() => {
     config.MEMORY_ENABLED = memoryEnabled;

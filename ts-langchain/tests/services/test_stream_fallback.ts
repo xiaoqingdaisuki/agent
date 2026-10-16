@@ -29,6 +29,24 @@ describe("AgentService empty streams", () => {
     createDirectChatAgentMock.mockReset();
   });
 
+  it("upgrades a direct chat tool request instead of repeating the unbound agent", async () => {
+    const directInvoke = vi.fn();
+    createDirectChatAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        yield { event: "on_chat_model_stream", data: { chunk: { content: "<dots_function_call><search><query>facts</query></search></dots_function_call>" } } };
+      },
+      invoke: directInvoke,
+    });
+    const toolInvoke = vi.fn().mockResolvedValue({ output: "已检索并回答" });
+    createToolAgentMock.mockResolvedValue({ invoke: toolInvoke });
+    const conversation = await ConversationService.create("direct upgrade");
+    const events = [];
+    for await (const event of AgentService.chatStream(conversation.id, "你好")) events.push(event);
+    expect(events.filter((event) => event.type === "text").map((event) => event.text).join("")).toBe("已检索并回答");
+    expect(directInvoke).not.toHaveBeenCalled();
+    expect(toolInvoke).toHaveBeenCalledOnce();
+  });
+
   it("propagates client cancellation so routes cannot complete an empty turn", async () => {
     const controller = new AbortController();
     const disconnected = new Error("Client disconnected");
@@ -278,9 +296,11 @@ describe("AgentService empty streams", () => {
 
     const conversation = await ConversationService.create("nested tool lifecycle");
     const events = [];
-    for await (const event of AgentService.chatStream(conversation.id, "计算 2 + 2")) {
-      events.push(event);
-    }
+    await expect((async () => {
+      for await (const event of AgentService.chatStream(conversation.id, "计算 2 + 2")) {
+        events.push(event);
+      }
+    })()).rejects.toMatchObject({ code: "MODEL_RESPONSE_INVALID", statusCode: 502 });
 
     expect(events.filter((event) => event.type === "tool")).toEqual([
       {
@@ -298,7 +318,7 @@ describe("AgentService empty streams", () => {
     ]);
   });
 
-  it("emits visible fallback text after a tool-only stream", async () => {
+  it("rejects a tool-only stream with a retriable model error", async () => {
     createToolAgentMock.mockResolvedValue({
       streamEvents: async function* () {
         yield {
@@ -316,9 +336,11 @@ describe("AgentService empty streams", () => {
 
     const conversation = await ConversationService.create("tool-only stream");
     const events = [];
-    for await (const event of AgentService.chatStream(conversation.id, "who am I?")) {
-      events.push(event);
-    }
+    await expect((async () => {
+      for await (const event of AgentService.chatStream(conversation.id, "who am I?")) {
+        events.push(event);
+      }
+    })()).rejects.toMatchObject({ code: "MODEL_RESPONSE_INVALID", statusCode: 502 });
 
     expect(events).toEqual([
       { type: "agent", event: "agent.start" },
@@ -334,7 +356,6 @@ describe("AgentService empty streams", () => {
         status: "completed",
         callId: "call-fallback",
       },
-      { type: "text", text: "抱歉，我没有理解您的问题。" },
     ]);
   });
 
@@ -475,15 +496,13 @@ describe("AgentService empty streams", () => {
 
     const conversation = await ConversationService.create("xml-only stream");
     const events = [];
-    for await (const event of AgentService.chatStream(conversation.id, "who am I?")) {
-      events.push(event);
-    }
+    await expect((async () => {
+      for await (const event of AgentService.chatStream(conversation.id, "who am I?")) {
+        events.push(event);
+      }
+    })()).rejects.toMatchObject({ code: "MODEL_RESPONSE_INVALID", statusCode: 502 });
 
-    expect(events).toContainEqual({
-      type: "text",
-      text: "抱歉，我没有理解您的问题。",
-    });
-    expect(events.filter((event) => event.type === "text")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "text")).toHaveLength(0);
   });
 
   it("returns visible text when a tool-enabled request times out before any answer", async () => {

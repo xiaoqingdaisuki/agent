@@ -39,3 +39,6 @@ coverage/
 .cache/
 temp/
 .tmp/
+.wrangler/
+.dev.vars
+.dev.vars.*

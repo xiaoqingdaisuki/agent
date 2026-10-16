@@ -43,6 +43,15 @@ export interface TurnCommandMessage {
   created_at: string;
 }
 
+// 新请求到达时即时回收已超过路由硬上限的孤儿 Turn，保留正常并发保护。
+async function recoverConversationTurns(db: D1Database, conversationId: string): Promise<void> {
+  const now = new Date().toISOString();
+  const staleBefore = new Date(Date.now() - 330_000).toISOString();
+  await db.prepare(
+    "UPDATE turns SET status = 'failed', error_code = 'AGENT_RESTART_RECOVERY', updated_at = ?, completed_at = ? WHERE conversation_id = ? AND status IN ('pending', 'streaming') AND updated_at < ?",
+  ).bind(now, now, conversationId, staleBefore).run();
+}
+
 // 读取指定消息，供原子 Turn 命令返回实际分配的序号。
 async function getCommandMessage(db: D1Database, messageId: string): Promise<TurnCommandMessage | null> {
   const result = await db.prepare(
@@ -60,6 +69,7 @@ export async function beginTurnWithUserMessage(
     created_at?: string;
   },
 ): Promise<{ turn: Turn; userMessage: TurnCommandMessage; created: boolean }> {
+  await recoverConversationTurns(db, input.conversation_id);
   const existing = await getTurnByClientMessageId(db, input.conversation_id, input.client_message_id);
   if (existing) {
     const existingMessage = existing.user_message_id
@@ -207,6 +217,7 @@ export async function createOrGetTurn(
   db: D1Database,
   input: Pick<Turn, "id" | "conversation_id" | "user_id" | "client_message_id">,
 ): Promise<{ turn: Turn; created: boolean }> {
+  await recoverConversationTurns(db, input.conversation_id);
   const existing = await getTurnByClientMessageId(db, input.conversation_id, input.client_message_id);
   if (existing) return { turn: existing, created: false };
 

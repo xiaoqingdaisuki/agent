@@ -18,28 +18,35 @@ function parseBooleanEnv(value: unknown): unknown {
   return value;
 }
 
+// 限制模型总预算，为代理和路由的终态持久化预留时间。
+function capAgentDeadline(value: number): number {
+  return Math.min(value, 240_000);
+}
+
 const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   OPENAI_BASE_URL: z.string().optional(),
+  CLOUDFLARE_AI_GATEWAY_URL: z.string().url().optional(),
+  CLOUDFLARE_AI_GATEWAY_TOKEN: z.string().optional(),
   IMAGE_API_KEY: z.string().optional(),
   IMAGE_BASE_URL: z
     .string()
     .url()
     .default("https://api.cloudflare.com/client/v4/accounts/572890169551ba29ece8e74c7b27c215/ai/run"),
-  IMAGE_MODEL: z.string().default("@cf/black-forest-labs/flux-2-klein-9b"),
+  IMAGE_MODEL: z.string().default("@cf/black-forest-labs/flux-2-dev"),
   AGENT_DEADLINE_MS: z.coerce
     .number()
     .int()
     .min(30_000)
     .max(300_000)
-    .default(120_000),
+    .default(120_000).transform(capAgentDeadline),
   AGENT_DEADLINE_WITH_TOOLS_MS: z.coerce
     .number()
     .int()
     .min(60_000)
     .max(600_000)
-    .default(300_000),
+    .default(240_000).transform(capAgentDeadline),
   SERVER_REQUEST_TIMEOUT_MS: z.coerce
     .number()
     .int()

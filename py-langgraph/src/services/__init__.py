@@ -15,12 +15,13 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Optional
 
 from src.tools.runtime.executor import create_tool_call_context, tool_call_scope
 from src.config.settings import settings
+from src.agents.response_handler import ModelResponseError
 
 logger = logging.getLogger(__name__)
 
@@ -449,6 +450,7 @@ class BusinessErrorCode(str, Enum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
     AGENT_TIMEOUT = "AGENT_TIMEOUT"
+    MODEL_RESPONSE_INVALID = "MODEL_RESPONSE_INVALID"
     TURN_IN_PROGRESS = "TURN_IN_PROGRESS"
     TURN_ALREADY_FINISHED = "TURN_ALREADY_FINISHED"
 
@@ -484,7 +486,7 @@ class Conversation:
         self.title = title
         self.mode = mode
         self.user_id = user_id or "anonymous"
-        self.created_at = created_at or datetime.now().isoformat()
+        self.created_at = created_at or datetime.now(UTC).isoformat()
         self.message_count = message_count
         self.messages: list[Message] = []
 
@@ -511,7 +513,7 @@ class Message:
         self.id = message_id or f"msg_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         self.role = role
         self.content = content
-        self.created_at = created_at or datetime.now().isoformat()
+        self.created_at = created_at or datetime.now(UTC).isoformat()
 
     # 将消息对象序列化为字典
     def to_dict(self):
@@ -541,7 +543,7 @@ class Document:
         self.status = status
         self.chunks = chunks
         self.category = category
-        self.created_at = created_at or datetime.now().isoformat()
+        self.created_at = created_at or datetime.now(UTC).isoformat()
 
     # 将文档对象序列化为字典
     def to_dict(self):
@@ -1085,7 +1087,7 @@ class KnowledgeService:
                 category=category,
                 document_id=result["id"],
                 status=result.get("status", "indexed"),
-                created_at=result.get("created_at", datetime.now().isoformat()),
+                created_at=result.get("created_at", datetime.now(UTC).isoformat()),
             )
 
             _documents[document.id] = document
@@ -1196,7 +1198,7 @@ class KnowledgeService:
                 category=doc_data.get("category"),
                 document_id=doc_data["id"],
                 status=doc_data.get("status", "indexed"),
-                created_at=doc_data.get("created_at", datetime.now().isoformat()),
+                created_at=doc_data.get("created_at", datetime.now(UTC).isoformat()),
             )
             _documents[doc_id] = doc
             _document_owners[doc_id] = user_id
@@ -1536,7 +1538,7 @@ class AgentService:
                 build_attachment_content(content, attachment_context),
                 knowledge_context,
             )
-            conversation_history = ConversationService.get_agent_conversation_history(
+            conversation_history = await asyncio.to_thread(ConversationService.get_agent_conversation_history,
                 conversation_id, content
             )
             config = {
@@ -1584,8 +1586,16 @@ class AgentService:
                             },
                             config=config,
                         )
+                        if is_direct_chat_message(content) and not extract_agent_output_text(result).strip():
+                            result = await build_tool_agent().ainvoke(
+                                {"messages": [{"role": "user", "content": agent_content}],
+                                 "conversation_history": conversation_history, "user_id": user_id},
+                                config=config,
+                            )
 
-            reply_content = extract_agent_output_text(result) or "抱歉，我没有理解您的问题。"
+            reply_content = extract_agent_output_text(result)
+            if not reply_content.strip():
+                raise ModelResponseError()
 
             # 检测 LLM 输出截断
             finish_reason = get_finish_reason_from_output(result)
@@ -1605,6 +1615,8 @@ class AgentService:
             )
         except BusinessError:
             raise
+        except ModelResponseError as error:
+            raise BusinessError(BusinessErrorCode.MODEL_RESPONSE_INVALID, str(error), 502) from error
         except Exception as error:
             error_msg = str(error)
             if error.__class__.__name__ == "ModelCapacityError":
@@ -1711,7 +1723,7 @@ class AgentService:
                 tenant_id=str((tool_identity or {}).get("tenant_id", f"user:{user_id or 'anonymous'}")),
                 roles=list((tool_identity or {}).get("roles", ["member"])),
             )
-            conversation_history = ConversationService.get_agent_conversation_history(
+            conversation_history = await asyncio.to_thread(ConversationService.get_agent_conversation_history,
                 conversation_id, content
             )
             if conversation and conversation.mode == "knowledge" and not attachment_present:
@@ -1759,7 +1771,7 @@ class AgentService:
                             result = await rag_agent.ainvoke(rag_input)
                             full_answer = result["messages"][-1].content
                 if not full_answer.strip():
-                    full_answer = "抱歉，我没有理解您的问题。"
+                    raise ModelResponseError()
                 raw_answer = full_answer
                 if not emitted_text:
                     if rag_stream_api:
@@ -1980,7 +1992,8 @@ class AgentService:
                         and not observed_tool_event
                         and hasattr(agent, "ainvoke")
                     ):
-                        fallback_result = await agent.ainvoke(
+                        fallback_agent = build_tool_agent() if direct_chat else agent
+                        fallback_result = await fallback_agent.ainvoke(
                             {
                                 "messages": [{"role": "user", "content": agent_content}],
                                 "conversation_history": conversation_history,
@@ -2008,9 +2021,7 @@ class AgentService:
 
             # 工具调用或模型空响应不能让 SSE 以无文本事件结束，否则前端会误判接口失败。
             if not full_answer.strip():
-                full_answer = "抱歉，我没有理解您的问题。"
-                emitted_text = True
-                yield {"type": "text", "text": full_answer}
+                raise ModelResponseError()
 
             final_answer = maybe_append_continuation_hint(full_answer, stream_finish_reason)
             if final_answer != full_answer:
@@ -2046,6 +2057,8 @@ class AgentService:
                 yield {"type": "text", "text": timeout_answer}
         except BusinessError:
             raise
+        except ModelResponseError as error:
+            raise BusinessError(BusinessErrorCode.MODEL_RESPONSE_INVALID, str(error), 502) from error
         except Exception as error:
             error_msg = str(error)
             if error.__class__.__name__ == "ModelCapacityError":

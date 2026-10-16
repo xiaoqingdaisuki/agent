@@ -1,3 +1,4 @@
+import { getModelConfiguration } from "../config/model.js";
 /**
  * RAG Agent — TS 版（LangChain 声明式）
  *
@@ -87,10 +88,7 @@ export class RAGAgent {
   private async createAgent(options: RAGOptions): Promise<AgentExecutor> {
     const model = new ChatOpenAI({
       modelName: options.model || process.env.OPENAI_MODEL || "gpt-4o-mini",
-      configuration: {
-        baseURL: process.env.OPENAI_BASE_URL,
-        apiKey: process.env.OPENAI_API_KEY,
-      },
+      configuration: getModelConfiguration(),
     });
 
     const retrieverTool = createRetrieverTool(this.retriever);

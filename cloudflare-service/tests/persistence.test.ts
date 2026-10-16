@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
 
 import app from "../src/index.js";
 import { updateMemory, type Memory } from "../src/repositories/memory.js";
@@ -137,6 +140,30 @@ describe("Gateway authentication", () => {
 });
 
 describe("Persistent identifiers and ordering", () => {
+  it("recovers an orphan in SQLite while preserving the active Turn constraint", async () => {
+    const sqlite = new DatabaseSync(":memory:");
+    sqlite.exec("PRAGMA foreign_keys = OFF");
+    sqlite.exec(readFileSync(new URL("../migrations/0009_turns.sql", import.meta.url), "utf8"));
+    const database = {
+      prepare: (sql: string) => ({ bind: (...args: any[]) => ({
+        first: async () => sqlite.prepare(sql).get(...args) ?? null,
+        run: async () => ({ meta: { changes: Number(sqlite.prepare(sql).run(...args).changes) } }),
+      }) }),
+    } as unknown as D1Database;
+    try {
+      const first = { id: "first", conversation_id: "conv-1", user_id: "user-1", client_message_id: "message-1" };
+      await createOrGetTurn(database, first);
+      await expect(createOrGetTurn(database, { ...first, id: "second", client_message_id: "message-2" }))
+        .rejects.toThrow("active Turn");
+      sqlite.prepare("UPDATE turns SET updated_at = ? WHERE id = ?").run(new Date(Date.now() - 331_000).toISOString(), "first");
+      expect((await createOrGetTurn(database, { ...first, id: "second", client_message_id: "message-2" })).created).toBe(true);
+      expect(sqlite.prepare("SELECT status, error_code FROM turns WHERE id = 'first'").get())
+        .toMatchObject({ status: "failed", error_code: "AGENT_RESTART_RECOVERY" });
+      expect((await createOrGetTurn(database, first)).turn.status).toBe("failed");
+    } finally {
+      sqlite.close();
+    }
+  });
   it("creates the profile required by the conversation foreign key", async () => {
     const statements: string[] = [];
     const database = {
@@ -303,7 +330,7 @@ describe("Persistent identifiers and ordering", () => {
       completed_at: "2026-01-01T00:00:00.000Z",
     };
     const database = {
-      prepare: () => ({ bind: () => ({ first: async () => existing }) }),
+      prepare: () => ({ bind: () => ({ first: async () => existing, run: async () => ({ meta: { changes: 0 } }) }) }),
     };
 
     const result = await createOrGetTurn(database as unknown as D1Database, {

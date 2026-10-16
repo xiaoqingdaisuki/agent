@@ -1,3 +1,4 @@
+import { getModelConfiguration } from "../config/model.js";
 import { ChatOpenAI } from "@langchain/openai";
 import { AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
 import { createAgent, createMiddleware } from "langchain";
@@ -6,6 +7,7 @@ import { SYSTEM_PROMPT } from "../prompts/system.js";
 import { tools, toolDescriptors, toolSchemas } from "../tools/index.js";
 import { wrapToolWithRuntime } from "../tools/runtime/executor.js";
 import { config } from "../config/index.js";
+import { ModelResponseError } from "./response-handler.js";
 import {
   createDefaultReActLimits,
   getActiveReActTracker,
@@ -186,6 +188,9 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
     ? (candidate as any).tool_calls
     : [];
   const parsedCalls = parseXmlToolCalls(content);
+  if (!parsedCalls.length && !originalToolCalls.length && /<invoke\b|<function=|<dots_function_call\b/i.test(content)) {
+    throw new ModelResponseError("AI服务返回了无法解析的工具调用，请重试。");
+  }
   if (originalToolCalls.length > 0) {
     return new AIMessage({
       // 原生 tool_calls 是模型与当前 Agent 协商出的正式结果，兼容 XML 只允许被隐藏，不能覆盖或追加执行。
@@ -298,6 +303,7 @@ async function runWithModelCapacity<T>(
 
 // 集中定义必须保留完整工具链的意图，避免实时、文件或记忆请求被误送到轻量模型路径。
 const TOOL_INTENT_PATTERNS = [
+  /(?:(?<!\d)(?:19|20)\d{2}(?!\d)|门店|店铺|地址|营业|特色美食|APEC)/i,
   /(?:天气|气温|下雨|下雪|空气质量|weather)/i,
   /(?:(?:现在|当前|此刻).{0,10}(?:几点|时间|日期|星期)|北京时间|时区|timezone)/i,
   /(?:(?:请|帮我|麻烦)?(?:计算(?!机)|算一下|算出)|\d\s*(?:[+\-*/×÷%^]|\*\*)\s*\d|\b(?:calculate|compute|evaluate)\b)/i,
@@ -391,7 +397,7 @@ class DeclarativeToolAgent {
               : (message as any)?.type;
             return messageType === "ai" || messageType === "assistant";
           });
-        const output = getMessageText(answerMessage) || "抱歉，我没有理解您的问题。";
+        const output = getMessageText(answerMessage);
         tracker.complete(output);
         return { output, react: tracker.summary() };
       });
@@ -412,6 +418,9 @@ class DeclarativeToolAgent {
   ) {
     const tracker = createReActTracker();
     const events: unknown[] = [];
+    const controller = new AbortController();
+    const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+    let closed = false;
     let completed = false;
     let failed: unknown;
     let notifyEvent = () => {};
@@ -435,21 +444,23 @@ class DeclarativeToolAgent {
         ],
       },
       {
-        signal: options.signal,
+        signal,
         recursionLimit: this.maxIterations * 3 + 4,
         version: options.version || "v2",
       },
         );
         for await (const event of stream) {
-          while (events.length >= MAX_STREAM_EVENT_BUFFER) {
+          while (!closed && events.length >= MAX_STREAM_EVENT_BUFFER) {
             await waitForBufferSpace();
           }
+          if (closed) return;
           events.push(event);
           notifyEvent();
         }
-        while (events.length >= MAX_STREAM_EVENT_BUFFER) {
+        while (!closed && events.length >= MAX_STREAM_EVENT_BUFFER) {
           await waitForBufferSpace();
         }
+        if (closed) return;
         events.push({ event: "on_chain_end", data: { output: { react: tracker.summary() } } });
         notifyEvent();
       } catch (error) {
@@ -462,17 +473,25 @@ class DeclarativeToolAgent {
     };
     const runPump = () => runWithReActTracker(tracker, pump);
     const running = options.toolCallScope ? options.toolCallScope.run(runPump) : runPump();
-    while (!completed || events.length > 0) {
-      const event = events.shift();
-      if (event) {
-        notifySpace();
-        yield event;
-      } else {
-        await waitForEvent();
+    try {
+      while (!completed || events.length > 0) {
+        const event = events.shift();
+        if (event) {
+          notifySpace();
+          yield event;
+        } else {
+          await waitForEvent();
+        }
       }
+      await running;
+      if (failed) throw failed;
+    } finally {
+      closed = true;
+      controller.abort();
+      events.length = 0;
+      notifySpace();
+      void running.catch(() => undefined);
     }
-    await running;
-    if (failed) throw failed;
   }
 }
 
@@ -501,7 +520,32 @@ export function createReActPolicyMiddleware() {
           : request),
         requestSignal,
       );
-      const normalized = convertXmlToolCalls(response);
+      // 无工具路径保留协议原文，交由服务层升级为完整工具 Agent。
+      if (!request.tools?.length) {
+        tracker?.complete(getMessageText(response));
+        // 兼容流式首包省略 assistant role 的模型，避免框架收到 generic ChatMessageChunk。
+        return new AIMessage({
+          content: response.content,
+          additional_kwargs: response.additional_kwargs,
+          response_metadata: response.response_metadata,
+          id: response.id,
+          tool_calls: response.tool_calls,
+          usage_metadata: response.usage_metadata,
+        });
+      }
+      let normalized: AIMessage;
+      try {
+        normalized = convertXmlToolCalls(response);
+      } catch (error) {
+        if (!(error instanceof ModelResponseError)) throw error;
+        if (tracker?.beginModelCall()) throw error;
+        const retried = await runWithModelCapacity(
+          // 要求供应商纠正协议，仅允许一次受控重试。
+          () => handler({ ...request, systemPrompt: `${request.systemPrompt || ""}\n上次工具调用格式无效。请使用原生 tool_calls 和已提供的工具名称、JSON 参数；不要输出 XML。` }),
+          requestSignal,
+        );
+        normalized = convertXmlToolCalls(retried);
+      }
       if (!normalized.tool_calls?.length) tracker?.complete(getMessageText(normalized));
       return normalized;
     },
@@ -587,10 +631,7 @@ async function buildDirectChatAgent(systemPrompt: string): Promise<DeclarativeTo
     maxTokens: config.LLM_MAX_OUTPUT_TOKENS,
     timeout: config.LLM_TIMEOUT_MS,
     maxRetries: config.LLM_MAX_RETRIES,
-    configuration: {
-      baseURL: process.env.OPENAI_BASE_URL,
-      apiKey: process.env.OPENAI_API_KEY,
-    },
+    configuration: getModelConfiguration(),
   });
   return new DeclarativeToolAgent(createAgent({
     model: rawModel,
@@ -606,10 +647,7 @@ async function buildToolAgent(systemPrompt: string): Promise<DeclarativeToolAgen
     maxTokens: config.LLM_MAX_OUTPUT_TOKENS,
     timeout: config.LLM_TIMEOUT_MS,
     maxRetries: config.LLM_MAX_RETRIES,
-    configuration: {
-      baseURL: process.env.OPENAI_BASE_URL,
-      apiKey: process.env.OPENAI_API_KEY,
-    },
+    configuration: getModelConfiguration(),
   });
   const wrappedTools = tools.map((tool) => {
     const descriptor = toolDescriptors[tool.name];

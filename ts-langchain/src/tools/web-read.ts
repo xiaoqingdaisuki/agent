@@ -11,7 +11,7 @@
 
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { lookup } from "node:dns/promises";
+import { lookup, resolve4, resolve6 } from "node:dns/promises";
 import { isIP } from "node:net";
 
 import type { ToolDescriptor } from "./contracts.js";
@@ -101,7 +101,11 @@ export async function validateNetworkUrl(
   if (isIP(parsed.hostname)) return syntaxCheck;
 
   try {
-    const addresses = await lookup(parsed.hostname, { all: true });
+    const addresses = process.env.AGENT_RUNTIME === "workers"
+      ? (await Promise.allSettled([resolve4(parsed.hostname), resolve6(parsed.hostname)]))
+          .flatMap((result) => result.status === "fulfilled" ? result.value.map((address) => ({ address })) : [])
+      : await lookup(parsed.hostname, { all: true });
+    if (addresses.length === 0) return { safe: false, reason: `无法解析目标主机: ${parsed.hostname}` };
     const blocked = addresses.find(({ address }) => isBlockedIp(address));
     if (blocked) {
       return {

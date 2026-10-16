@@ -6,6 +6,14 @@
 
 from __future__ import annotations
 
+
+class ModelResponseError(ValueError):
+    code = "MODEL_RESPONSE_INVALID"
+
+    # 将空响应和无法解析的工具协议标记为可重试的上游错误。
+    def __init__(self, message: str = "AI服务未生成有效回答，请重试。"):
+        super().__init__(message)
+
 # ============ 截断检测 ============
 
 # 以这些字符结尾的文本大概率是完整句子

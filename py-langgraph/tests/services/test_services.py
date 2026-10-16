@@ -228,6 +228,25 @@ class TestConversationService:
 
 class TestAgentService:
     @pytest.mark.asyncio
+    async def test_direct_protocol_response_upgrades_to_tool_agent(self, monkeypatch):
+        from unittest.mock import AsyncMock
+        from src.agents import graph_agents
+        from langchain_core.messages import AIMessage
+
+        class DirectAgent:
+            ainvoke = AsyncMock()
+            async def astream_events(self, *_args, **_kwargs):
+                yield {"event": "on_chat_model_stream", "data": {"chunk": AIMessage(content="<dots_function_call><search><query>facts</query></search></dots_function_call>")}}
+
+        tool_agent = type("ToolAgent", (), {"ainvoke": AsyncMock(return_value={"messages": [AIMessage(content="已检索并回答")]})})()
+        monkeypatch.setattr(graph_agents, "build_chat_agent", lambda: DirectAgent())
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda: tool_agent)
+        conversation = ConversationService.create("direct upgrade")
+        events = [event async for event in AgentService.chat_stream(conversation.id, "解释闭包")]
+        assert "".join(event["text"] for event in events if event["type"] == "text") == "已检索并回答"
+        DirectAgent.ainvoke.assert_not_called()
+        tool_agent.ainvoke.assert_awaited_once()
+    @pytest.mark.asyncio
     async def test_chat_injects_knowledge_context_for_memory_enabled_user(self, monkeypatch):
         from langchain_core.messages import AIMessage
         from src.agents import graph_agents
@@ -415,8 +434,8 @@ class TestAgentService:
         await flush_background_tasks()
 
     @pytest.mark.asyncio
-    async def test_tool_only_stream_emits_fallback_answer(self, monkeypatch):
-        """Tool-only streams must still end with visible assistant text."""
+    async def test_tool_only_stream_returns_retriable_error(self, monkeypatch):
+        """A tool-only response must fail explicitly so the user can retry."""
         from src.agents import graph_agents
         from langchain_core.messages import AIMessage
 
@@ -440,22 +459,16 @@ class TestAgentService:
         conversation = ConversationService.create("tool stream")
         monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
 
-        events = [
-            event
-            async for event in AgentService.chat_stream(
-                conversation.id, "calculate"
-            )
-        ]
+        with pytest.raises(BusinessError) as error:
+            events = [
+                event
+                async for event in AgentService.chat_stream(
+                    conversation.id, "calculate"
+                )
+            ]
 
-        assert events == [
-            {
-                "type": "tool",
-                "tool_name": "calculator",
-                "status": "started",
-                "call_id": "call-contract",
-            },
-            {"type": "text", "text": "抱歉，我没有理解您的问题。"},
-        ]
+        assert error.value.code == BusinessErrorCode.MODEL_RESPONSE_INVALID
+        assert error.value.status_code == 502
 
     @pytest.mark.asyncio
     async def test_stream_ignores_tool_message_as_final_answer(self, monkeypatch):
@@ -482,14 +495,16 @@ class TestAgentService:
         conversation = ConversationService.create("tool output stream")
         monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
 
-        events = [
-            event
-            async for event in AgentService.chat_stream(
-                conversation.id, "who am I?"
-            )
-        ]
+        with pytest.raises(BusinessError) as error:
+            events = [
+                event
+                async for event in AgentService.chat_stream(
+                    conversation.id, "who am I?"
+                )
+            ]
 
-        assert events == [{"type": "text", "text": "抱歉，我没有理解您的问题。"}]
+        assert error.value.code == BusinessErrorCode.MODEL_RESPONSE_INVALID
+        assert error.value.status_code == 502
 
     @pytest.mark.asyncio
     async def test_stream_extracts_final_ai_answer_after_tool_call(self, monkeypatch):
@@ -743,14 +758,16 @@ class TestAgentService:
         conversation = ConversationService.create("xml-only stream")
         monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
 
-        events = [
-            event
-            async for event in AgentService.chat_stream(
-                conversation.id, "who am I?"
-            )
-        ]
+        with pytest.raises(BusinessError) as error:
+            events = [
+                event
+                async for event in AgentService.chat_stream(
+                    conversation.id, "who am I?"
+                )
+            ]
 
-        assert events == [{"type": "text", "text": "抱歉，我没有理解您的问题。"}]
+        assert error.value.code == BusinessErrorCode.MODEL_RESPONSE_INVALID
+        assert error.value.status_code == 502
 
     @pytest.mark.asyncio
     async def test_stream_returns_visible_text_when_tool_request_times_out(self, monkeypatch):

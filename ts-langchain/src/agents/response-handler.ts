@@ -16,6 +16,16 @@
 
 import { AIMessage } from "@langchain/core/messages";
 
+export class ModelResponseError extends Error {
+  readonly code = "MODEL_RESPONSE_INVALID";
+
+  // 将空响应和无法解析的工具协议标记为可重试的上游错误。
+  constructor(message = "AI服务未生成有效回答，请重试。") {
+    super(message);
+    this.name = "ModelResponseError";
+  }
+}
+
 // ============ 截断检测 ============
 
 /**

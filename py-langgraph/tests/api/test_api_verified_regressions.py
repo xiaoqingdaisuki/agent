@@ -9,6 +9,54 @@ from src.services.document_parser import parse_document
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("phase", ["meta", "text", "error", "complete"])
+async def test_stream_closure_never_leaves_the_conversation_busy(monkeypatch, legacy, phase):
+    from types import SimpleNamespace
+    from src.api.routes import v1, stream as legacy_route
+    from src.repositories import InMemoryRepositories
+    from src.services import BusinessError, BusinessErrorCode
+
+    repository = InMemoryRepositories()
+    monkeypatch.setattr(settings, "memory_enabled", False)
+    monkeypatch.setattr("src.repositories.get_repositories", lambda: repository)
+    route = legacy_route if legacy else v1
+    monkeypatch.setattr(route, "require_agent_user_id", lambda *args: "closure-user")
+    monkeypatch.setattr(route, "get_agent_tool_identity", lambda *args: {})
+    monkeypatch.setattr(route, "log_request_error", lambda *args: None)
+    monkeypatch.setattr("src.memory.get_default_checkpointer", lambda: SimpleNamespace(restore_from_gateway=AsyncMock()))
+
+    async def events(*args, **kwargs):
+        if phase == "error":
+            raise BusinessError(BusinessErrorCode.MODEL_RESPONSE_INVALID, "invalid response", 502)
+        yield {"type": "text", "text": "answer"}
+
+    monkeypatch.setattr("src.services.AgentService.chat_stream", events)
+    conversation = ConversationService.create("closure", "chat", "closure-user")
+    request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
+    if legacy:
+        response = await route.stream(route.StreamRequest(message="question", thread_id=conversation.id), request)
+    else:
+        payload = SimpleNamespace(content="question", user_id="closure-user", client_message_id="first")
+        monkeypatch.setattr(route, "read_send_message_payload", AsyncMock(return_value=(payload, {})))
+        monkeypatch.setattr(route, "prepare_attachment_context", AsyncMock(return_value={}))
+        response = await route.stream_message(conversation.id, request)
+    iterator = response.body_iterator
+    assert "event: meta" in await anext(iterator)
+    if phase in {"text", "error"}:
+        assert f"event: {phase}" in await anext(iterator)
+    if phase == "complete":
+        async for _event in iterator:
+            pass
+    else:
+        await iterator.aclose()
+    previous = next(iter(repository._turns.values()))
+    assert previous["status"] == ("completed" if phase == "complete" else "failed" if phase == "error" else "cancelled")
+    _turn, created = TurnService.begin(conversation.id, "closure-user", "next question", "second")
+    assert created
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["GET", "PATCH", "DELETE"])
 async def test_preflight_does_not_require_service_credentials(monkeypatch, method):
     monkeypatch.setattr(settings, "cors_origin", "https://audit.example")

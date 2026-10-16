@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     )
     image_model: str = "@cf/black-forest-labs/flux-2-klein-9b"
     agent_deadline_ms: int = 120000
-    agent_deadline_with_tools_ms: int = 300000
+    agent_deadline_with_tools_ms: int = 240000
     server_request_timeout_ms: int = 310000
     llm_timeout_ms: int = 30000
     llm_max_retries: int = Field(default=1, ge=0, le=2)
@@ -75,6 +75,12 @@ class Settings(BaseSettings):
             return value
         normalized = value.rstrip("/")
         return f"{normalized}/v1" if "/" not in normalized.split("://", 1)[-1] else normalized
+
+    @field_validator("agent_deadline_ms", "agent_deadline_with_tools_ms")
+    @classmethod
+    # 限制模型总预算，为代理和路由的终态持久化预留至少五十秒。
+    def cap_agent_deadline(cls, value: int) -> int:
+        return min(value, 240000)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 

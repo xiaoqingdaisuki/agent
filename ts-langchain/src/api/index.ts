@@ -1,5 +1,6 @@
 import fastify from "fastify";
 import multipart from "@fastify/multipart";
+import cors from "@fastify/cors";
 import { registerV1Routes } from "./routes/v1/index.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerStreamRoutes } from "./routes/stream.js";
@@ -22,7 +23,7 @@ export async function buildApp() {
     keepAliveTimeout: 5_000,
   });
 
-  await app.register(import("@fastify/cors"), {
+  await app.register(cors, {
     origin: config.CORS_ORIGIN.length > 0 ? config.CORS_ORIGIN : false,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });

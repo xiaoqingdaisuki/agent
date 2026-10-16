@@ -515,6 +515,12 @@ export async function registerV1Routes(app: FastifyInstance) {
     reply.raw.setHeader("X-Accel-Buffering", "no");
     reply.raw.flushHeaders();
     const requestController = new AbortController();
+    // 限制整个流式轮次，为代理超时前的状态持久化预留时间。
+    const requestTimer = setTimeout(
+      () => requestController.abort(new BusinessError(BusinessErrorCode.AGENT_TIMEOUT, "AI助手响应超时，请稍后重试。", 504)),
+      270_000,
+    );
+    requestTimer.unref?.();
     const abortOnDisconnect = () => {
       if (!reply.raw.writableEnded) {
         requestController.abort(new Error("Client disconnected"));
@@ -580,10 +586,20 @@ export async function registerV1Routes(app: FastifyInstance) {
           sseEvents.event(eventName, payload),
         );
       }
+      requestController.signal.throwIfAborted();
       const assistantMessage = { id: crypto.randomUUID(), role: "assistant" as const, content: fullAnswer, createdAt: new Date().toISOString() };
       await TurnService.complete(turnResult.turn.id, trustedUserId, assistantMessage);
       turnCompleted = true;
     } catch (error: unknown) {
+      if (!turnCompleted) {
+        await TurnService.terminate(
+          turnResult.turn.id,
+          trustedUserId,
+          requestController.signal.aborted && requestController.signal.reason?.code !== "AGENT_TIMEOUT",
+          requestController.signal.aborted && requestController.signal.reason?.code !== "AGENT_TIMEOUT" ? "CLIENT_CANCELLED" : (error as any)?.code || "INTERNAL_ERROR",
+        ).catch(() => undefined);
+        turnCompleted = true;
+      }
       logRequestError(request, error, {
         conversation_id: convId,
         user_id: trustedUserId,
@@ -608,15 +624,12 @@ export async function registerV1Routes(app: FastifyInstance) {
       } catch {
         // raw response already closed / unreachable — nothing to write
       }
-      if (!turnCompleted) {
-        await TurnService.terminate(
-          turnResult.turn.id,
-          trustedUserId,
-          requestController.signal.aborted,
-          requestController.signal.aborted ? "CLIENT_CANCELLED" : (error as any)?.code || "INTERNAL_ERROR",
-        ).catch(() => undefined);
-      }
+
     } finally {
+      if (!turnCompleted) {
+        await TurnService.terminate(turnResult.turn.id, trustedUserId, true, "CLIENT_CANCELLED").catch(() => undefined);
+      }
+      clearTimeout(requestTimer);
       clearInterval(heartbeat);
       request.raw.removeListener("aborted", abortOnDisconnect);
       reply.raw.removeListener("close", abortOnDisconnect);

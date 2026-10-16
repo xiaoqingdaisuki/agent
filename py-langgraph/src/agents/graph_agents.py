@@ -18,7 +18,7 @@ from typing_extensions import TypedDict
 
 from src.config.settings import settings
 from src.agents.deadline import enable_tool_budget
-from src.agents.response_handler import maybe_append_continuation_hint
+from src.agents.response_handler import ModelResponseError, maybe_append_continuation_hint
 from src.tools.runtime.data_redaction import redact_text_content
 from src.tools.runtime.executor import (
     create_tool_call_context,
@@ -104,6 +104,7 @@ async def _load_memory_context(user_id: str) -> str:
 
 # 集中定义必须保留完整工具链的意图，避免实时、文件或记忆请求被误送到轻量模型路径。
 TOOL_INTENT_PATTERNS = (
+    re.compile(r"(?:(?<!\d)(?:19|20)\d{2}(?!\d)|门店|店铺|地址|营业|特色美食|APEC)", re.IGNORECASE),
     re.compile(r"(?:天气|气温|下雨|下雪|空气质量|weather)", re.IGNORECASE),
     re.compile(
         r"(?:(?:现在|当前|此刻).{0,10}(?:几点|时间|日期|星期)|北京时间|时区|timezone)",
@@ -472,7 +473,10 @@ def build_chat_agent(checkpointer=None):
 
         async with _model_capacity():
             response = await llm.ainvoke(_model_messages(state, SYSTEM_PROMPT, memory_reference=memory_reference))
-        return {"messages": [response]}
+        return {
+            "messages": [response], "react_state": "COMPLETED", "model_calls": 1,
+            "react_steps": 1, "stop_reason": "CLARIFICATION_REQUIRED" if is_clarification(str(response.content)) else "ANSWER_COMPLETE",
+        }
 
     builder = StateGraph(AgentState)
     builder.add_node("trim_history", trim_history)
@@ -652,6 +656,10 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
 
     parsed_calls = _parse_xml_tool_calls(content)
     native_tool_calls = getattr(message, "tool_calls", None) or []
+    if not parsed_calls and not native_tool_calls and re.search(
+        r"<invoke\b|<function=|<dots_function_call\b", content, re.IGNORECASE
+    ):
+        raise ModelResponseError("AI服务返回了无法解析的工具调用，请重试。")
     if native_tool_calls:
         if not parsed_calls:
             return _normalize_standard_tool_calls(message)
@@ -877,7 +885,19 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
             raise RuntimeError("模型未返回任何流式响应")
 
         # Handle XML-format tool calls (e.g. StepFun step-3.7-flash)
-        response = _convert_xml_tool_calls(response)
+        model_attempts = 1
+        try:
+            response = _convert_xml_tool_calls(response)
+        except ModelResponseError:
+            if int(state.get("react_steps", 0)) + 1 >= MAX_REACT_STEPS:
+                raise
+            model_attempts = 2
+            async with _model_capacity():
+                response = await llm_with_tools.ainvoke([
+                    *_model_messages(state, base_prompt, memory_reference=memory_reference),
+                    SystemMessage(content="上次工具调用格式无效。请使用原生 tool_calls 和已提供的工具名称、JSON 参数；不要输出 XML。"),
+                ])
+            response = _convert_xml_tool_calls(response)
 
         # 同一响应中相同参数的记忆保存只保留首次调用，防止模型并行重复保存。
         if hasattr(response, "tool_calls") and response.tool_calls:
@@ -917,12 +937,12 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
 
         tool_calls = list(getattr(response, "tool_calls", []) or [])
         started_at = float(state.get("started_at", time.monotonic()))
-        react_steps = int(state.get("react_steps", 0)) + 1
+        react_steps = int(state.get("react_steps", 0)) + model_attempts
         react_update = {
             "react_state": "TOOL_CALLING" if tool_calls else "COMPLETED",
             "react_steps": react_steps,
             "started_at": started_at,
-            "model_calls": int(state.get("model_calls", 0)) + 1,
+            "model_calls": int(state.get("model_calls", 0)) + model_attempts,
             "total_latency_ms": int((time.monotonic() - started_at) * 1000),
         }
         if tool_calls:
@@ -1028,7 +1048,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
     builder = StateGraph(AgentState)
     builder.add_node("trim_history", trim_history)
     builder.add_node("agent", agent_node)
-    builder.add_node("tools", ToolNode(tools, awrap_tool_call=_scope_memory_tool_call))
+    builder.add_node("tools", ToolNode(tools, awrap_tool_call=_scope_memory_tool_call, handle_tool_errors=True))
     builder.add_node("observe", observe_node)
     builder.add_node("limit", limit_node)
 
