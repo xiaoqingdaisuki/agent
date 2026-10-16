@@ -326,8 +326,6 @@ DELETE /v1/memory                  删除记忆
 GET  /v1/history?user_id=xxx       问答历史
 ```
 
-旧的 `/api/v1/*`、`/internal/v1/*` 以及未版本化的 `/chat`、`/stream`、`/tools`、`/images/generations` 路由均已移除，调用方必须使用上述新地址。
-
 临时文档解析接口接收 multipart 字段 `file`，支持 `txt`、`md`、`markdown`、`json`、`csv`、`pdf` 和 `docx`。持久化模式下应直接把附件随消息发送并写入知识库；关闭持久化时，解析结果只在当前会话请求中使用。
 
 图片生成独立使用 Cloudflare Workers AI 配置：`IMAGE_API_KEY`、`IMAGE_BASE_URL` 和
