@@ -1,5 +1,4 @@
-import { getModelConfiguration } from "../config/model.js";
-import { ChatOpenAI } from "@langchain/openai";
+import { createChatModel } from "../config/model.js";
 import { AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
 import { createAgent, createMiddleware } from "langchain";
 import { TOOL_CALLING_PROMPT } from "../prompts/system.js";
@@ -303,7 +302,8 @@ async function runWithModelCapacity<T>(
 
 // 集中定义必须保留完整工具链的意图，避免实时、文件或记忆请求被误送到轻量模型路径。
 const TOOL_INTENT_PATTERNS = [
-  /(?:(?<!\d)(?:19|20)\d{2}(?!\d)|门店|店铺|地址|营业|特色美食|APEC)/i,
+  /(?:20\d{2}|今年|明年).{0,12}(?:APEC|展会|会议|活动)/i,
+  /(?:推荐|查询|查找|介绍).{0,30}(?:门店|店铺|餐厅|美食)|(?:门店|店铺|餐厅).{0,12}(?:地址|营业)/i,
   /(?:天气|气温|下雨|下雪|空气质量|weather)/i,
   /(?:(?:现在|当前|此刻).{0,10}(?:几点|时间|日期|星期)|北京时间|时区|timezone)/i,
   /(?:(?:请|帮我|麻烦)?(?:计算(?!机)|算一下|算出)|\d\s*(?:[+\-*/×÷%^]|\*\*)\s*\d|\b(?:calculate|compute|evaluate)\b)/i,
@@ -626,13 +626,7 @@ export function invalidateToolAgentCache(): void {
 
 // 构建不发送工具 schema 的声明式 Agent，缩短首 token 延迟并保留流式事件契约。
 async function buildDirectChatAgent(systemPrompt: string): Promise<DeclarativeToolAgent> {
-  const rawModel = new ChatOpenAI({
-    model: process.env.OPENAI_MODEL,
-    maxTokens: config.LLM_MAX_OUTPUT_TOKENS,
-    timeout: config.LLM_TIMEOUT_MS,
-    maxRetries: config.LLM_MAX_RETRIES,
-    configuration: getModelConfiguration(),
-  });
+  const rawModel = createChatModel();
   return new DeclarativeToolAgent(createAgent({
     model: rawModel,
     systemPrompt,
@@ -642,13 +636,7 @@ async function buildDirectChatAgent(systemPrompt: string): Promise<DeclarativeTo
 
 // 构建带 Runtime 工具管线的声明式 createAgent 实例。
 async function buildToolAgent(systemPrompt: string): Promise<DeclarativeToolAgent> {
-  const rawModel = new ChatOpenAI({
-    model: process.env.OPENAI_MODEL,
-    maxTokens: config.LLM_MAX_OUTPUT_TOKENS,
-    timeout: config.LLM_TIMEOUT_MS,
-    maxRetries: config.LLM_MAX_RETRIES,
-    configuration: getModelConfiguration(),
-  });
+  const rawModel = createChatModel();
   const wrappedTools = tools.map((tool) => {
     const descriptor = toolDescriptors[tool.name];
     const schema = toolSchemas[tool.name];

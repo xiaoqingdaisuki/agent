@@ -7,23 +7,63 @@ from typing import Any
 import logging
 import anyio
 
+_pending_settlements: set[asyncio.Task] = set()
 
-# 在独立线程收敛 Turn，避免仓储网络请求阻塞事件循环或被断连取消。
-async def terminate_stream_turn(turn_id: str, user_id: str, cancelled: bool, code: str) -> None:
+
+# 将清理任务保留到完成，防止请求取消后丢失终态写入或重试。
+def _retain_settlement(task: asyncio.Task) -> None:
+    _pending_settlements.add(task)
+    task.add_done_callback(_pending_settlements.discard)
+
+
+# 在独立任务和线程中收敛 Turn，并在网关短暂失败时保留有界重试。
+async def terminate_stream_turn(turn_id: str, user_id: str, cancelled: bool, code: str) -> bool:
     from src.services import TurnService
 
-    try:
-        with anyio.CancelScope(shield=True):
-            await asyncio.shield(asyncio.to_thread(TurnService.terminate, turn_id, user_id, cancelled, code))
-    except Exception:
-        logging.getLogger(__name__).exception("Failed to settle stream Turn %s", turn_id)
+    # 保留原始终态及错误码重试，最终失败由网关陈旧轮次回收兜底。
+    async def retry() -> None:
+        for attempt in range(1, 3):
+            await asyncio.sleep(attempt * 0.25)
+            try:
+                await asyncio.to_thread(TurnService.terminate, turn_id, user_id, cancelled, code)
+                return
+            except Exception:
+                if attempt == 2:
+                    logging.getLogger(__name__).exception(
+                        "Turn settlement retries exhausted: %s", turn_id
+                    )
+
+    # 首次落库与重试调度共用独立任务，外层取消不会在两者之间遗失状态。
+    async def persist() -> bool:
+        try:
+            await asyncio.to_thread(TurnService.terminate, turn_id, user_id, cancelled, code)
+            return True
+        except Exception:
+            logging.getLogger(__name__).exception("Failed to settle stream Turn %s", turn_id)
+            _retain_settlement(asyncio.create_task(retry()))
+            return False
+
+    task = asyncio.create_task(persist())
+    _retain_settlement(task)
+    with anyio.CancelScope(shield=True):
+        return await asyncio.shield(task)
+
+
+# 在正常关闭连接前等待已保留的终态写入及其后续重试。
+async def flush_stream_settlements() -> None:
+    while _pending_settlements:
+        await asyncio.gather(*list(_pending_settlements))
 
 
 # 保证取消发生在 Turn 创建期间时，也能清理线程中已经提交的活动轮次。
-async def begin_stream_turn(conversation_id: str, user_id: str, content: str, client_message_id: str | None):
+async def begin_stream_turn(
+    conversation_id: str, user_id: str, content: str, client_message_id: str | None
+):
     from src.services import TurnService
 
-    task = asyncio.create_task(asyncio.to_thread(TurnService.begin, conversation_id, user_id, content, client_message_id))
+    task = asyncio.create_task(
+        asyncio.to_thread(TurnService.begin, conversation_id, user_id, content, client_message_id)
+    )
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:

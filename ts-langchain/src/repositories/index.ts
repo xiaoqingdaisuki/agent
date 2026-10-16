@@ -212,7 +212,13 @@ export const inMemoryRepositories: Repositories = {
       inMemoryMessages.set(turn.conversation_id, messages);
       const updated: TurnData = {
         ...turn, status: "completed", assistant_message_id: message.id,
-        assistant_content_json: JSON.stringify({ id: message.id, role: "assistant", content: message.content_json, createdAt: message.created_at }),
+        assistant_content_json: JSON.stringify({
+          id: message.id,
+          role: "assistant",
+          content: message.content_json,
+          createdAt: message.created_at,
+          created_at: message.created_at,
+        }),
         updated_at: nextIsoTimestamp(turn.updated_at), completed_at: nextIsoTimestamp(turn.updated_at),
       };
       inMemoryTurns.set(turnId, updated);
@@ -409,7 +415,13 @@ class CloudflareTurnRepository implements TurnRepository {
       turnId,
       userId,
       message,
-      JSON.stringify({ id: message.id, role: "assistant", content: message.content_json, createdAt: message.created_at }),
+      JSON.stringify({
+        id: message.id,
+        role: "assistant",
+        content: message.content_json,
+        createdAt: message.created_at,
+        created_at: message.created_at,
+      }),
     );
   }
 

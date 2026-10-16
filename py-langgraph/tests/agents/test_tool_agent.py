@@ -157,6 +157,9 @@ def test_direct_chat_routing_skips_tools_for_ordinary_answer_styles():
     assert graph_agents.is_direct_chat_message("你好") is True
     assert graph_agents.is_direct_chat_message("你是谁？") is True
     assert graph_agents.is_direct_chat_message("请用三句话解释递归") is True
+    assert graph_agents.is_direct_chat_message("请解释1990年的计算机发展历史") is True
+    assert graph_agents.is_direct_chat_message("写一个发生在2020年的故事") is True
+    assert graph_agents.is_direct_chat_message("解释内存地址的含义") is True
     assert graph_agents.is_direct_chat_message("写两句温和的欢迎语") is True
     assert graph_agents.is_direct_chat_message("写一个 Python 去重函数") is True
     assert graph_agents.is_direct_chat_message("请比较批处理响应和流式响应") is True

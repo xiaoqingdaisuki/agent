@@ -13,7 +13,6 @@ from datetime import datetime
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 
 from src.profile.models import Memory, QARecord, UserProfile
 from src.config.settings import settings
@@ -261,15 +260,18 @@ class MemoryService:
     # 执行 extract with llm 对应的业务逻辑
     def _extract_with_llm(user_id: str, question: str, _answer: str) -> None:
         """LLM-based 记忆提取"""
-        if not settings.openai_api_key:
+        provider_key = (
+            settings.anthropic_api_key
+            if settings.llm_provider == "anthropic"
+            else settings.openai_api_key
+        )
+        if not provider_key:
             return
 
         try:
-            llm = ChatOpenAI(
-                model=settings.openai_model,
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_base_url,
-            )
+            from src.agents.graph_agents import get_llm
+
+            llm = get_llm()
 
             prompt = (
                 "你是一个记忆提取助手。分析以下对话，判断是否有值得长期记住的用户信息。\n\n"

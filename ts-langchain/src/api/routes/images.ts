@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { config } from "../../config/index.js";
-import { generateBoundImage } from "../../runtime.js";
+import { generateBoundImage, hasBoundImageGenerator } from "../../runtime.js";
 
 interface CloudflareImageResponse {
   result?: { image?: string };
@@ -82,7 +82,7 @@ export async function registerImageRoutes(app: FastifyInstance) {
   app.post<{ Body: { prompt?: string } }>(
     "/images/generations",
     async (request, reply) => {
-      const prompt = request.body?.prompt?.trim();
+      const prompt = typeof request.body?.prompt === "string" ? request.body.prompt.trim() : "";
       if (!prompt || prompt.length > 2000) {
         return reply
           .status(400)
@@ -90,7 +90,7 @@ export async function registerImageRoutes(app: FastifyInstance) {
       }
 
       const imageApiUrl = getImageApiUrl();
-      if (!imageApiUrl || !config.IMAGE_API_KEY) {
+      if (!hasBoundImageGenerator() && (!imageApiUrl || !config.IMAGE_API_KEY)) {
         return reply
           .status(503)
           .send({ error: "Image model is not configured" });
@@ -98,8 +98,8 @@ export async function registerImageRoutes(app: FastifyInstance) {
 
       try {
         const response = await requestImageGeneration(
-          imageApiUrl,
-          config.IMAGE_API_KEY,
+          imageApiUrl ?? "",
+          config.IMAGE_API_KEY ?? "",
           prompt,
         );
         const imageType = response.headers.get("Content-Type")?.split(";", 1)[0];

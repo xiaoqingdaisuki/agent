@@ -27,6 +27,7 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   OPENAI_BASE_URL: z.string().optional(),
+  LLM_PROVIDER: z.enum(["openai", "anthropic"]).default("openai"),
   CLOUDFLARE_AI_GATEWAY_URL: z.string().url().optional(),
   CLOUDFLARE_AI_GATEWAY_TOKEN: z.string().optional(),
   IMAGE_API_KEY: z.string().optional(),

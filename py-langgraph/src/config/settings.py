@@ -1,8 +1,11 @@
+from typing import Literal
+
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    llm_provider: Literal["openai", "anthropic"] = "openai"
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str | None = None
@@ -10,11 +13,11 @@ class Settings(BaseSettings):
     image_base_url: str = (
         "https://api.cloudflare.com/client/v4/accounts/572890169551ba29ece8e74c7b27c215/ai/run"
     )
-    image_model: str = "@cf/black-forest-labs/flux-2-klein-9b"
-    agent_deadline_ms: int = 120000
-    agent_deadline_with_tools_ms: int = 240000
-    server_request_timeout_ms: int = 310000
-    llm_timeout_ms: int = 30000
+    image_model: str = "@cf/black-forest-labs/flux-2-dev"
+    agent_deadline_ms: int = Field(default=120000, ge=30000, le=300000)
+    agent_deadline_with_tools_ms: int = Field(default=240000, ge=60000, le=600000)
+    server_request_timeout_ms: int = Field(default=310000, ge=60000, le=600000)
+    llm_timeout_ms: int = Field(default=30000, ge=5000, le=120000)
     llm_max_retries: int = Field(default=1, ge=0, le=2)
     llm_max_context_tokens: int = Field(default=128000, ge=1024, le=128000)
     llm_max_input_tokens: int = Field(default=48000, ge=1024, le=48000)
@@ -25,20 +28,20 @@ class Settings(BaseSettings):
     llm_queue_timeout_ms: int = Field(default=5000, ge=100, le=60000)
     background_task_concurrency: int = Field(default=4, ge=1, le=32)
     background_task_queue_max: int = Field(default=200, ge=1, le=1000)
-    max_agent_iterations: int = 6
-    react_max_steps: int = 8
-    react_max_tool_calls: int = 6
-    react_max_same_tool_calls: int = 3
-    react_max_total_time_ms: int = 30000
+    max_agent_iterations: int = Field(default=6, ge=1, le=8)
+    react_max_steps: int = Field(default=8, ge=1, le=8)
+    react_max_tool_calls: int = Field(default=6, ge=1, le=6)
+    react_max_same_tool_calls: int = Field(default=3, ge=1, le=3)
+    react_max_total_time_ms: int = Field(default=30000, ge=1000, le=30000)
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-3-5-haiku-20241022"
     tavily_api_key: str = ""
     tavily_search_depth: str = "basic"
-    search_timeout_ms: int = 4500
-    search_max_attempts: int = 1
-    search_max_results: int = 8
-    search_cache_ttl_seconds: int = 30
-    search_stale_ttl_seconds: int = 600
+    search_timeout_ms: int = Field(default=4500, ge=1000, le=15000)
+    search_max_attempts: int = Field(default=1, ge=1, le=2)
+    search_max_results: int = Field(default=8, ge=1, le=20)
+    search_cache_ttl_seconds: int = Field(default=30, ge=0, le=3600)
+    search_stale_ttl_seconds: int = Field(default=600, ge=0, le=86400)
     host: str = "0.0.0.0"
     port: int = 6002
     agent_api_secret: str = ""
@@ -62,10 +65,10 @@ class Settings(BaseSettings):
             "MEMORY_GATEWAY_SECRET",
         ),
     )
-    memory_search_mode: str = "hybrid"
+    memory_search_mode: Literal["hybrid", "sql"] = "hybrid"
     memory_auto_extract: bool = False
-    memory_max_active_per_user: int = 50
-    memory_request_timeout_ms: int = 15000
+    memory_max_active_per_user: int = Field(default=50, ge=1, le=200)
+    memory_request_timeout_ms: int = Field(default=15000, ge=1000, le=30000)
 
     @field_validator("openai_base_url")
     @classmethod

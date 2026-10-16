@@ -342,6 +342,12 @@ describe("完整 API 契约", () => {
       })).statusCode).toBe(400);
       expect((await app.inject({
         method: "POST",
+        url: "/api/v1/knowledge/search",
+        headers,
+        payload: { query: "x".repeat(2_001), top_k: 5 },
+      })).statusCode).toBe(400);
+      expect((await app.inject({
+        method: "POST",
         url: "/api/v1/memory",
         headers,
         payload: { content: "test", category: "unknown", importance: 6 },

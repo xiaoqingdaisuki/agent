@@ -4,9 +4,9 @@ External API v1 — 给前端 UI 使用
 
 import json
 import asyncio
-from contextlib import aclosing
 import base64
 import hashlib
+import math
 from datetime import datetime
 from typing import Any, Optional
 
@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 
 from src.api.auth import get_agent_tool_identity, require_agent_user_id
 from src.api.request_logging import log_request_error
-from src.api.sse import SseEventSequencer, encode_sse_heartbeat, with_sse_heartbeats, terminate_stream_turn, begin_stream_turn
+from src.api.sse import terminate_stream_turn, begin_stream_turn
+from src.api.stream_coordinator import stream_turn
 from src.config.settings import settings
 from src.services.document_parser import (
     DocumentParseError,
@@ -36,6 +37,8 @@ from src.services import (
 )
 
 router = APIRouter()
+MAX_MULTIPART_FILES = 6
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 # ============ 请求/响应模型 ============
@@ -94,6 +97,71 @@ def document_parse_http_error(error: DocumentParseError) -> HTTPException:
     )
 
 
+# 规范化前端暂存的文档引用，禁止把路径或任意对象带入模型上下文。
+def normalize_session_documents(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(value[:10]):
+        candidate = item if isinstance(item, dict) else {}
+        filename = candidate.get("filename")
+        local_id = candidate.get("localId")
+        mime_type = candidate.get("mimeType")
+        parser_version = candidate.get("parserVersion")
+        size = candidate.get("size")
+        raw_parts = candidate.get("parts")
+        parts: list[dict[str, Any]] = []
+        if isinstance(raw_parts, list):
+            for part_index, raw_part in enumerate(raw_parts[:200]):
+                part = raw_part if isinstance(raw_part, dict) else {}
+                content = part.get("content")
+                if not isinstance(content, str):
+                    continue
+                content = content.strip()[:20_000]
+                if not content:
+                    continue
+                page = part.get("page")
+                normalized_page = (
+                    math.floor(page)
+                    if isinstance(page, (int, float))
+                    and not isinstance(page, bool)
+                    and math.isfinite(page)
+                    and page >= 1
+                    else None
+                )
+                section = part.get("section")
+                parts.append(
+                    {
+                        "partIndex": part_index,
+                        "page": normalized_page,
+                        "section": section[:255] if isinstance(section, str) else None,
+                        "content": content,
+                    }
+                )
+        if not parts:
+            continue
+        normalized.append(
+            {
+                "localId": (local_id if isinstance(local_id, str) else f"session-{index + 1}")[:128],
+                "filename": (filename if isinstance(filename, str) else f"document-{index + 1}.txt")[:255],
+                "mimeType": (mime_type if isinstance(mime_type, str) else "text/plain")[:128],
+                "size": (
+                    math.floor(size)
+                    if isinstance(size, (int, float))
+                    and not isinstance(size, bool)
+                    and math.isfinite(size)
+                    and size >= 0
+                    else 0
+                ),
+                "parserVersion": (
+                    parser_version if isinstance(parser_version, str) else "session-text-v1"
+                )[:64],
+                "parts": parts,
+            }
+        )
+    return normalized
+
+
 # 读取 JSON 或 multipart 消息，并将图片编码为仅当前请求使用的数据块。
 async def read_send_message_payload(request: Request) -> tuple[SendMessageRequest, dict[str, Any]]:
     content_type = request.headers.get("content-type", "").lower()
@@ -101,7 +169,11 @@ async def read_send_message_payload(request: Request) -> tuple[SendMessageReques
         try:
             payload = await request.json()
             raw_documents = payload.get("session_documents") if isinstance(payload, dict) else None
-            if raw_documents is not None and len(json.dumps(raw_documents, ensure_ascii=False).encode("utf-8")) > SESSION_DOCUMENT_JSON_MAX_BYTES:
+            if (
+                raw_documents is not None
+                and len(json.dumps(raw_documents, ensure_ascii=False).encode("utf-8"))
+                > SESSION_DOCUMENT_JSON_MAX_BYTES
+            ):
                 raise HTTPException(
                     status_code=413,
                     detail={
@@ -109,13 +181,21 @@ async def read_send_message_payload(request: Request) -> tuple[SendMessageReques
                         "message": "临时文档总大小不能超过 5MB",
                     },
                 )
-            req = SendMessageRequest.model_validate(payload)
+            normalized_payload = (
+                {**payload, "session_documents": normalize_session_documents(raw_documents)}
+                if isinstance(payload, dict)
+                else payload
+            )
+            req = SendMessageRequest.model_validate(normalized_payload)
         except Exception as error:
             if isinstance(error, HTTPException):
                 raise
             raise HTTPException(
                 status_code=400,
-                detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "请求体格式不正确"},
+                detail={
+                    "code": BusinessErrorCode.INVALID_REQUEST.value,
+                    "message": "请求体格式不正确",
+                },
             ) from error
         return req, {
             "session_documents": req.session_documents,
@@ -134,21 +214,42 @@ async def read_send_message_payload(request: Request) -> tuple[SendMessageReques
         except json.JSONDecodeError as error:
             raise HTTPException(
                 status_code=400,
-                detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "附件元数据格式不正确"},
+                detail={
+                    "code": BusinessErrorCode.INVALID_REQUEST.value,
+                    "message": "附件元数据格式不正确",
+                },
             ) from error
 
-    documents = list(metadata.get("session_documents") or [])
+    documents = normalize_session_documents(metadata.get("session_documents"))
     images: list[dict[str, str]] = []
     image_fingerprints: set[str] = set()
+    file_count = 0
     for field_name, value in form.multi_items():
         if field_name in {"metadata", "content", "user_id", "client_message_id"}:
             continue
         if not hasattr(value, "read"):
             continue
+        file_count += 1
+        if file_count > MAX_MULTIPART_FILES:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": BusinessErrorCode.INVALID_REQUEST.value,
+                    "message": "文件最多上传 6 个",
+                },
+            )
         file_content = await value.read()
         content_type_value = str(getattr(value, "content_type", "") or "")
         filename = str(getattr(value, "filename", "unknown") or "unknown")
         if content_type_value.startswith("image/"):
+            if len(file_content) > MAX_IMAGE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail={
+                        "code": BusinessErrorCode.INVALID_REQUEST.value,
+                        "message": "图片不能超过 10MB",
+                    },
+                )
             fingerprint = hashlib.sha256(file_content).hexdigest()
             if fingerprint in image_fingerprints:
                 continue
@@ -156,27 +257,37 @@ async def read_send_message_payload(request: Request) -> tuple[SendMessageReques
             if len(images) >= 4:
                 raise HTTPException(
                     status_code=400,
-                    detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "图片最多上传 4 张"},
+                    detail={
+                        "code": BusinessErrorCode.INVALID_REQUEST.value,
+                        "message": "图片最多上传 4 张",
+                    },
                 )
-            images.append({
-                "mime_type": content_type_value,
-                "data": base64.b64encode(file_content).decode("ascii"),
-                "filename": filename,
-            })
+            images.append(
+                {
+                    "mime_type": content_type_value,
+                    "data": base64.b64encode(file_content).decode("ascii"),
+                    "filename": filename,
+                }
+            )
         else:
             try:
                 documents.append(parse_document(file_content, filename, content_type_value))
             except DocumentParseError as error:
                 raise document_parse_http_error(error) from error
 
-    req = SendMessageRequest.model_validate({
-        "content": metadata.get("content", form.get("content", "")),
-        "user_id": metadata.get("user_id", form.get("user_id")),
-        "client_message_id": metadata.get("client_message_id", form.get("client_message_id")),
-        "session_documents": documents,
-        "document_attachment_ids": metadata.get("document_attachment_ids", []),
-    })
-    if len(json.dumps(documents, ensure_ascii=False).encode("utf-8")) > SESSION_DOCUMENT_JSON_MAX_BYTES:
+    req = SendMessageRequest.model_validate(
+        {
+            "content": metadata.get("content", form.get("content", "")),
+            "user_id": metadata.get("user_id", form.get("user_id")),
+            "client_message_id": metadata.get("client_message_id", form.get("client_message_id")),
+            "session_documents": documents,
+            "document_attachment_ids": metadata.get("document_attachment_ids", []),
+        }
+    )
+    if (
+        len(json.dumps(documents, ensure_ascii=False).encode("utf-8"))
+        > SESSION_DOCUMENT_JSON_MAX_BYTES
+    ):
         raise HTTPException(
             status_code=413,
             detail={
@@ -258,7 +369,9 @@ async def ready_health():
 async def create_conversation(req: CreateConversationRequest, request: Request):
     trusted_user_id = require_agent_user_id(request, req.user_id)
     try:
-        conv = ConversationService.create(req.title, req.mode, trusted_user_id)
+        conv = await asyncio.to_thread(
+            ConversationService.create, req.title, req.mode, trusted_user_id
+        )
         return conv.to_dict()
     except Exception:
         raise HTTPException(
@@ -271,13 +384,13 @@ async def create_conversation(req: CreateConversationRequest, request: Request):
 # 列出所有会话
 async def list_conversations(request: Request, user_id: str = None):
     trusted_user_id = require_agent_user_id(request, user_id)
-    return ConversationService.list(trusted_user_id)
+    return await asyncio.to_thread(ConversationService.list, trusted_user_id)
 
 
 @router.get("/conversations/{conv_id}")
 # 获取指定会话详情
 async def get_conversation(conv_id: str, request: Request):
-    conv = ConversationService.get(conv_id)
+    conv = await asyncio.to_thread(ConversationService.get, conv_id)
     if not conv:
         raise HTTPException(
             status_code=404,
@@ -290,20 +403,21 @@ async def get_conversation(conv_id: str, request: Request):
 @router.delete("/conversations/{conv_id}")
 # 删除指定会话及其消息
 async def delete_conversation(conv_id: str, request: Request):
-    conversation = ConversationService.get(conv_id)
+    conversation = await asyncio.to_thread(ConversationService.get, conv_id)
     if not conversation:
         raise HTTPException(
             status_code=404,
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
     require_agent_user_id(request, conversation.user_id)
-    deleted = ConversationService.delete(conv_id)
+    deleted = await asyncio.to_thread(ConversationService.delete, conv_id)
     if not deleted:
         raise HTTPException(
             status_code=404,
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
     from src.memory import get_default_checkpointer
+
     await get_default_checkpointer().adelete_thread(conv_id)
     return {"success": True}
 
@@ -311,14 +425,14 @@ async def delete_conversation(conv_id: str, request: Request):
 @router.get("/conversations/{conv_id}/messages")
 # 获取指定会话的消息列表
 async def get_messages(conv_id: str, request: Request):
-    conv = ConversationService.get(conv_id)
+    conv = await asyncio.to_thread(ConversationService.get, conv_id)
     if not conv:
         raise HTTPException(
             status_code=404,
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
     require_agent_user_id(request, conv.user_id)
-    return ConversationService.get_messages(conv_id)
+    return await asyncio.to_thread(ConversationService.get_messages, conv_id)
 
 
 @router.post("/conversations/{conv_id}/messages", response_model=MessageResponse)
@@ -336,7 +450,10 @@ async def send_message(conv_id: str, request: Request):
     if not content and not has_attachment:
         raise HTTPException(
             status_code=400,
-            detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "content or attachment is required"},
+            detail={
+                "code": BusinessErrorCode.INVALID_REQUEST.value,
+                "message": "content or attachment is required",
+            },
         )
     turn_content = content or "请分析我上传的附件"
     active_turn_id = None
@@ -344,7 +461,7 @@ async def send_message(conv_id: str, request: Request):
         # 确保会话存在于当前仓储并校验用户归属。
         await asyncio.to_thread(ConversationService.ensure, conv_id, trusted_user_id)
 
-        conv = ConversationService.get(conv_id)
+        conv = await asyncio.to_thread(ConversationService.get, conv_id)
         if not conv:
             raise HTTPException(
                 status_code=404,
@@ -354,7 +471,10 @@ async def send_message(conv_id: str, request: Request):
         # 启用记忆网关时尝试恢复 checkpoint；本地模式会安全跳过。
         try:
             from src.memory import get_default_checkpointer
-            await asyncio.wait_for(get_default_checkpointer().restore_from_gateway(conv_id), timeout=5)
+
+            await asyncio.wait_for(
+                get_default_checkpointer().restore_from_gateway(conv_id), timeout=5
+            )
         except Exception:
             pass  # 恢复失败不影响主流程
 
@@ -376,7 +496,7 @@ async def send_message(conv_id: str, request: Request):
             tool_identity=tool_identity,
             attachment_context=attachment_context,
         )
-        TurnService.complete(turn["id"], trusted_user_id, reply)
+        await asyncio.to_thread(TurnService.complete, turn["id"], trusted_user_id, reply)
         active_turn_id = None
 
         return {**reply.to_dict(), "turn_id": turn["id"]}
@@ -387,7 +507,7 @@ async def send_message(conv_id: str, request: Request):
     except BusinessError as e:
         if active_turn_id:
             try:
-                TurnService.terminate(active_turn_id, trusted_user_id, False, e.code.value)
+                await terminate_stream_turn(active_turn_id, trusted_user_id, False, e.code.value)
             except Exception:
                 pass
         raise HTTPException(status_code=e.status_code, detail=e.to_dict())
@@ -396,7 +516,9 @@ async def send_message(conv_id: str, request: Request):
     except Exception:
         if active_turn_id:
             try:
-                TurnService.terminate(active_turn_id, trusted_user_id, False, "INTERNAL_ERROR")
+                await terminate_stream_turn(
+                    active_turn_id, trusted_user_id, False, "INTERNAL_ERROR"
+                )
             except Exception:
                 pass
         raise HTTPException(
@@ -421,13 +543,16 @@ async def stream_message(conv_id: str, request: Request):
     if not content and not has_attachment:
         raise HTTPException(
             status_code=400,
-            detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "content or attachment is required"},
+            detail={
+                "code": BusinessErrorCode.INVALID_REQUEST.value,
+                "message": "content or attachment is required",
+            },
         )
     turn_content = content or "请分析我上传的附件"
     # 确保会话存在于当前仓储并校验已有 thread_id 的用户归属。
     await asyncio.to_thread(ConversationService.ensure, conv_id, trusted_user_id)
 
-    conversation = ConversationService.get(conv_id)
+    conversation = await asyncio.to_thread(ConversationService.get, conv_id)
     if not conversation:
         raise HTTPException(
             status_code=404,
@@ -437,6 +562,7 @@ async def stream_message(conv_id: str, request: Request):
     # 启用记忆网关时尝试恢复 checkpoint；本地模式会安全跳过。
     try:
         from src.memory import get_default_checkpointer
+
         await asyncio.wait_for(get_default_checkpointer().restore_from_gateway(conv_id), timeout=5)
     except Exception:
         pass  # 恢复失败不影响主流程
@@ -451,10 +577,16 @@ async def stream_message(conv_id: str, request: Request):
         raise HTTPException(status_code=error.status_code, detail=error.to_dict())
     try:
         if created:
-            attachment_context = await asyncio.wait_for(prepare_attachment_context(attachment_context, trusted_user_id), timeout=max(0.001, request_deadline - asyncio.get_running_loop().time()))
+            attachment_context = await asyncio.wait_for(
+                prepare_attachment_context(attachment_context, trusted_user_id),
+                timeout=max(0.001, request_deadline - asyncio.get_running_loop().time()),
+            )
     except TimeoutError as error:
         await terminate_stream_turn(turn["id"], trusted_user_id, False, "AGENT_TIMEOUT")
-        raise HTTPException(status_code=504, detail={"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"}) from error
+        raise HTTPException(
+            status_code=504,
+            detail={"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"},
+        ) from error
     except asyncio.CancelledError:
         await terminate_stream_turn(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
         raise
@@ -467,132 +599,19 @@ async def stream_message(conv_id: str, request: Request):
             status_code=500,
             detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": "附件处理失败"},
         ) from error
-    # 执行 event generator 对应的业务逻辑
-    async def event_generator():
-        sse_events = SseEventSequencer(turn["id"])
-        full_answer = ""
-        turn_completed = completed is not None
-        try:
-            yield sse_events.event(
-                "meta", {"conversation_id": conv_id, "thread_id": conv_id, "turn_id": turn["id"]}
-            )
-            if completed:
-                yield sse_events.event(
-                    "text",
-                    {"delta": completed.content, "text": completed.content, "partial": False, "replayed": True},
-                )
-                yield sse_events.done()
-                return
-            events = AgentService.chat_stream(
-                conv_id,
-                turn_content,
-                user_id=trusted_user_id,
-                tool_identity=tool_identity,
-                attachment_context=attachment_context,
-            )
-            async with aclosing(with_sse_heartbeats(events, timeout_seconds=max(0.001, request_deadline - asyncio.get_running_loop().time()))) as stream_events:
-                async for event in stream_events:
-                    if await request.is_disconnected():
-                        await terminate_stream_turn(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
-                        turn_completed = True
-                        return
-                    if event is None:
-                        yield encode_sse_heartbeat()
-                        continue
-                    if event["type"] == "text":
-                        full_answer += event["text"]
-                        payload = json.dumps(
-                            {
-                                "delta": event["text"],
-                                "text": event["text"],
-                                "partial": event.get("partial", False),
-                            },
-                            ensure_ascii=False,
-                        )
-                        event_name = "text"
-                    elif event["type"] == "tool":
-                        payload = json.dumps(
-                            {
-                                "event": "tool",
-                                "tool_name": event["tool_name"],
-                                "status": event["status"],
-                                "call_id": event["call_id"],
-                                "duration_ms": event.get("duration_ms"),
-                            },
-                            ensure_ascii=False,
-                        )
-                        event_name = "tool"
-                    else:
-                        payload = json.dumps(
-                            {
-                                "state": event.get("state"),
-                                "stop_reason": event.get("stop_reason"),
-                                "react": event.get("react"),
-                            },
-                            ensure_ascii=False,
-                        )
-                        event_name = event.get("event", "agent")
-                    yield sse_events.event(
-                        event_name,
-                        json.loads(payload),
-                    )
-            assistant = Message("assistant", full_answer)
-            await asyncio.to_thread(TurnService.complete, turn["id"], trusted_user_id, assistant)
-            turn_completed = True
-        except BusinessError as error:
-            log_request_error(
-                request,
-                error,
-                {"conversation_id": conv_id, "user_id": trusted_user_id, "stream": True},
-            )
-            if not turn_completed:
-                try:
-                    await terminate_stream_turn(turn["id"], trusted_user_id, False, error.code.value)
-                    turn_completed = True
-                except Exception:
-                    pass
-            yield sse_events.event(
-                "error", {"ok": False, "error": error.to_dict().get("error", error.to_dict())}
-            )
 
-        except TimeoutError:
-            await terminate_stream_turn(turn["id"], trusted_user_id, False, "AGENT_TIMEOUT")
-            turn_completed = True
-            yield sse_events.event("error", {"error": {"code": "AGENT_TIMEOUT", "message": "AI助手响应超时，请稍后重试。"}})
-        except (asyncio.CancelledError, GeneratorExit):
-            if not turn_completed:
-                try:
-                    await terminate_stream_turn(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
-                    turn_completed = True
-                except Exception:
-                    pass
-            log_request_error(
-                request,
-                RuntimeError("Client disconnected"),
-                {"conversation_id": conv_id, "user_id": trusted_user_id, "stream": True},
-            )
-            raise
-        except Exception as error:
-            log_request_error(
-                request, error, {"conversation_id": conv_id, "user_id": trusted_user_id, "stream": True}
-            )
-            if not turn_completed:
-                try:
-                    await terminate_stream_turn(turn["id"], trusted_user_id, False, "INTERNAL_ERROR")
-                    turn_completed = True
-                except Exception:
-                    pass
-            yield sse_events.event(
-                "error",
-                {"ok": False, "error": {"code": "INTERNAL_ERROR", "message": "处理请求时发生错误"}},
-            )
-        finally:
-            if not turn_completed:
-                await terminate_stream_turn(turn["id"], trusted_user_id, True, "CLIENT_CANCELLED")
-        yield sse_events.done()
+    # 延迟创建 Agent 迭代器，统一通过流协调器维护协议和轮次状态。
+    def events():
+        return AgentService.chat_stream(
+            conv_id,
+            turn_content,
+            user_id=trusted_user_id,
+            tool_identity=tool_identity,
+            attachment_context=attachment_context,
+        )
 
     return StreamingResponse(
-        event_generator(),
+        stream_turn(request, conv_id, trusted_user_id, turn, completed, events, request_deadline),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )
@@ -601,17 +620,67 @@ async def stream_message(conv_id: str, request: Request):
 @router.delete("/conversations/{conv_id}/messages")
 # 清空指定会话的全部消息
 async def clear_messages(conv_id: str, request: Request):
-    conv = ConversationService.get(conv_id)
+    conv = await asyncio.to_thread(ConversationService.get, conv_id)
     if not conv:
         raise HTTPException(
             status_code=404,
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
     require_agent_user_id(request, conv.user_id)
-    ConversationService.clear_messages(conv_id)
+    await asyncio.to_thread(ConversationService.clear_messages, conv_id)
     from src.memory import get_default_checkpointer
+
     await get_default_checkpointer().adelete_thread(conv_id)
     return {"success": True}
+
+
+@router.post("/conversations/{conv_id}/session-documents/parse")
+# 解析关闭记忆模式下的临时文档，返回与 TS 版本一致的会话文档结构。
+async def parse_session_document_route(conv_id: str, request: Request):
+    if settings.memory_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": BusinessErrorCode.FORBIDDEN.value,
+                "message": "memory_enabled=true 时文档必须上传到知识库",
+            },
+        )
+
+    conversation = await asyncio.to_thread(ConversationService.get, conv_id)
+    if not conversation:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": BusinessErrorCode.NOT_FOUND.value,
+                "message": "会话不存在",
+            },
+        )
+
+    user_id = require_agent_user_id(request, conversation.user_id)
+    form = await request.form()
+    upload = next(
+        (
+            value
+            for _field_name, value in form.multi_items()
+            if hasattr(value, "read") and hasattr(value, "filename")
+        ),
+        None,
+    )
+    if upload is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "file is required"},
+        )
+
+    try:
+        document = parse_document(
+            await upload.read(),
+            str(upload.filename or "unknown.txt"),
+            str(upload.content_type or "text/plain"),
+        )
+    except DocumentParseError as error:
+        raise document_parse_http_error(error) from error
+    return {**document, "user_id": user_id}
 
 
 # ============ 知识库管理 ==========
@@ -650,19 +719,21 @@ async def upload_document(request: Request):
                 detail={"code": BusinessErrorCode.INVALID_REQUEST.value, "message": "invalid file"},
             )
 
-        doc = await KnowledgeService.upload_document(content, filename, category or None, trusted_user_id)
+        doc = await KnowledgeService.upload_document(
+            content, filename, category or None, trusted_user_id
+        )
         return doc.to_dict()
 
     except BusinessError as e:
         raise HTTPException(status_code=e.status_code, detail=e.to_dict())
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=500,
             detail={
                 "code": BusinessErrorCode.INTERNAL_ERROR.value,
-                "message": f"文档上传失败: {e!s}",
+                "message": "文档上传失败",
             },
         )
 
@@ -723,7 +794,9 @@ async def reindex_document(doc_id: str, request: Request):
 async def search_knowledge(req: SearchRequest, request: Request):
     try:
         require_persistent_knowledge()
-        results = await KnowledgeService.search(req.query, req.top_k, require_agent_user_id(request))
+        results = await KnowledgeService.search(
+            req.query, req.top_k, require_agent_user_id(request)
+        )
         return {"results": results}
     except BusinessError as e:
         raise HTTPException(status_code=e.status_code, detail=e.to_dict())
@@ -758,14 +831,14 @@ async def get_profile(request: Request, user_id: str = None, name: str = ""):
     try:
         from src.profile.service import ProfileService
 
-        profile = ProfileService.get_or_create(trusted_user_id, name)
+        profile = await asyncio.to_thread(ProfileService.get_or_create, trusted_user_id, name)
         return profile.to_dict()
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=500,
             detail={
                 "code": BusinessErrorCode.INTERNAL_ERROR.value,
-                "message": f"获取用户画像失败: {e!s}",
+                "message": "获取用户画像失败",
             },
         )
 
@@ -787,7 +860,7 @@ async def update_profile(request: Request, update: ProfileUpdate, user_id: str =
             updates["name"] = update.name
         if update.preferences is not None:
             updates["preferences"] = update.preferences
-        profile = ProfileService.update(trusted_user_id, **updates)
+        profile = await asyncio.to_thread(ProfileService.update, trusted_user_id, **updates)
         if not profile:
             raise HTTPException(
                 status_code=404,
@@ -796,12 +869,12 @@ async def update_profile(request: Request, update: ProfileUpdate, user_id: str =
         return profile.to_dict()
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=500,
             detail={
                 "code": BusinessErrorCode.INTERNAL_ERROR.value,
-                "message": f"更新用户画像失败: {e!s}",
+                "message": "更新用户画像失败",
             },
         )
 
@@ -813,16 +886,16 @@ async def get_memories(request: Request, user_id: str = None, category: str = No
     try:
         from src.profile.service import MemoryService
 
-        memories = MemoryService.list_all(trusted_user_id)
+        memories = await asyncio.to_thread(MemoryService.list_all, trusted_user_id)
         if category:
             memories = [m for m in memories if m["category"] == category]
         return {"memories": memories}
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=500,
             detail={
                 "code": BusinessErrorCode.INTERNAL_ERROR.value,
-                "message": f"获取记忆失败: {e!s}",
+                "message": "获取记忆失败",
             },
         )
 
@@ -840,16 +913,16 @@ async def create_memory(request: Request, memory: MemoryCreate, user_id: str = N
     try:
         from src.profile.service import MemoryService
 
-        mem = MemoryService.add(
-            trusted_user_id, memory.content, memory.category, memory.importance
+        mem = await asyncio.to_thread(
+            MemoryService.add, trusted_user_id, memory.content, memory.category, memory.importance
         )
         return mem.to_dict()
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=500,
             detail={
                 "code": BusinessErrorCode.INTERNAL_ERROR.value,
-                "message": f"添加记忆失败: {e!s}",
+                "message": "添加记忆失败",
             },
         )
 
@@ -861,7 +934,7 @@ async def delete_memory(request: Request, memory_id: str, user_id: str = None):
     try:
         from src.profile.service import MemoryService
 
-        deleted = MemoryService.delete(trusted_user_id, memory_id)
+        deleted = await asyncio.to_thread(MemoryService.delete, trusted_user_id, memory_id)
         if not deleted:
             raise HTTPException(
                 status_code=404,
@@ -870,12 +943,12 @@ async def delete_memory(request: Request, memory_id: str, user_id: str = None):
         return {"success": True}
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=500,
             detail={
                 "code": BusinessErrorCode.INTERNAL_ERROR.value,
-                "message": f"删除记忆失败: {e!s}",
+                "message": "删除记忆失败",
             },
         )
 
@@ -892,13 +965,15 @@ async def get_history(
     try:
         from src.profile.service import HistoryService
 
-        records = HistoryService.get_history(trusted_user_id, conversation_id, limit)
+        records = await asyncio.to_thread(
+            HistoryService.get_history, trusted_user_id, conversation_id, limit
+        )
         return {"history": records}
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=500,
             detail={
                 "code": BusinessErrorCode.INTERNAL_ERROR.value,
-                "message": f"获取历史记录失败: {e!s}",
+                "message": "获取历史记录失败",
             },
         )

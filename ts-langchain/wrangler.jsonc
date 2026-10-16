@@ -21,8 +21,8 @@
     "CLOUDFLARE_MEMORY_BASE_URL": "https://cloudflare-service.internal",
     "LLM_MAX_CONCURRENCY": "2",
     "BACKGROUND_TASK_CONCURRENCY": "2",
-    "LLM_MAX_INPUT_TOKENS": "16000",
-    "HISTORY_CONTEXT_TOKEN_BUDGET": "12000"
+    "LLM_MAX_INPUT_TOKENS": "48000",
+    "HISTORY_CONTEXT_TOKEN_BUDGET": "48000"
   },
   "observability": {
     "enabled": true,

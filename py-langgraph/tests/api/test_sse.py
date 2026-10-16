@@ -7,6 +7,60 @@ from src.api.sse import SseEventSequencer, encode_sse_heartbeat, with_sse_heartb
 
 
 @pytest.mark.asyncio
+async def test_failed_terminal_write_retains_retry_and_preserves_error(monkeypatch):
+    from unittest.mock import Mock
+    from src.api.sse import _pending_settlements, terminate_stream_turn
+
+    terminate = Mock(side_effect=[RuntimeError("gateway unavailable"), {}])
+    monkeypatch.setattr("src.services.TurnService.terminate", terminate)
+    assert await terminate_stream_turn("turn", "user", False, "MODEL_RESPONSE_INVALID") is False
+    await asyncio.wait_for(asyncio.gather(*list(_pending_settlements)), timeout=1)
+    assert terminate.call_count == 2
+    terminate.assert_called_with("turn", "user", False, "MODEL_RESPONSE_INVALID")
+
+
+@pytest.mark.asyncio
+async def test_terminal_retry_exhaustion_is_bounded_and_observable(monkeypatch, caplog):
+    from unittest.mock import Mock
+    from src.api.sse import _pending_settlements, terminate_stream_turn
+
+    terminate = Mock(side_effect=RuntimeError("gateway unavailable"))
+    monkeypatch.setattr("src.services.TurnService.terminate", terminate)
+    assert await terminate_stream_turn("turn", "user", True, "CLIENT_CANCELLED") is False
+    await asyncio.wait_for(asyncio.gather(*list(_pending_settlements)), timeout=2)
+    assert terminate.call_count == 3
+    assert "Turn settlement retries exhausted" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cancelling_request_during_settlement_keeps_retry_alive(monkeypatch):
+    import threading
+    from unittest.mock import Mock
+    from src.api.sse import flush_stream_settlements, terminate_stream_turn
+
+    started, release = threading.Event(), threading.Event()
+
+    def transient_failure(*args):
+        started.set()
+        release.wait(timeout=1)
+        raise RuntimeError("gateway unavailable")
+
+    terminate = Mock(side_effect=[None, {}])
+    terminate.side_effect = lambda *args: transient_failure(*args) if terminate.call_count == 1 else {}
+    monkeypatch.setattr("src.services.TurnService.terminate", terminate)
+    request = asyncio.create_task(terminate_stream_turn("turn", "user", True, "CLIENT_CANCELLED"))
+    try:
+        assert await asyncio.to_thread(started.wait, 1)
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+    finally:
+        release.set()
+    await asyncio.wait_for(flush_stream_settlements(), timeout=2)
+    assert terminate.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_heartbeats_cannot_extend_the_request_deadline():
     closed = asyncio.Event()
     async def stalled():

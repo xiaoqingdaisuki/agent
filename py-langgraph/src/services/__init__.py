@@ -1374,6 +1374,12 @@ class TurnService:
                 client_message_id or str(uuid.uuid4()),
                 content,
             )
+            if not created and user_message.get("content_json") != content:
+                raise BusinessError(
+                    BusinessErrorCode.INVALID_REQUEST,
+                    "client_message_id 已用于另一条消息",
+                    409,
+                )
             if created:
                 ConversationService.cache_persisted_message(
                     conversation_id,
@@ -1445,9 +1451,10 @@ class TurnService:
             parsed = json.loads(turn["assistant_content_json"])
             if parsed.get("role") != "assistant" or not isinstance(parsed.get("content"), str):
                 return None
-            return Message(
-                "assistant", parsed["content"], parsed.get("id"), parsed.get("created_at")
-            )
+            created_at = parsed.get("created_at") or parsed.get("createdAt")
+            if not isinstance(created_at, str):
+                return None
+            return Message("assistant", parsed["content"], parsed.get("id"), created_at)
         except (TypeError, ValueError, json.JSONDecodeError):
             return None
 
@@ -1504,7 +1511,7 @@ class AgentService:
                 schedule_answer_persistence(conversation_id, content, fast_answer, user_id or "")
                 return Message("assistant", fast_answer)
 
-            conversation = ConversationService.get(conversation_id)
+            conversation = await asyncio.to_thread(ConversationService.get, conversation_id)
             if (
                 is_explicit_knowledge_query(content)
                 or (not settings.memory_enabled and conversation and conversation.mode == "knowledge")
@@ -1691,7 +1698,7 @@ class AgentService:
                 yield {"type": "text", "text": fast_answer}
                 return
 
-            conversation = ConversationService.get(conversation_id)
+            conversation = await asyncio.to_thread(ConversationService.get, conversation_id)
             if (
                 is_explicit_knowledge_query(content)
                 or (not settings.memory_enabled and conversation and conversation.mode == "knowledge")

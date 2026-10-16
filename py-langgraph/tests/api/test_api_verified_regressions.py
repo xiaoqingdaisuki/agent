@@ -9,6 +9,37 @@ from src.services.document_parser import parse_document
 
 
 @pytest.mark.asyncio
+async def test_slow_persistence_does_not_block_other_requests(monkeypatch):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(settings, "agent_api_secret", "test-agent-secret")
+    started, release = threading.Event(), threading.Event()
+    released_while_reading = []
+
+    def slow_get(_conversation_id):
+        started.set()
+        released_while_reading.append(release.wait(timeout=0.5))
+        return SimpleNamespace(user_id="audit-concurrent", to_dict=lambda: {"id": "slow"})
+
+    monkeypatch.setattr(ConversationService, "get", slow_get)
+    async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="http://test",
+                           headers={"Authorization": "Bearer test-agent-secret", "X-Agent-User-Id": "audit-concurrent"}) as client:
+        pending = asyncio.create_task(client.get("/api/v1/conversations/slow"))
+        try:
+            assert await asyncio.to_thread(started.wait, 1)
+            health = await client.get("/health")
+            release.set()
+            assert health.status_code == 200
+            assert (await pending).status_code == 200
+            assert released_while_reading == [True]
+        finally:
+            release.set()
+            await pending
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.parametrize("phase", ["meta", "text", "error", "complete"])
 async def test_stream_closure_never_leaves_the_conversation_busy(monkeypatch, legacy, phase):
@@ -24,6 +55,7 @@ async def test_stream_closure_never_leaves_the_conversation_busy(monkeypatch, le
     monkeypatch.setattr(route, "require_agent_user_id", lambda *args: "closure-user")
     monkeypatch.setattr(route, "get_agent_tool_identity", lambda *args: {})
     monkeypatch.setattr(route, "log_request_error", lambda *args: None)
+    monkeypatch.setattr("src.api.stream_coordinator.log_request_error", lambda *args: None)
     monkeypatch.setattr("src.memory.get_default_checkpointer", lambda: SimpleNamespace(restore_from_gateway=AsyncMock()))
 
     async def events(*args, **kwargs):
@@ -87,6 +119,33 @@ async def test_json_attachment_roundtrip_preserves_non_bmp_characters(monkeypatc
     assert response.status_code == 200
     context = chat.call_args.kwargs["attachment_context"]
     assert "".join(part["content"] for part in context["session_documents"][0]["parts"]) == text
+
+
+@pytest.mark.asyncio
+async def test_session_document_parse_endpoint_matches_ts_contract(monkeypatch):
+    monkeypatch.setattr(settings, "memory_enabled", False)
+    monkeypatch.setattr(settings, "agent_api_secret", "test-agent-secret")
+    conversation = ConversationService.create("Temporary document", user_id="audit-document")
+    async with AsyncClient(
+        transport=ASGITransport(app=create_app()),
+        base_url="http://test",
+        headers={
+            "Authorization": "Bearer test-agent-secret",
+            "X-Agent-User-Id": "audit-document",
+        },
+    ) as client:
+        response = await client.post(
+            f"/api/v1/conversations/{conversation.id}/session-documents/parse",
+            files={"file": ("rules.md", "第一条规则\n\n第二条规则".encode(), "text/markdown")},
+        )
+
+    assert response.status_code == 200
+    document = response.json()
+    assert document["filename"] == "rules.md"
+    assert document["mimeType"] == "text/markdown"
+    assert document["parserVersion"] == "session-document-v2"
+    assert document["user_id"] == "audit-document"
+    assert [part["content"] for part in document["parts"]] == ["第一条规则", "第二条规则"]
 
 
 @pytest.mark.asyncio

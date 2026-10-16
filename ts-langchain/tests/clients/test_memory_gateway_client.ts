@@ -137,6 +137,16 @@ describe("CloudflareMemoryClient", () => {
 
   // ============ Profile API ============
 
+  it("accepts an explicit transport without changing global fetch", async () => {
+    const transport = vi.fn(async () => Response.json({
+      ok: true, data: validProfile(), error: null, meta: { request_id: "injected" },
+    }));
+    const injected = new CloudflareMemoryClient({ fetch: transport, baseUrl: "https://memory.internal", secret: "binding-secret" });
+    expect((await injected.getProfile("usr_001"))?.user_id).toBe("usr_001");
+    expect(transport).toHaveBeenCalledOnce();
+    expect(mockSetup.mockFetch).not.toHaveBeenCalled();
+  });
+
   describe("Profile API", () => {
     it("getProfile sends GET with auth header", async () => {
       mockSetup.setMockResponse("/internal/v1/users/usr_001/profile", 200, validProfile());

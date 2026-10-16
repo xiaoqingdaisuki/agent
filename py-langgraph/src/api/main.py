@@ -29,9 +29,12 @@ async def _lifespan(_app: FastAPI):
     yield
     from src.repositories import close_repositories
     from src.services import flush_background_tasks
+    from src.api.sse import flush_stream_settlements
 
     try:
-        await asyncio.wait_for(flush_background_tasks(), timeout=10)
+        await asyncio.wait_for(
+            asyncio.gather(flush_background_tasks(), flush_stream_settlements()), timeout=10
+        )
     finally:
         await close_repositories()
 
@@ -94,9 +97,7 @@ def create_app() -> FastAPI:
     @app.exception_handler(HTTPException)
     # 记录非预期 HTTP 500，并保留路由转换前的原始异常上下文
     async def http_error_handler(request: Request, exc: HTTPException):
-        if exc.status_code >= 500 and not getattr(
-            request.state, "request_error_logged", False
-        ):
+        if exc.status_code >= 500 and not getattr(request.state, "request_error_logged", False):
             original_error = exc.__context__ if isinstance(exc.__context__, BaseException) else exc
             log_request_error(
                 request,
@@ -113,7 +114,9 @@ def create_app() -> FastAPI:
         }
         if detail.get("details") is not None:
             error["details"] = detail["details"]
-        return JSONResponse(status_code=exc.status_code, content={"error": error}, headers=exc.headers)
+        return JSONResponse(
+            status_code=exc.status_code, content={"error": error}, headers=exc.headers
+        )
 
     @app.exception_handler(RequestValidationError)
     # 记录与 TS 全局错误处理器一致的请求校验异常和请求上下文

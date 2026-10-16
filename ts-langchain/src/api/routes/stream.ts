@@ -2,40 +2,25 @@ import type { FastifyInstance } from "fastify";
 import {
   AgentService,
   ConversationService,
-  waitForConversationPersistence,
   TurnService,
-  BusinessError,
-  BusinessErrorCode,
 } from "../../services/index.js";
 import { getAgentToolIdentity, requireAgentUserId } from "../middleware/auth.js";
-import { logRequestError } from "../middleware/error.js";
-import { SseEventSequencer, encodeSseHeartbeat } from "../sse.js";
-
-// 向 SSE 客户端写入一条事件，并在内核背压时等待 drain。
-async function writeSse(raw: any, data: string): Promise<void> {
-  if (raw.writableEnded || raw.destroyed) return;
-  if (!raw.write(data)) {
-    await new Promise<void>((resolve) => {
-      const finish = () => {
-        raw.removeListener("drain", finish);
-        raw.removeListener("close", finish);
-        resolve();
-      };
-      raw.once("drain", finish);
-      raw.once("close", finish);
-    });
-  }
-}
+import { streamTurn } from "../stream-coordinator.js";
 
 // 创建或注册 registerStreamRoutes 所需的数据
 export async function registerStreamRoutes(app: FastifyInstance) {
   app.post<{ Body: { message: string; thread_id?: string; user_id?: string; client_message_id?: string } }>(
     "/stream",
     async (request, reply) => {
-      const { message, thread_id, user_id, client_message_id } = request.body;
+      const { message, thread_id, user_id, client_message_id } = request.body || {};
       const trustedUserId = requireAgentUserId(request, user_id);
       const toolIdentity = getAgentToolIdentity(request, user_id);
       if (typeof message !== "string" || message.length < 1 || message.length > 16_000) {
+        return reply.status(400).send({
+          error: { code: "VALIDATION_ERROR", message: "请求参数无效" },
+        });
+      }
+      if (client_message_id !== undefined && (typeof client_message_id !== "string" || client_message_id.length < 1 || client_message_id.length > 128)) {
         return reply.status(400).send({
           error: { code: "VALIDATION_ERROR", message: "请求参数无效" },
         });
@@ -52,126 +37,10 @@ export async function registerStreamRoutes(app: FastifyInstance) {
         return reply.status(error.statusCode).send(error.toJSON());
       }
 
-      reply.raw.setHeader("Content-Type", "text/event-stream");
-      reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
-      reply.raw.setHeader("Connection", "keep-alive");
-      reply.raw.setHeader("X-Accel-Buffering", "no");
-      reply.raw.flushHeaders();
-      const requestController = new AbortController();
-      // 限制整个流式轮次，为代理超时前的状态持久化预留时间。
-      const requestTimer = setTimeout(
-        () => requestController.abort(new BusinessError(BusinessErrorCode.AGENT_TIMEOUT, "AI助手响应超时，请稍后重试。", 504)),
-        270_000,
-      );
-      requestTimer.unref?.();
-      const abortOnDisconnect = () => {
-        if (!reply.raw.writableEnded) {
-          requestController.abort(new Error("Client disconnected"));
-        }
-      };
-      request.raw.once("aborted", abortOnDisconnect);
-      reply.raw.once("close", abortOnDisconnect);
-      const heartbeat = setInterval(() => {
-        void writeSse(reply.raw, encodeSseHeartbeat());
-      }, 15_000);
-      heartbeat.unref();
-      const sseEvents = new SseEventSequencer(turnResult.turn.id);
-      let fullAnswer = "";
-      let turnCompleted = Boolean(completed);
-
-      try {
-        await writeSse(reply.raw, sseEvents.event("meta", {
-          conversation_id: threadId,
-          thread_id: threadId,
-          turn_id: turnResult.turn.id,
-        }));
-        if (completed) {
-          await writeSse(reply.raw, sseEvents.event("text", { delta: completed.content, text: completed.content, partial: false, replayed: true }));
-          return;
-        }
-        for await (const event of AgentService.chatStream(
-          threadId,
-          message,
-          trustedUserId,
-          requestController.signal,
-          toolIdentity,
-        )) {
-          if (event.type === "text") {
-            fullAnswer += event.text;
-            await writeSse(
-              reply.raw,
-              sseEvents.event("text", {
-                delta: event.text,
-                text: event.text,
-                partial: event.partial ?? false,
-              }),
-            );
-          } else if (event.type === "tool") {
-            await writeSse(
-              reply.raw,
-              sseEvents.event("tool", {
-                event: "tool",
-                tool_name: event.toolName,
-                status: event.status,
-                call_id: event.callId,
-                duration_ms: event.durationMs ?? null,
-              }),
-            );
-          } else {
-            await writeSse(
-              reply.raw,
-              sseEvents.event(event.event, {
-                state: event.state,
-                stop_reason: event.stopReason,
-                react: event.react,
-              }),
-            );
-          }
-        }
-        requestController.signal.throwIfAborted();
-        const assistantMessage = { id: crypto.randomUUID(), role: "assistant" as const, content: fullAnswer, createdAt: new Date().toISOString() };
-        await TurnService.complete(turnResult.turn.id, trustedUserId, assistantMessage);
-        turnCompleted = true;
-      } catch (error: any) {
-        if (!turnCompleted) {
-          await TurnService.terminate(
-            turnResult.turn.id,
-            trustedUserId,
-            requestController.signal.aborted && requestController.signal.reason?.code !== "AGENT_TIMEOUT",
-            requestController.signal.aborted && requestController.signal.reason?.code !== "AGENT_TIMEOUT" ? "CLIENT_CANCELLED" : error?.code || "INTERNAL_ERROR",
-          ).catch(() => undefined);
-          turnCompleted = true;
-        }
-        logRequestError(request, error, {
-          thread_id: threadId,
-          user_id: trustedUserId,
-          stream: true,
-        });
-        await writeSse(
-          reply.raw,
-          sseEvents.event("error", {
-            ok: false,
-            error: {
-              code: error?.code || "INTERNAL_ERROR",
-              message: error?.message || "处理请求时发生错误",
-            },
-          }),
-        );
-
-      } finally {
-        if (!turnCompleted) {
-          await TurnService.terminate(turnResult.turn.id, trustedUserId, true, "CLIENT_CANCELLED").catch(() => undefined);
-        }
-        clearTimeout(requestTimer);
-        clearInterval(heartbeat);
-        request.raw.removeListener("aborted", abortOnDisconnect);
-        reply.raw.removeListener("close", abortOnDisconnect);
-        try {
-          await writeSse(reply.raw, sseEvents.done());
-        } finally {
-          reply.raw.end();
-        }
-      }
+      await streamTurn(request, reply, {
+        conversationId: threadId, userId: trustedUserId, turnId: turnResult.turn.id, completed,
+        events: (signal) => AgentService.chatStream(threadId, message, trustedUserId, signal, toolIdentity),
+      });
     },
   );
 }

@@ -1,6 +1,6 @@
 ﻿# ts-langchain-agent
 
-TypeScript + LangChain（`createAgent` 声明式配置）实现的 Agent 服务，对外契约与 `py-langgraph/` 保持一致。明确的普通生成任务走无工具轻量路径；实时信息、计算、文件、知识库、记忆、推荐和未知意图保留完整工具链。
+TypeScript + LangChain（`createAgent` 声明式配置）实现的 Agent 服务，对外契约与 `py-langgraph/` 保持一致。明确的普通生成任务走无工具轻量路径；实时信息、计算、文件、知识库、记忆、推荐和未知意图保留完整工具链，并支持文本/PDF/DOCX 临时文档与图片附件。
 
 与 `py-langgraph/` 形成框架对比：
 
@@ -32,9 +32,11 @@ src/
 │   ├── memory_gateway.ts   # Cloudflare Service HTTP 客户端
 │   └── schemas.ts          # 客户端数据模型
 ├── config/
-│   └── index.ts            # 环境变量配置（Zod）
+│   ├── index.ts            # 环境变量配置（Zod）
+│   └── model.ts            # OpenAI/Anthropic/Gateway 模型配置
 ├── memory/
-│   └── conversation.ts     # 会话记忆
+│   ├── conversation.ts     # 会话记忆
+│   └── runtime-cache.ts    # 有界运行时缓存
 ├── profile/
 │   ├── index.ts            # 用户画像模型
 │   └── service.ts          # Profile、Memory、History 服务
@@ -42,7 +44,8 @@ src/
 │   ├── index.ts            # 仓储实现
 │   └── types.ts            # 仓储类型
 ├── services/
-│   └── index.ts            # 业务编排、Turn、缓存、后台任务与流式回退
+│   ├── index.ts            # 业务编排、Turn、缓存、后台任务与流式回退
+│   └── session-documents.ts # 临时文档解析与上下文格式化
 ├── api/
 │   ├── routes/
 │   │   ├── v1/             # External API（前端 UI 使用）
@@ -55,6 +58,7 @@ src/
 │   │   ├── auth.ts         # Bearer 鉴权
 │   │   └── error.ts        # 统一错误处理
 │   ├── sse.ts              # SSE 编码
+│   ├── stream-coordinator.ts # SSE Turn 生命周期协调
 │   ├── health.ts           # liveness/readiness 状态
 │   └── index.ts            # Fastify 应用入口
 ├── prompts/
@@ -66,6 +70,8 @@ src/
     ├── time.ts             # 当前时间与时区换算
     └── runtime/            # 工具安全执行和数据脱敏
 ```
+
+Worker 部署相关文件为 `src/worker.ts`（入口）、`src/runtime.ts`（请求上下文）、`src/worker-router.ts`（路由兼容）和 `src/worker-readiness.ts`（启动前配置检查）。
 
 ## 环境要求
 
@@ -90,7 +96,8 @@ cp .env.example .env
 编辑 `.env`：
 
 ```env
-# LLM 配置（二选一）
+# LLM 配置（二选一，LLM_PROVIDER 决定实际使用哪一组密钥）
+LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-your-api-key
 OPENAI_MODEL=gpt-4o-mini
 # ANTHROPIC_API_KEY=sk-ant-your-api-key
@@ -110,7 +117,7 @@ LLM_QUEUE_TIMEOUT_MS=5000
 LLM_TIMEOUT_MS=30000
 LLM_MAX_RETRIES=1
 AGENT_DEADLINE_MS=120000
-AGENT_DEADLINE_WITH_TOOLS_MS=300000
+AGENT_DEADLINE_WITH_TOOLS_MS=240000
 SERVER_REQUEST_TIMEOUT_MS=310000
 REACT_MAX_STEPS=8
 REACT_MAX_TOOL_CALLS=6
@@ -235,6 +242,7 @@ POST /api/v1/conversations/:id/messages 发送消息
 POST /api/v1/conversations/:id/messages/stream 流式发送消息（SSE）
 GET  /api/v1/conversations/:id/messages 获取历史
 DELETE /api/v1/conversations/:id/messages 清空消息
+POST /api/v1/conversations/:id/session-documents/parse 解析临时文档（关闭持久化时）
 
 POST /api/v1/knowledge/documents       上传文档（multipart/form-data）
 GET  /api/v1/knowledge/documents       文档列表
@@ -251,11 +259,14 @@ DELETE /api/v1/memory                  删除记忆
 GET  /api/v1/history                   问答历史
 ```
 
+临时文档解析接口接收 multipart 字段 `file`，支持 `txt`、`md`、`markdown`、`json`、`csv`、`pdf` 和 `docx`。`MEMORY_ENABLED=false` 时结果只用于当前消息；开启持久化后应随消息提交并写入知识库。
+
 ## 环境变量
 
 | 变量 | 说明 | 默认值 | 必填 |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | OpenAI API 密钥 | - | 是 |
+| `LLM_PROVIDER` | 当前文本模型提供方：`openai` 或 `anthropic` | `openai` | 否 |
+| `OPENAI_API_KEY` | OpenAI API 密钥（provider 为 `openai` 时必填） | - | 条件必填 |
 | `OPENAI_MODEL` | 使用的模型 | `gpt-4o-mini` | 否 |
 | `OPENAI_BASE_URL` | API 地址 | `https://api.openai.com/v1` | 否 |
 | `LLM_MAX_CONTEXT_TOKENS` | Agent 最大上下文窗口（允许 1024～128000） | `128000` | 否 |
@@ -268,7 +279,7 @@ GET  /api/v1/history                   问答历史
 | `LLM_TIMEOUT_MS` | 单次模型调用超时（毫秒） | `30000` | 否 |
 | `LLM_MAX_RETRIES` | 模型临时错误重试次数 | `1` | 否 |
 | `AGENT_DEADLINE_MS` | 普通 Agent 总时限（毫秒） | `120000` | 否 |
-| `AGENT_DEADLINE_WITH_TOOLS_MS` | 工具 Agent 总时限（毫秒） | `300000` | 否 |
+| `AGENT_DEADLINE_WITH_TOOLS_MS` | 工具 Agent 总时限（毫秒，上限 240000） | `240000` | 否 |
 | `SERVER_REQUEST_TIMEOUT_MS` | HTTP 请求总时限（毫秒） | `310000` | 否 |
 | `REACT_MAX_STEPS` | ReAct 最大模型步骤数 | `8` | 否 |
 | `REACT_MAX_TOOL_CALLS` | ReAct 最大工具调用数 | `6` | 否 |
@@ -276,7 +287,7 @@ GET  /api/v1/history                   问答历史
 | `REACT_MAX_TOTAL_TIME_MS` | ReAct 内部工具循环预算（毫秒） | `30000` | 否 |
 | `BACKGROUND_TASK_CONCURRENCY` | 后台任务并发上限 | `4` | 否 |
 | `BACKGROUND_TASK_QUEUE_MAX` | 后台任务队列上限 | `200` | 否 |
-| `ANTHROPIC_API_KEY` | Anthropic API 密钥 | - | 否 |
+| `ANTHROPIC_API_KEY` | Anthropic API 密钥（provider 为 `anthropic` 时必填） | - | 条件必填 |
 | `ANTHROPIC_MODEL` | Anthropic 模型 | `claude-3-5-haiku-20241022` | 否 |
 | `PORT` | 服务端口 | `6001` | 否 |
 | `AGENT_API_SECRET` | 外部 API Bearer 密钥 | 空 | 生产环境是 |
@@ -284,9 +295,9 @@ GET  /api/v1/history                   问答历史
 | `MEMORY_ENABLED` | 是否启用 Cloudflare Memory Gateway | `true` | 否 |
 | `CLOUDFLARE_MEMORY_BASE_URL` | Memory Gateway 地址 | `http://localhost:8787` | 网关开启时 |
 | `CLOUDFLARE_MEMORY_SECRET` | Memory Gateway Bearer 密钥 | 空 | 网关开启时 |
-| `IMAGE_API_KEY` | Cloudflare Workers AI 图片密钥 | - | 图片功能是 |
+| `IMAGE_API_KEY` | Cloudflare Workers AI 图片密钥 | - | HTTP 生图必需，Worker AI binding 无需 |
 | `IMAGE_BASE_URL` | Workers AI API 根地址 | Cloudflare API | 否 |
-| `IMAGE_MODEL` | 图片生成模型 | `@cf/black-forest-labs/flux-2-klein-9b` | 否 |
+| `IMAGE_MODEL` | 图片生成模型 | `@cf/black-forest-labs/flux-2-dev` | 否 |
 | `QDRANT_URL` | Qdrant 地址 | `http://localhost:6333` | 否 |
 | `TAVILY_API_KEY` | Tavily API 密钥 | - | 是（搜索功能） |
 | `TAVILY_SEARCH_DEPTH` | 搜索深度：`basic` 或 `advanced` | `basic` | 否 |

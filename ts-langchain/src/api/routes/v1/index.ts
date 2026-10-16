@@ -37,7 +37,7 @@ import { parseSessionDocument } from "../../../services/session-documents.js";
 import type { SessionDocument } from "../../../services/session-documents.js";
 import { getAgentToolIdentity, requireAgentUserId } from "../../middleware/auth.js";
 import { logRequestError } from "../../middleware/error.js";
-import { SseEventSequencer, encodeSseHeartbeat } from "../../sse.js";
+import { streamTurn } from "../../stream-coordinator.js";
 import { getReadiness } from "../../health.js";
 
 interface ParsedMessagePayload {
@@ -73,29 +73,46 @@ function getSessionDocumentErrorResponse(error: unknown): { statusCode: number; 
 function normalizeSessionDocuments(value: unknown): SessionDocument[] {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 10).map((item, index) => {
-    const candidate = item as Record<string, unknown>;
+    const candidate = item && typeof item === "object" && !Array.isArray(item)
+      ? item as Record<string, unknown>
+      : {};
     const filename = typeof candidate.filename === "string" ? candidate.filename : `document-${index + 1}.txt`;
     const parts = Array.isArray(candidate.parts) ? candidate.parts : [];
     return {
-      localId: typeof candidate.localId === "string" ? candidate.localId : `session-${index + 1}`,
+      localId: (typeof candidate.localId === "string" ? candidate.localId : `session-${index + 1}`).slice(0, 128),
       filename: filename.slice(0, 255),
-      mimeType: typeof candidate.mimeType === "string" ? candidate.mimeType : "text/plain",
-      size: typeof candidate.size === "number" ? candidate.size : 0,
-      parserVersion: typeof candidate.parserVersion === "string" ? candidate.parserVersion : "session-text-v1",
+      mimeType: (typeof candidate.mimeType === "string" ? candidate.mimeType : "text/plain").slice(0, 128),
+      size: typeof candidate.size === "number" && Number.isFinite(candidate.size) && candidate.size >= 0
+        ? Math.floor(candidate.size)
+        : 0,
+      parserVersion: (typeof candidate.parserVersion === "string" ? candidate.parserVersion : "session-text-v1").slice(0, 64),
       parts: parts.slice(0, 200).flatMap((part, partIndex) => {
-        const partRecord = part as Record<string, unknown>;
+        const partRecord = part && typeof part === "object" && !Array.isArray(part)
+          ? part as Record<string, unknown>
+          : {};
         const content = typeof partRecord.content === "string" ? partRecord.content.trim() : "";
         return content
           ? [{
               partIndex,
-              page: typeof partRecord.page === "number" ? partRecord.page : undefined,
-              section: typeof partRecord.section === "string" ? partRecord.section : undefined,
+              page: typeof partRecord.page === "number" && Number.isFinite(partRecord.page) && partRecord.page >= 1
+                ? Math.floor(partRecord.page)
+                : undefined,
+              section: typeof partRecord.section === "string" ? partRecord.section.slice(0, 255) : undefined,
               content: content.match(/^[\s\S]{1,20000}/u)![0],
             }]
           : [];
       }),
     };
   }).filter((document) => document.parts.length > 0);
+}
+
+// 校验客户端幂等标识，保持旧版和 v1 接口的输入边界一致。
+function normalizeClientMessageId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length < 1 || value.length > 128) {
+    throw new BusinessError(BusinessErrorCode.INVALID_REQUEST, "client_message_id must be between 1 and 128 characters", 400);
+  }
+  return value;
 }
 
 // 读取 JSON 或 multipart 消息，并把图片保持在请求内存中交给 Agent。
@@ -110,7 +127,7 @@ async function readMessagePayload(request: any): Promise<ParsedMessagePayload> {
     return {
       content: typeof body.content === "string" ? body.content : undefined,
       user_id: typeof body.user_id === "string" ? body.user_id : undefined,
-      client_message_id: typeof body.client_message_id === "string" ? body.client_message_id : undefined,
+      client_message_id: normalizeClientMessageId(body.client_message_id),
       session_documents: normalizeSessionDocuments(body.session_documents),
       document_attachment_ids: Array.isArray(body.document_attachment_ids)
         ? body.document_attachment_ids.filter((id): id is string => typeof id === "string").slice(0, 20)
@@ -157,9 +174,9 @@ async function readMessagePayload(request: any): Promise<ParsedMessagePayload> {
   return {
     content: typeof metadata.content === "string" ? metadata.content : fields.content,
     user_id: typeof metadata.user_id === "string" ? metadata.user_id : fields.user_id,
-    client_message_id: typeof metadata.client_message_id === "string"
-      ? metadata.client_message_id
-      : fields.client_message_id,
+    client_message_id: normalizeClientMessageId(
+      metadata.client_message_id !== undefined ? metadata.client_message_id : fields.client_message_id,
+    ),
     session_documents: sessionDocuments,
     document_attachment_ids: Array.isArray(metadata.document_attachment_ids)
       ? metadata.document_attachment_ids.filter((id): id is string => typeof id === "string").slice(0, 20)
@@ -209,21 +226,6 @@ function requirePersistentKnowledge(): void {
   }
 }
 
-// 向 SSE 客户端写入一条事件，并在内核背压时等待 drain。
-async function writeSse(raw: any, data: string): Promise<void> {
-  if (raw.writableEnded || raw.destroyed) return;
-  if (!raw.write(data)) {
-    await new Promise<void>((resolve) => {
-      const finish = () => {
-        raw.removeListener("drain", finish);
-        raw.removeListener("close", finish);
-        resolve();
-      };
-      raw.once("drain", finish);
-      raw.once("close", finish);
-    });
-  }
-}
 
 // 将 Conversation 对象序列化为前端 API 响应格式
 function serializeConversation(conversation: Conversation) {
@@ -507,140 +509,15 @@ export async function registerV1Routes(app: FastifyInstance) {
       const error = TurnService.duplicateError(turnResult.turn.status);
       return reply.status(error.statusCode).send(error.toJSON());
     }
-    let attachmentContext: AttachmentContext | undefined;
-    reply.hijack();
-    reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-    reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
-    reply.raw.setHeader("Connection", "keep-alive");
-    reply.raw.setHeader("X-Accel-Buffering", "no");
-    reply.raw.flushHeaders();
-    const requestController = new AbortController();
-    // 限制整个流式轮次，为代理超时前的状态持久化预留时间。
-    const requestTimer = setTimeout(
-      () => requestController.abort(new BusinessError(BusinessErrorCode.AGENT_TIMEOUT, "AI助手响应超时，请稍后重试。", 504)),
-      270_000,
-    );
-    requestTimer.unref?.();
-    const abortOnDisconnect = () => {
-      if (!reply.raw.writableEnded) {
-        requestController.abort(new Error("Client disconnected"));
-      }
-    };
-    request.raw.once("aborted", abortOnDisconnect);
-    reply.raw.once("close", abortOnDisconnect);
-    const heartbeat = setInterval(() => {
-      void writeSse(reply.raw, encodeSseHeartbeat());
-    }, 15_000);
-    heartbeat.unref();
-    const sseEvents = new SseEventSequencer(turnResult.turn.id);
-    let fullAnswer = "";
-    let turnCompleted = Boolean(completed);
-
-    try {
-      if (turnResult.created) {
-        attachmentContext = await toAttachmentContext(payload, trustedUserId);
-      }
-      await writeSse(
-        reply.raw,
-        sseEvents.event("meta", { conversation_id: convId, thread_id: convId, turn_id: turnResult.turn.id }),
-      );
-      if (completed) {
-        await writeSse(reply.raw, sseEvents.event("text", { delta: completed.content, text: completed.content, partial: false, replayed: true }));
-        return;
-      }
-      for await (const event of AgentService.chatStream(
-        convId,
-        turnContent,
-        trustedUserId,
-        requestController.signal,
-        toolIdentity,
-        attachmentContext,
-      )) {
-        let eventName: string;
-        let payload: Record<string, unknown>;
-        if (event.type === "text") {
-          fullAnswer += event.text;
-          eventName = "text";
-          payload = event.partial === undefined
-            ? { delta: event.text, text: event.text }
-            : { delta: event.text, text: event.text, partial: event.partial };
-        } else if (event.type === "tool") {
-          eventName = "tool";
-          payload = {
-            event: "tool",
-            tool_name: event.toolName,
-            status: event.status,
-            call_id: event.callId,
-            duration_ms: event.durationMs,
-          };
-        } else {
-          eventName = event.event;
-          payload = {
-            state: event.state,
-            stop_reason: event.stopReason,
-            react: event.react,
-          };
-        }
-        await writeSse(
-          reply.raw,
-          sseEvents.event(eventName, payload),
-        );
-      }
-      requestController.signal.throwIfAborted();
-      const assistantMessage = { id: crypto.randomUUID(), role: "assistant" as const, content: fullAnswer, createdAt: new Date().toISOString() };
-      await TurnService.complete(turnResult.turn.id, trustedUserId, assistantMessage);
-      turnCompleted = true;
-    } catch (error: unknown) {
-      if (!turnCompleted) {
-        await TurnService.terminate(
-          turnResult.turn.id,
-          trustedUserId,
-          requestController.signal.aborted && requestController.signal.reason?.code !== "AGENT_TIMEOUT",
-          requestController.signal.aborted && requestController.signal.reason?.code !== "AGENT_TIMEOUT" ? "CLIENT_CANCELLED" : (error as any)?.code || "INTERNAL_ERROR",
-        ).catch(() => undefined);
-        turnCompleted = true;
-      }
-      logRequestError(request, error, {
-        conversation_id: convId,
-        user_id: trustedUserId,
-        stream: true,
-      });
-      const businessError =
-        error instanceof BusinessError
-          ? error
-          : new BusinessError(
-              BusinessErrorCode.INTERNAL_ERROR,
-              "处理请求时发生错误",
-              500,
-            );
-      try {
-        await writeSse(
-          reply.raw,
-          sseEvents.event("error", {
-            ok: false,
-            error: businessError.toJSON().error,
-          }),
-        );
-      } catch {
-        // raw response already closed / unreachable — nothing to write
-      }
-
-    } finally {
-      if (!turnCompleted) {
-        await TurnService.terminate(turnResult.turn.id, trustedUserId, true, "CLIENT_CANCELLED").catch(() => undefined);
-      }
-      clearTimeout(requestTimer);
-      clearInterval(heartbeat);
-      request.raw.removeListener("aborted", abortOnDisconnect);
-      reply.raw.removeListener("close", abortOnDisconnect);
-      try {
-        await writeSse(reply.raw, sseEvents.done());
-      } catch {
-        // raw response already closed / unreachable — nothing to write
-      } finally {
-        reply.raw.end();
-      }
-    }
+    await streamTurn(request, reply, {
+      conversationId: convId, userId: trustedUserId, turnId: turnResult.turn.id, completed,
+      // 附件准备与模型调用共用流式取消信号，保持 Turn 生命周期一致。
+      events: async function* (signal) {
+        const attachmentContext = await toAttachmentContext(payload, trustedUserId);
+        signal.throwIfAborted();
+        yield* AgentService.chatStream(convId, turnContent, trustedUserId, signal, toolIdentity, attachmentContext);
+      },
+    });
   });
 
   app.delete<{ Params: { id: string } }>(
@@ -823,11 +700,11 @@ export async function registerV1Routes(app: FastifyInstance) {
         requirePersistentKnowledge();
         const userId = requireAgentUserId(request);
         const { query, top_k = 5 } = request.body;
-        if (typeof query !== "string" || query.length < 1) {
+        if (typeof query !== "string" || query.length < 1 || query.length > 2_000) {
           return reply.status(400).send({
             error: {
               code: BusinessErrorCode.INVALID_REQUEST,
-              message: "query is required",
+              message: "query must be between 1 and 2000 characters",
             },
           });
         }

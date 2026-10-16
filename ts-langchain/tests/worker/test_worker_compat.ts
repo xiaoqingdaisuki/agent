@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AIMessage, ChatMessageChunk } from "@langchain/core/messages";
-import "../../src/worker-router.js";
+import { installWorkerRouterCompatibility } from "../../src/worker-router.js";
 import { buildApp } from "../../src/api/index.js";
 import { createReActPolicyMiddleware } from "../../src/agents/tool-agent.js";
 import { runWithRequestRuntime, fetchMemoryGateway, retainBackgroundTask } from "../../src/runtime.js";
@@ -9,6 +9,7 @@ import { config } from "../../src/config/index.js";
 
 describe("Worker runtime compatibility", () => {
   it("registers and matches real API routes with string code generation disabled", async () => {
+    installWorkerRouterCompatibility();
     const original = globalThis.Function;
     globalThis.Function = new Proxy(original, { construct() { throw new Error("eval forbidden"); } });
     let app;

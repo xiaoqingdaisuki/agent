@@ -1,4 +1,4 @@
-import { getModelConfiguration } from "../config/model.js";
+import { createChatModel } from "../config/model.js";
 /**
  * RAG Agent — TS 版（LangChain 声明式）
  *
@@ -10,7 +10,6 @@ import { getModelConfiguration } from "../config/model.js";
 
 import { createOpenAIToolsAgent } from "@langchain/classic/agents";
 import { AgentExecutor } from "@langchain/classic/agents";
-import { ChatOpenAI } from "@langchain/openai";
 import {
   ChatPromptTemplate,
   MessagesPlaceholder,
@@ -86,10 +85,7 @@ export class RAGAgent {
    */
   // 创建或注册 createAgent 所需的数据
   private async createAgent(options: RAGOptions): Promise<AgentExecutor> {
-    const model = new ChatOpenAI({
-      modelName: options.model || process.env.OPENAI_MODEL || "gpt-4o-mini",
-      configuration: getModelConfiguration(),
-    });
+    const model = createChatModel({ model: options.model });
 
     const retrieverTool = createRetrieverTool(this.retriever);
 

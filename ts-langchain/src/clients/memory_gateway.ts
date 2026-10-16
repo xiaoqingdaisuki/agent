@@ -139,6 +139,7 @@ function validateSearchResponse(data: unknown) {
 // ============ HTTP 客户端 ============
 
 export interface MemoryGatewayClientOptions {
+  fetch?: (input: string, init: RequestInit) => Promise<Response>;
   baseUrl?: string;
   secret?: string;
   timeoutMs?: number;
@@ -157,12 +158,14 @@ export class CloudflareMemoryClient {
   private readonly baseUrl: string;
   private readonly secret: string;
   private readonly timeoutMs: number;
+  private readonly transport: (input: string, init: RequestInit) => Promise<Response>;
 
   // 初始化当前对象
   constructor(options: MemoryGatewayClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? config.CLOUDFLARE_MEMORY_BASE_URL).replace(/\/$/, "");
     this.secret = options.secret ?? config.CLOUDFLARE_MEMORY_SECRET;
     this.timeoutMs = options.timeoutMs ?? config.MEMORY_REQUEST_TIMEOUT_MS;
+    this.transport = options.fetch ?? fetchMemoryGateway;
   }
 
   // ============ 内部请求方法 ============
@@ -202,7 +205,7 @@ export class CloudflareMemoryClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const response = await fetchMemoryGateway(url, {
+      const response = await this.transport(url, {
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,

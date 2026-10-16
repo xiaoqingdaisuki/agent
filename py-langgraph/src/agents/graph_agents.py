@@ -104,7 +104,8 @@ async def _load_memory_context(user_id: str) -> str:
 
 # 集中定义必须保留完整工具链的意图，避免实时、文件或记忆请求被误送到轻量模型路径。
 TOOL_INTENT_PATTERNS = (
-    re.compile(r"(?:(?<!\d)(?:19|20)\d{2}(?!\d)|门店|店铺|地址|营业|特色美食|APEC)", re.IGNORECASE),
+    re.compile(r"(?:20\d{2}|今年|明年).{0,12}(?:APEC|展会|会议|活动)", re.IGNORECASE),
+    re.compile(r"(?:推荐|查询|查找|介绍).{0,30}(?:门店|店铺|餐厅|美食)|(?:门店|店铺|餐厅).{0,12}(?:地址|营业)", re.IGNORECASE),
     re.compile(r"(?:天气|气温|下雨|下雪|空气质量|weather)", re.IGNORECASE),
     re.compile(
         r"(?:(?:现在|当前|此刻).{0,10}(?:几点|时间|日期|星期)|北京时间|时区|timezone)",
@@ -420,10 +421,11 @@ def trim_history(state: AgentState) -> dict:
     return {**react_reset, "messages": removals} if removals else react_reset
 
 
-# 根据配置获取 LLM 实例（OpenAI 或 Anthropic）
-def get_llm(provider: str = "openai"):
-    """根据配置获取 LLM"""
-    if provider == "anthropic":
+# 根据配置获取 LLM 实例（OpenAI 或 Anthropic）。
+def get_llm(provider: str | None = None):
+    """根据配置获取 LLM。"""
+    selected_provider = provider or settings.llm_provider
+    if selected_provider == "anthropic":
         return ChatAnthropic(
             model=settings.anthropic_model,
             timeout=settings.llm_timeout_ms / 1000,

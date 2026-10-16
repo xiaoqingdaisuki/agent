@@ -2,7 +2,9 @@ import { config } from "../config/index.js";
 
 // 汇总不含秘密的关键依赖配置状态，供 readiness 探针与编排器使用。
 export function getReadiness() {
-  const modelReady = Boolean(config.OPENAI_API_KEY || config.ANTHROPIC_API_KEY);
+  const modelReady = Boolean(
+    config.LLM_PROVIDER === "anthropic" ? config.ANTHROPIC_API_KEY : config.OPENAI_API_KEY,
+  );
   const memoryReady = !config.MEMORY_ENABLED || Boolean(config.CLOUDFLARE_MEMORY_SECRET);
   const ready = modelReady && memoryReady;
   return {

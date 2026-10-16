@@ -16,6 +16,7 @@ SESSION_DOCUMENT_EXTENSIONS = {".txt", ".md", ".markdown", ".json", ".csv", ".pd
 SESSION_DOCUMENT_MAX_BYTES = 2_500_000
 SESSION_DOCUMENT_MAX_TEXT_BYTES = 1_000_000
 SESSION_DOCUMENT_MAX_PART_CHARS = 20_000
+SESSION_DOCUMENT_MAX_PAGES = 200
 SESSION_DOCUMENT_JSON_MAX_BYTES = 5_000_000
 
 
@@ -54,6 +55,12 @@ def _build_parts(content: str, page: int | None = None) -> list[dict[str, Any]]:
 def _parse_pdf(buffer: bytes) -> list[dict[str, Any]]:
     try:
         reader = PdfReader(io.BytesIO(buffer))
+        if len(reader.pages) > SESSION_DOCUMENT_MAX_PAGES:
+            raise DocumentParseError(
+                "SESSION_DOCUMENT_PARSE_FAILED",
+                "PDF 页数不能超过 200 页",
+                422,
+            )
         parts: list[dict[str, Any]] = []
         for page_number, page in enumerate(reader.pages, 1):
             page_text = page.extract_text() or ""

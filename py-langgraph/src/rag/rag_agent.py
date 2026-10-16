@@ -15,6 +15,7 @@ from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
+from src.agents.graph_agents import get_llm
 from src.config.settings import settings
 from src.rag.retriever import Retriever
 
@@ -27,6 +28,20 @@ class RAGState(TypedDict):
     context: list[dict[str, Any]]
     should_retrieve: bool
     user_id: str
+
+
+# 根据统一 provider 配置创建 RAG 使用的文本模型。
+def _create_rag_llm():
+    if settings.llm_provider == "anthropic":
+        return get_llm()
+    return ChatOpenAI(
+        model=settings.openai_model,
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+        timeout=settings.llm_timeout_ms / 1000,
+        max_retries=settings.llm_max_retries,
+        max_tokens=settings.llm_max_output_tokens,
+    )
 
 
 # 构建 RAG Agent — 显式图编排
@@ -43,13 +58,7 @@ def build_rag_agent(
                 ├── true  → retrieve → grade → generate → END
                 └── false → generate → END
     """
-    llm = ChatOpenAI(
-        model=settings.openai_model,
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-        timeout=settings.llm_timeout_ms / 1000,
-        max_retries=settings.llm_max_retries,
-    )
+    llm = _create_rag_llm()
     retriever = Retriever(
         qdrant_url=qdrant_url,
         collection_name=collection_name,

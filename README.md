@@ -1,6 +1,6 @@
 # Agent 双版本项目
 
-使用 **TypeScript + LangChain** 和 **Python + LangGraph** 实现同一套 Agent API。TS 版通过 `createAgent` 做声明式编排，Python 版通过 `StateGraph` 显式控制节点与边；两版独立维护工具、Prompt、配置和运行状态。当前实现覆盖轻量直答与完整 ReAct 工具链、用户隔离的会话/画像/长期记忆/知识库、图片生成、可恢复 Turn、流式 SSE、限流和分层超时。
+使用 **TypeScript + LangChain** 和 **Python + LangGraph** 实现同一套 Agent API。TS 版通过 `createAgent` 做声明式编排，Python 版通过 `StateGraph` 显式控制节点与边；两版独立维护工具、Prompt、配置和运行状态。当前实现覆盖轻量直答与完整 ReAct 工具链、用户隔离的会话/画像/长期记忆/知识库、文本/PDF/DOCX 临时附件、图片生成、可恢复 Turn、流式 SSE、限流和分层超时。
 
 ## 核心对比
 
@@ -15,6 +15,21 @@
 | 性能治理 | Agent/Prompt 缓存、模型并发队列、后台任务池 | 编译图缓存、模型并发队列、后台任务池 |
 | 人机协同 | 需自行实现 | 框架支持 `interrupt_before`，当前生产图未启用 |
 | 多 Agent | 当前未实现，需自行编排 | 当前未实现，可用显式图继续扩展 |
+
+## 双版本功能同步
+
+两版以相同的业务契约为准，允许 Agent 编排、持久化适配器和运行时部署方式存在语言框架差异。当前已对照源代码、路由和测试确认以下能力保持同步：
+
+| 能力 | 同步范围 | 允许的实现差异 |
+| --- | --- | --- |
+| HTTP API | `/api/v1` 会话、消息、SSE、知识库、画像、记忆、历史、能力查询；兼容 `/chat`、`/stream`、`/tools`、`/images/generations` | Fastify 与 FastAPI 的参数命名/校验实现不同 |
+| Agent 行为 | 普通请求轻量直答，实时/计算/文件/知识库/记忆/未知意图进入工具链；两版共享 240 秒工具 Agent 上限、270 秒 SSE 总时限 | LangChain 使用声明式 middleware，LangGraph 使用显式 StateGraph |
+| 工具集合 | 天气、搜索、网页读取/提取、计算、时间、文件、知识和会话/用户记忆工具；风险、权限和写工具审批策略一致 | 工具包装器分别使用 Zod 和 Pydantic/LangChain 类型 |
+| 数据与可靠性 | 用户隔离、Turn 幂等、活动 Turn 冲突、完成结果重放、SSE `meta/text/error/complete` 生命周期 | Cloudflare Gateway 客户端和本地仓储分别用 TypeScript/Python 实现 |
+| 附件 | 消息内联图片与临时文档；`MEMORY_ENABLED=false` 时 session-only，`true` 时写入知识库；临时文档独立解析接口 | PDF/DOCX 解析库不同，返回结构和限制一致 |
+| 运行与探针 | `/health`、`/health/live`、`/health/ready` 及 v1 对应探针、鉴权、限流、错误格式 | TS 额外提供 Cloudflare Worker 启动检查、Service Binding、Workers AI 图片 binding |
+
+Python 版额外保留 LangGraph 的 checkpoint 适配；TS 版额外保留 Cloudflare Workers 的路由兼容层。这些是框架或部署差异，不改变对外 API 和业务能力。
 
 ## Cloudflare 持久化服务
 
@@ -70,14 +85,15 @@ agent/
 ├── ts-langchain/              # TS 版：纯 LangChain 声明式配置
 │   ├── src/
 │   │   ├── agents/
-│   │   │   ├── chat-agent.ts       # 对话 Agent（ChatOpenAI 封装）
+│   │   │   ├── chat-agent.ts       # 对话 Agent（OpenAI/Anthropic 模型封装）
 │   │   │   ├── tool-agent.ts       # 工具调用 Agent
 │   │   │   ├── react-policy.ts     # ReAct 策略中间件
 │   │   │   ├── deadline.ts         # Agent 执行超时控制
 │   │   │   ├── response-handler.ts # 响应格式化处理
 │   │   │   └── index.ts            # Agent 导出
 │   │   ├── services/
-│   │   │   └── index.ts            # 业务编排、Turn、缓存与后台任务
+│   │   │   ├── index.ts            # 业务编排、Turn、缓存与后台任务
+│   │   │   └── session-documents.ts # 临时文档解析与上下文格式化
 │   │   ├── rag/
 │   │   │   ├── loader.ts           # 文档加载（TXT, MD）
 │   │   │   ├── splitter.ts         # 文本切分（递归字符切分）
@@ -120,6 +136,7 @@ agent/
 │   │   │   │   ├── auth.ts         # Bearer 鉴权
 │   │   │   │   └── error.ts        # 统一错误处理
 │   │   │   ├── sse.ts              # SSE 编码
+│   │   │   ├── stream-coordinator.ts # SSE Turn 生命周期协调
 │   │   │   ├── health.ts           # 存活与就绪状态
 │   │   │   └── index.ts            # Fastify 应用入口
 │   │   ├── profile/
@@ -128,9 +145,16 @@ agent/
 │   │   ├── prompts/
 │   │   │   └── system.ts           # Prompt 模板
 │   │   ├── memory/
-│   │   │   └── conversation.ts     # 会话记忆（内存 Map）
-│   │   └── config/
-│   │       └── index.ts            # 环境变量配置（Zod 校验）
+│   │   │   ├── conversation.ts     # 会话记忆（内存 Map）
+│   │   │   └── runtime-cache.ts    # 有界运行时缓存
+│   │   ├── config/
+│   │   │   ├── index.ts            # 环境变量配置（Zod 校验）
+│   │   │   └── model.ts            # OpenAI/Anthropic/Gateway 模型配置
+│   │   ├── runtime.ts              # Worker 请求运行时上下文
+│   │   ├── worker.ts               # Cloudflare Worker 入口
+│   │   ├── worker-router.ts        # Worker 路由兼容层
+│   │   ├── worker-readiness.ts     # Worker 启动前就绪检查
+│   │   └── worker-compat.d.ts      # Worker 类型声明
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── .env.example
@@ -143,7 +167,8 @@ agent/
 │   │   │   ├── deadline.py        # Agent 执行超时控制
 │   │   │   └── response_handler.py # 响应格式化处理
 │   │   ├── services/
-│   │   │   └── __init__.py        # 业务编排、Turn、缓存与后台任务
+│   │   │   ├── __init__.py        # 业务编排、Turn、缓存与后台任务
+│   │   │   └── document_parser.py # 临时文档解析
 │   │   ├── rag/
 │   │   │   ├── loader.py          # 文档加载（TXT, MD）
 │   │   │   ├── splitter.py        # 文本切分（递归字符切分）
@@ -187,6 +212,7 @@ agent/
 │   │   │   ├── auth.py            # Bearer 鉴权
 │   │   │   ├── request_logging.py # 请求日志
 │   │   │   ├── sse.py             # SSE 编码
+│   │   │   ├── stream_coordinator.py # SSE Turn 生命周期协调
 │   │   │   ├── health.py          # 存活与就绪状态
 │   │   │   └── main.py            # FastAPI 应用入口
 │   │   ├── prompts/
@@ -280,6 +306,7 @@ POST /api/v1/conversations/:id/messages 发送消息
 POST /api/v1/conversations/:id/messages/stream 流式发送消息（SSE）
 GET  /api/v1/conversations/:id/messages 获取历史
 DELETE /api/v1/conversations/:id/messages 清空消息
+POST /api/v1/conversations/:id/session-documents/parse 解析临时文档（关闭持久化时）
 
 POST /api/v1/knowledge/documents       上传文档（multipart/form-data）
 GET  /api/v1/knowledge/documents       文档列表
@@ -298,6 +325,8 @@ DELETE /api/v1/memory                  删除记忆
 GET  /api/v1/history?user_id=xxx       问答历史
 ```
 
+临时文档解析接口接收 multipart 字段 `file`，支持 `txt`、`md`、`markdown`、`json`、`csv`、`pdf` 和 `docx`。持久化模式下应直接把附件随消息发送并写入知识库；关闭持久化时，解析结果只在当前会话请求中使用。
+
 旧路由（保留兼容）：
 
 ```
@@ -308,7 +337,7 @@ POST /images/generations                图片生成
 ```
 
 图片生成独立使用 Cloudflare Workers AI 配置：`IMAGE_API_KEY`、`IMAGE_BASE_URL` 和
-`IMAGE_MODEL=@cf/black-forest-labs/flux-2-klein-9b`。该模型使用 Workers AI 的免费每日配额，
+`IMAGE_MODEL=@cf/black-forest-labs/flux-2-dev`。
 成功时返回 `result.image` Base64 字符串；接口将其转换为 `image_data_url`，前端可直接作为图片
 `src` 使用。
 

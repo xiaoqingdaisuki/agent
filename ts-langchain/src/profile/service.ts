@@ -1,4 +1,4 @@
-import { getModelConfiguration } from "../config/model.js";
+import { createChatModel } from "../config/model.js";
 /**
  * Profile Service — 用户画像 + 长期记忆 + 问答历史
  *
@@ -19,7 +19,6 @@ import {
   createMemory,
   createQARecord,
 } from "./index.js";
-import { ChatOpenAI } from "@langchain/openai";
 import { config } from "../config/index.js";
 import { getRepositories } from "../repositories/index.js";
 import type { MemorySearchResultData } from "../repositories/types.js";
@@ -315,13 +314,13 @@ export class MemoryService {
     question: string,
     _answer: string,
   ): Promise<void> {
-    if (!config.OPENAI_API_KEY) return;
+    const providerKey = config.LLM_PROVIDER === "anthropic"
+      ? config.ANTHROPIC_API_KEY
+      : config.OPENAI_API_KEY;
+    if (!providerKey) return;
 
     try {
-      const llm = new ChatOpenAI({
-        modelName: config.OPENAI_MODEL,
-        configuration: getModelConfiguration(),
-      });
+      const llm = createChatModel();
 
       const prompt = `你是一个记忆提取助手。分析以下对话，判断是否有值得长期记住的用户信息。
 

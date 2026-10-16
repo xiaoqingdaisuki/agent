@@ -1,3 +1,4 @@
+import asyncio
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,9 +14,15 @@ from src.agents.graph_agents import (
 from src.agents.react_policy import summarize_react_state
 from src.agents.deadline import AgentDeadline
 from src.config.settings import settings
-from src.agents.response_handler import ModelResponseError, get_finish_reason, is_likely_truncated, maybe_append_continuation_hint
+from src.agents.response_handler import (
+    ModelResponseError,
+    get_finish_reason,
+    is_likely_truncated,
+    maybe_append_continuation_hint,
+)
 from src.api.auth import get_agent_tool_identity, require_agent_user_id
 from src.api.request_logging import log_request_error
+from src.api.sse import begin_stream_turn, terminate_stream_turn
 from src.services import (
     BusinessError,
     ConversationService,
@@ -59,8 +66,8 @@ async def chat(payload: ChatRequest, request: Request):
     active_turn_id = None
     try:
         thread_id = payload.thread_id or str(uuid4())
-        ConversationService.ensure(thread_id, trusted_user_id)
-        turn, created = TurnService.begin(
+        await asyncio.to_thread(ConversationService.ensure, thread_id, trusted_user_id)
+        turn, created = await begin_stream_turn(
             thread_id, trusted_user_id, payload.message, payload.client_message_id
         )
         if not created:
@@ -80,20 +87,18 @@ async def chat(payload: ChatRequest, request: Request):
                 trusted_user_id,
             )
             assistant_message = Message("assistant", fast_answer)
-            TurnService.complete(turn["id"], trusted_user_id, assistant_message)
-            active_turn_id = None
-            return ChatResponse(
-                reply=fast_answer, thread_id=thread_id, turn_id=turn["id"]
+            await asyncio.to_thread(
+                TurnService.complete, turn["id"], trusted_user_id, assistant_message
             )
+            active_turn_id = None
+            return ChatResponse(reply=fast_answer, thread_id=thread_id, turn_id=turn["id"])
 
         agent_thread_id = thread_id
         agent = (
-            build_chat_agent()
-            if is_direct_chat_message(payload.message)
-            else build_tool_agent()
+            build_chat_agent() if is_direct_chat_message(payload.message) else build_tool_agent()
         )
-        conversation_history = ConversationService.get_agent_conversation_history(
-            thread_id, payload.message
+        conversation_history = await asyncio.to_thread(
+            ConversationService.get_agent_conversation_history, thread_id, payload.message
         )
 
         config = {
@@ -122,10 +127,16 @@ async def chat(payload: ChatRequest, request: Request):
                     },
                     config=config,
                 )
-                if is_direct_chat_message(payload.message) and not extract_agent_output_text(result).strip():
+                if (
+                    is_direct_chat_message(payload.message)
+                    and not extract_agent_output_text(result).strip()
+                ):
                     result = await build_tool_agent().ainvoke(
-                        {"messages": [{"role": "user", "content": payload.message}],
-                         "conversation_history": conversation_history, "user_id": trusted_user_id},
+                        {
+                            "messages": [{"role": "user", "content": payload.message}],
+                            "conversation_history": conversation_history,
+                            "user_id": trusted_user_id,
+                        },
                         config=config,
                     )
 
@@ -154,7 +165,9 @@ async def chat(payload: ChatRequest, request: Request):
             trusted_user_id,
         )
         assistant_message = Message("assistant", reply_text)
-        TurnService.complete(turn["id"], trusted_user_id, assistant_message)
+        await asyncio.to_thread(
+            TurnService.complete, turn["id"], trusted_user_id, assistant_message
+        )
         active_turn_id = None
 
         return ChatResponse(
@@ -164,14 +177,22 @@ async def chat(payload: ChatRequest, request: Request):
             react=react_summary,
             turn_id=turn["id"],
         )
+    except asyncio.CancelledError:
+        if active_turn_id:
+            await terminate_stream_turn(active_turn_id, trusted_user_id, True, "CLIENT_CANCELLED")
+        raise
     except ModelResponseError as error:
         if active_turn_id:
-            TurnService.terminate(active_turn_id, trusted_user_id, False, error.code)
-        raise HTTPException(status_code=502, detail={"code": error.code, "message": str(error)}) from error
+            await terminate_stream_turn(active_turn_id, trusted_user_id, False, error.code)
+        raise HTTPException(
+            status_code=502, detail={"code": error.code, "message": str(error)}
+        ) from error
     except BusinessError as error:
         if active_turn_id:
             try:
-                TurnService.terminate(active_turn_id, trusted_user_id, False, error.code.value)
+                await terminate_stream_turn(
+                    active_turn_id, trusted_user_id, False, error.code.value
+                )
             except Exception:
                 pass
         log_request_error(
@@ -183,7 +204,7 @@ async def chat(payload: ChatRequest, request: Request):
     except TimeoutError as error:
         if active_turn_id:
             try:
-                TurnService.terminate(active_turn_id, trusted_user_id, False, "AGENT_TIMEOUT")
+                await terminate_stream_turn(active_turn_id, trusted_user_id, False, "AGENT_TIMEOUT")
             except Exception:
                 pass
         log_request_error(
@@ -198,7 +219,9 @@ async def chat(payload: ChatRequest, request: Request):
     except Exception as error:
         if active_turn_id:
             try:
-                TurnService.terminate(active_turn_id, trusted_user_id, False, "INTERNAL_ERROR")
+                await terminate_stream_turn(
+                    active_turn_id, trusted_user_id, False, "INTERNAL_ERROR"
+                )
             except Exception:
                 pass
         log_request_error(
@@ -206,4 +229,7 @@ async def chat(payload: ChatRequest, request: Request):
             error,
             {"thread_id": thread_id, "user_id": trusted_user_id, "stream": False},
         )
-        raise HTTPException(status_code=500, detail=str(error))
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "INTERNAL_ERROR", "message": "Internal server error"},
+        ) from error

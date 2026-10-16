@@ -1,6 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 import { httpServerHandler } from "cloudflare:node";
-import "./worker-router.js";
+import { installWorkerRouterCompatibility } from "./worker-router.js";
+import { workerConfigurationResponse } from "./worker-readiness.js";
 import { runWithRequestRuntime } from "./runtime.js";
 
 interface WorkerEnv {
@@ -24,6 +25,7 @@ async function initialize(env: WorkerEnv): Promise<ExportedHandler> {
   if (!config.CLOUDFLARE_AI_GATEWAY_URL || !config.OPENAI_API_KEY) {
     throw new Error("Worker requires Cloudflare AI Gateway URL and model API credentials");
   }
+  installWorkerRouterCompatibility();
   const { buildApp } = await import("./api/index.js");
   const { retainBackgroundTask } = await import("./runtime.js");
   const { flushAuditLogs } = await import("./tools/runtime/executor.js");
@@ -40,6 +42,8 @@ async function initialize(env: WorkerEnv): Promise<ExportedHandler> {
 export default {
   // 为每个请求绑定私有网关与后台任务生命周期，初始化失败时允许下次重试。
   async fetch(request, env, ctx) {
+    const configurationResponse = workerConfigurationResponse(request, env);
+    if (configurationResponse) return configurationResponse;
     return runWithRequestRuntime({
       waitUntil: (task) => ctx.waitUntil(task),
       gatewayFetch: env.MEMORY_GATEWAY

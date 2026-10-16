@@ -41,10 +41,15 @@ export async function registerChatRoutes(app: FastifyInstance) {
     ) => {
       let activeTurn: { id: string; userId: string } | null = null;
       try {
-        const { message, thread_id, user_id, client_message_id } = request.body;
+        const { message, thread_id, user_id, client_message_id } = request.body || {};
         const trustedUserId = requireAgentUserId(request, user_id);
         const toolIdentity = getAgentToolIdentity(request, user_id);
         if (typeof message !== "string" || message.length < 1 || message.length > 16_000) {
+          return reply.status(400).send({
+            error: { code: "VALIDATION_ERROR", message: "请求参数无效" },
+          });
+        }
+        if (client_message_id !== undefined && (typeof client_message_id !== "string" || client_message_id.length < 1 || client_message_id.length > 128)) {
           return reply.status(400).send({
             error: { code: "VALIDATION_ERROR", message: "请求参数无效" },
           });

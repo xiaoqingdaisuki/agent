@@ -1024,6 +1024,13 @@ export class TurnService {
         content: result.userMessage.content_json,
         createdAt: result.userMessage.created_at,
       };
+      if (!result.created && userMessage.content !== content) {
+        throw new BusinessError(
+          BusinessErrorCode.INVALID_REQUEST,
+          "client_message_id 已用于另一条消息",
+          409,
+        );
+      }
       if (result.created) ConversationService.cachePersistedMessage(conversationId, userMessage);
       return { ...result, userMessage };
     } catch (error) {
@@ -1069,8 +1076,11 @@ export class TurnService {
   static completedMessage(turn: import("../repositories/types.js").TurnData): Message | null {
     if (turn.status !== "completed" || !turn.assistant_content_json) return null;
     try {
-      const parsed = JSON.parse(turn.assistant_content_json) as Message;
-      return parsed?.role === "assistant" && typeof parsed.content === "string" ? parsed : null;
+      const parsed = JSON.parse(turn.assistant_content_json) as Partial<Message> & { created_at?: string };
+      const createdAt = typeof parsed.createdAt === "string" ? parsed.createdAt : parsed.created_at;
+      return parsed?.role === "assistant" && typeof parsed.content === "string" && typeof createdAt === "string"
+        ? { ...parsed, createdAt } as Message
+        : null;
     } catch {
       return null;
     }

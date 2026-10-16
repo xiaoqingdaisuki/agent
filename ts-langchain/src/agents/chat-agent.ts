@@ -1,11 +1,11 @@
-import { getModelConfiguration } from "../config/model.js";
-import { ChatOpenAI } from "@langchain/openai";
+import { createChatModel } from "../config/model.js";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages";
 import { SYSTEM_PROMPT } from "../prompts/system.js";
 import { ProfileService, MemoryService } from "../profile/service.js";
 import { appendMessage, getHistory } from "../memory/conversation.js";
 
-let chatAgent: ChatOpenAI | null = null;
+let chatAgent: BaseChatModel | null = null;
 
 // 将 LangChain BaseMessage 转换为 OpenAI API 消息格式
 function toOpenAIMessage(message: BaseMessage) {
@@ -16,20 +16,17 @@ function toOpenAIMessage(message: BaseMessage) {
 }
 
 // 创建或注册 createChatAgent 所需的数据
-export function createChatAgent(): ChatOpenAI {
+export function createChatAgent(): BaseChatModel {
   if (chatAgent) return chatAgent;
 
-  chatAgent = new ChatOpenAI({
-    modelName: process.env.OPENAI_MODEL || "step-3.7-flash",
-    configuration: getModelConfiguration(),
-  });
+  chatAgent = createChatModel();
 
   return chatAgent;
 }
 
 // 执行 chat 对应的业务逻辑
 export async function chat(
-  agent: ChatOpenAI,
+  agent: BaseChatModel,
   message: string,
   threadId: string,
   userId?: string,

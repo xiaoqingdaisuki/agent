@@ -24,6 +24,11 @@ export function fetchMemoryGateway(input: string, init: RequestInit): Promise<Re
 }
 
 // 在 Worker 中通过 Workers AI 绑定生图，Node 环境沿用 HTTP 调用。
+export function hasBoundImageGenerator(): boolean {
+  return Boolean(runtime.getStore()?.generateImage);
+}
+
+// 使用当前请求显式提供的图片 Adapter。
 export function generateBoundImage(model: string, input: FormData | Record<string, unknown>): Promise<Response> | undefined {
   return runtime.getStore()?.generateImage?.(model, input);
 }

@@ -7,7 +7,11 @@ from src.config.settings import settings
 
 # 汇总不含秘密的关键依赖配置状态，供 readiness 探针与编排器使用。
 def get_readiness() -> dict:
-    model_ready = bool(settings.openai_api_key or settings.anthropic_api_key)
+    model_ready = bool(
+        settings.anthropic_api_key
+        if settings.llm_provider == "anthropic"
+        else settings.openai_api_key
+    )
     memory_ready = not settings.memory_enabled or bool(settings.memory_gateway_secret)
     ready = model_ready and memory_ready
     return {

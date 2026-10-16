@@ -51,9 +51,9 @@ describe("Workers AI image models through AI Gateway", () => {
     } finally { await app.close(); }
   });
 
-  it("uses the Worker AI binding instead of external HTTP when present", async () => {
+  it("uses the Worker AI binding without external API credentials", async () => {
     config.IMAGE_MODEL = "@cf/black-forest-labs/flux-2-dev";
-    config.IMAGE_API_KEY = "image-secret";
+    config.IMAGE_API_KEY = undefined;
     const binding = vi.fn(async () => Response.json({ result: { image: "/9j/binding" } }));
     const upstream = vi.fn();
     vi.stubGlobal("fetch", upstream);
