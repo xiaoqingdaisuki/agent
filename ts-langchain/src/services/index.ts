@@ -92,7 +92,7 @@ export type AgentStreamEvent =
     };
 
 const STREAM_FALLBACK_CHUNK_SIZE = 8;
-const STREAM_FALLBACK_INTERVAL_MS = 18;
+const STREAM_FALLBACK_INTERVAL_MS = 60;
 
 const backgroundTasks = new Set<Promise<void>>();
 const backgroundChains = new Map<string, Promise<void>>();
