@@ -1925,6 +1925,7 @@ class AgentService:
                 ):
                     completed_model_answer = ""
                     model_text_buffers: dict[str, str] = {}
+                    model_visible_buffers: dict[str, str] = {}
                     model_tool_runs: set[str] = set()
                     active_tool_run_ids: set[str] = set()
                     completed_tool_run_ids: set[str] = set()
@@ -1960,6 +1961,15 @@ class AgentService:
                                             event.get("data", {}).get("chunk")
                                         ):
                                             model_tool_runs.add(run_id)
+                                        elif run_id not in model_tool_runs:
+                                            visible, remainder = drain_xml_tool_stream(
+                                                model_visible_buffers.get(run_id, "") + delta
+                                            )
+                                            model_visible_buffers[run_id] = remainder
+                                            if visible and (visible.strip() or emitted_text):
+                                                full_answer += visible
+                                                emitted_text = True
+                                                yield {"type": "text", "text": visible}
                             elif event_name == "on_chat_model_end":
                                 finish_reason = get_finish_reason_from_output(
                                     event.get("data", {}).get("output")
@@ -1986,7 +1996,15 @@ class AgentService:
                                     ) or extract_agent_output_text(output)
                                     if candidate.strip():
                                         completed_model_answer = candidate
+                                    visible_tail, _ = drain_xml_tool_stream(
+                                        model_visible_buffers.get(run_id, ""), final=True
+                                    )
+                                    if visible_tail and (visible_tail.strip() or emitted_text):
+                                        full_answer += visible_tail
+                                        emitted_text = True
+                                        yield {"type": "text", "text": visible_tail}
                                 model_text_buffers.pop(run_id, None)
+                                model_visible_buffers.pop(run_id, None)
                                 model_tool_runs.discard(run_id)
                                 if is_root_lifecycle_event(event):
                                     candidate = extract_agent_output_text(output)
@@ -2121,13 +2139,9 @@ class AgentService:
                             react_summary = summarize_react_state(fallback_result)
 
             if full_answer.strip() and not emitted_text:
-                if direct_chat:
-                    async for text in stream_text_chunks(full_answer):
-                        emitted_text = True
-                        yield {"type": "text", "text": text}
-                else:
+                async for text in stream_text_chunks(full_answer):
                     emitted_text = True
-                    yield {"type": "text", "text": full_answer}
+                    yield {"type": "text", "text": text}
 
             # 工具调用或模型空响应不能让 SSE 以无文本事件结束，否则前端会误判接口失败。
             if not full_answer.strip():

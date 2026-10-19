@@ -618,6 +618,43 @@ class TestAgentService:
         assert ConversationService.get_messages(conversation.id) == []
 
     @pytest.mark.asyncio
+    async def test_non_direct_model_stream_emits_deltas_before_completion(self, monkeypatch):
+        """Non-direct model text must reach the client before the model end event."""
+        from langchain_core.messages import AIMessage
+        from src.agents import graph_agents
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {
+                    "event": "on_chat_model_stream",
+                    "run_id": "current-model",
+                    "data": {"chunk": AIMessage(content="第一段")},
+                }
+                yield {
+                    "event": "on_chat_model_stream",
+                    "run_id": "current-model",
+                    "data": {"chunk": AIMessage(content="第二段")},
+                }
+                yield {
+                    "event": "on_chat_model_end",
+                    "run_id": "current-model",
+                    "data": {"output": AIMessage(content="第一段第二段")},
+                }
+
+        conversation = ConversationService.create("non-direct incremental stream")
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+
+        events = [
+            event
+            async for event in AgentService.chat_stream(conversation.id, "查广州美食")
+        ]
+
+        assert [event for event in events if event["type"] == "text"] == [
+            {"type": "text", "text": "第一段"},
+            {"type": "text", "text": "第二段"},
+        ]
+
+    @pytest.mark.asyncio
     async def test_stream_uses_root_tool_answer_after_nested_history(self, monkeypatch):
         """A tool answer must come from the root graph result, not an inner history snapshot."""
         from langchain_core.messages import AIMessage, HumanMessage, ToolMessage

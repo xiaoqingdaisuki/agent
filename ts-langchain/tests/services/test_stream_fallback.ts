@@ -210,6 +210,39 @@ describe("AgentService empty streams", () => {
     expect((await ConversationService.getMessages(conversation.id)).at(-1)?.content).toBeUndefined();
   });
 
+  it("streams non-direct model answer deltas before the model completes", async () => {
+    createToolAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        yield {
+          event: "on_chat_model_stream",
+          run_id: "current-model",
+          data: { chunk: { content: "第一段" } },
+        };
+        yield {
+          event: "on_chat_model_stream",
+          run_id: "current-model",
+          data: { chunk: { content: "第二段" } },
+        };
+        yield {
+          event: "on_chat_model_end",
+          run_id: "current-model",
+          data: { output: { type: "ai", content: "第一段第二段" } },
+        };
+      },
+    });
+
+    const conversation = await ConversationService.create("non-direct incremental stream");
+    const events = [];
+    for await (const event of AgentService.chatStream(conversation.id, "查广州美食")) {
+      events.push(event);
+    }
+
+    expect(events.filter((event) => event.type === "text")).toEqual([
+      { type: "text", text: "第一段" },
+      { type: "text", text: "第二段" },
+    ]);
+  });
+
   it("uses the root graph answer after tools instead of an inner history snapshot", async () => {
     createToolAgentMock.mockResolvedValue({
       streamEvents: async function* () {

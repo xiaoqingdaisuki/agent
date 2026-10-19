@@ -1454,6 +1454,7 @@ export class AgentService {
       let completedModelAnswer = "";
       let streamFinishReason: string | undefined;
       const modelTextBuffers = new Map<string, string>();
+      const modelVisibleBuffers = new Map<string, string>();
       const modelToolRuns = new Set<string>();
       const toolLifecycleState: ToolLifecycleState = {
         activeRunIds: new Set<string>(),
@@ -1506,7 +1507,19 @@ export class AgentService {
                 } else {
                   const runId = String(event.run_id || "model");
                   modelTextBuffers.set(runId, (modelTextBuffers.get(runId) || "") + delta);
-                  if (hasStructuredToolCall(event.data?.chunk)) modelToolRuns.add(runId);
+                  if (hasStructuredToolCall(event.data?.chunk)) {
+                    modelToolRuns.add(runId);
+                  } else if (!modelToolRuns.has(runId)) {
+                    const visible = drainXmlToolStream(
+                      (modelVisibleBuffers.get(runId) || "") + delta,
+                    );
+                    modelVisibleBuffers.set(runId, visible.remainder);
+                    if (visible.text.length > 0 && (visible.text.trim() || emittedText)) {
+                      fullAnswer += visible.text;
+                      emittedText = true;
+                      yield { type: "text", text: visible.text };
+                    }
+                  }
                 }
               }
             } else if (event.event === "on_chat_model_end") {
@@ -1521,8 +1534,18 @@ export class AgentService {
                 const candidate = stripXmlToolStream(buffered)
                   || extractAgentOutputText(event.data?.output);
                 if (candidate.trim()) completedModelAnswer = candidate;
+                const visibleTail = drainXmlToolStream(
+                  modelVisibleBuffers.get(runId) || "",
+                  true,
+                ).text;
+                if (visibleTail.length > 0 && (visibleTail.trim() || emittedText)) {
+                  fullAnswer += visibleTail;
+                  emittedText = true;
+                  yield { type: "text", text: visibleTail };
+                }
               }
               modelTextBuffers.delete(runId);
+              modelVisibleBuffers.delete(runId);
               modelToolRuns.delete(runId);
               if (isRootLifecycleEvent(event)) {
                 const candidate = extractAgentOutputText(event.data?.output);
@@ -1617,8 +1640,7 @@ export class AgentService {
 
       // 不支持 token 事件的模型仍返回完整答案，按兼容路径输出而不是空流。
       if (fullAnswer.trim() && !emittedText) {
-        const deltas = directChat ? splitTextForStreaming(fullAnswer) : [fullAnswer];
-        for await (const delta of deltas) {
+        for await (const delta of splitTextForStreaming(fullAnswer)) {
           emittedText = true;
           yield { type: "text", text: delta };
         }
