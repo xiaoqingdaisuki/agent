@@ -25,8 +25,6 @@ from src.agents.response_handler import ModelResponseError
 
 logger = logging.getLogger(__name__)
 
-STREAM_FALLBACK_CHUNK_SIZE = 50
-STREAM_FALLBACK_INTERVAL_SECONDS = 0.03
 _background_tasks: set[asyncio.Task] = set()
 _background_chains: dict[str, asyncio.Task] = {}
 _background_semaphore: asyncio.Semaphore | None = None
@@ -475,14 +473,6 @@ def schedule_answer_persistence(
 
     task.add_done_callback(cleanup)
     return task
-
-
-# 将模型完整回答按可见字符拆成平滑的 SSE 分片，避免依赖厂商工具流格式
-async def stream_text_chunks(text: str):
-    for index in range(0, len(text), STREAM_FALLBACK_CHUNK_SIZE):
-        yield text[index : index + STREAM_FALLBACK_CHUNK_SIZE]
-        if index + STREAM_FALLBACK_CHUNK_SIZE < len(text):
-            await asyncio.sleep(STREAM_FALLBACK_INTERVAL_SECONDS)
 
 
 # ============ 错误码 ============
@@ -1889,12 +1879,7 @@ class AgentService:
                     raise ModelResponseError()
                 raw_answer = full_answer
                 if not emitted_text:
-                    if rag_stream_api:
-                        async for text in stream_text_chunks(raw_answer):
-                            emitted_text = True
-                            yield {"type": "text", "text": text}
-                    else:
-                        yield {"type": "text", "text": raw_answer}
+                    yield {"type": "text", "text": raw_answer, "delivery": "immediate"}
                 final_answer = maybe_append_continuation_hint(
                     raw_answer, rag_finish_reason
                 )
@@ -2028,11 +2013,17 @@ class AgentService:
                                 ):
                                     continue
                                 observed_tool_event = True
+                                from src.tools.runtime.data_redaction import redact_text_content
+
+                                tool_output = redact_text_content(
+                                    get_stream_text(event.get("data", {}).get("output"))
+                                )
                                 yield {
                                     "type": "tool",
                                     "tool_name": event.get("name") or "tool",
                                     "status": "completed",
                                     "call_id": event.get("run_id", ""),
+                                    **({"output": tool_output} if tool_output else {}),
                                 }
                             elif event_name == "on_tool_error":
                                 if not _accept_tool_lifecycle_event(
@@ -2139,9 +2130,8 @@ class AgentService:
                             react_summary = summarize_react_state(fallback_result)
 
             if full_answer.strip() and not emitted_text:
-                async for text in stream_text_chunks(full_answer):
-                    emitted_text = True
-                    yield {"type": "text", "text": text}
+                emitted_text = True
+                yield {"type": "text", "text": full_answer, "delivery": "immediate"}
 
             # 工具调用或模型空响应不能让 SSE 以无文本事件结束，否则前端会误判接口失败。
             if not full_answer.strip():

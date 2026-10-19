@@ -23,6 +23,7 @@ def encode_agent_event(sequencer: SseEventSequencer, event: dict) -> str:
                 "delta": event["text"],
                 "text": event["text"],
                 "partial": event.get("partial", False),
+                "delivery": event.get("delivery", "delta"),
             },
         )
     if event["type"] == "tool":
@@ -34,6 +35,7 @@ def encode_agent_event(sequencer: SseEventSequencer, event: dict) -> str:
                 "status": event["status"],
                 "call_id": event["call_id"],
                 "duration_ms": event.get("duration_ms"),
+                **({"output": event["output"]} if event.get("output") else {}),
             },
         )
     return sequencer.event(
@@ -78,6 +80,7 @@ async def stream_turn(
                     "text": completed.content,
                     "partial": False,
                     "replayed": True,
+                    "delivery": "immediate",
                 },
             )
         else:

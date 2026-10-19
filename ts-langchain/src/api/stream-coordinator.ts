@@ -50,10 +50,12 @@ async function writeSse(raw: FastifyReply["raw"], data: string): Promise<void> {
 function encodeAgentEvent(sequencer: SseEventSequencer, event: AgentStreamEvent): string {
   if (event.type === "text") return sequencer.event("text", {
     delta: event.text, text: event.text, partial: event.partial ?? false,
+    delivery: event.delivery ?? "delta",
   });
   if (event.type === "tool") return sequencer.event("tool", {
     event: "tool", tool_name: event.toolName, status: event.status,
     call_id: event.callId, duration_ms: event.durationMs ?? null,
+    ...(event.output ? { output: event.output } : {}),
   });
   return sequencer.event(event.event, { state: event.state, stop_reason: event.stopReason, react: event.react });
 }
@@ -101,6 +103,7 @@ export async function streamTurn(request: FastifyRequest, reply: FastifyReply, o
     if (options.completed) {
       await writeSse(reply.raw, sequencer.event("text", {
         delta: options.completed.content, text: options.completed.content, partial: false, replayed: true,
+        delivery: "immediate",
       }));
       return;
     }

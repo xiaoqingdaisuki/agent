@@ -378,7 +378,7 @@ class TestAgentService:
             )
         ]
 
-        assert events == [{"type": "text", "text": "knowledge answer"}]
+        assert events == [{"type": "text", "text": "knowledge answer", "delivery": "immediate"}]
 
     @pytest.mark.asyncio
     async def test_non_streamed_knowledge_conversation_scopes_rag_to_user(self, monkeypatch):
@@ -710,6 +710,46 @@ class TestAgentService:
         assert "".join(
             event["text"] for event in events if event["type"] == "text"
         ) == "深圳免费活动回答"
+
+    @pytest.mark.asyncio
+    async def test_completed_fallback_answer_is_immediate_without_chunk_delays(self, monkeypatch):
+        from langchain_core.messages import AIMessage
+        from src.agents import graph_agents
+
+        answer = "完整答案😀" * 500 + "。"
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {"event": "on_chain_end", "parent_ids": [], "data": {"output": AIMessage(content=answer)}}
+
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+        conversation = ConversationService.create("immediate final answer")
+        events = [event async for event in AgentService.chat_stream(conversation.id, "查广州美食")]
+        assert [event for event in events if event["type"] == "text"] == [
+            {"type": "text", "text": answer, "delivery": "immediate"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_whole_tool_output_is_separate_from_assistant_text(self, monkeypatch):
+        from langchain_core.messages import AIMessage, ToolMessage
+        from src.agents import graph_agents
+
+        output = "工具结果" * 500
+
+        class FakeAgent:
+            async def astream_events(self, *_args, **_kwargs):
+                yield {"event": "on_tool_start", "name": "web_search", "run_id": "call-display"}
+                yield {
+                    "event": "on_tool_end", "name": "web_search", "run_id": "call-display",
+                    "data": {"output": ToolMessage(content=output, tool_call_id="call-display")},
+                }
+                yield {"event": "on_chat_model_stream", "data": {"chunk": AIMessage(content="最终回答")}}
+
+        monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
+        conversation = ConversationService.create("separate tool result")
+        events = [event async for event in AgentService.chat_stream(conversation.id, "查广州美食")]
+        assert {"type": "tool", "tool_name": "web_search", "status": "completed", "call_id": "call-display", "output": output} in events
+        assert "".join(event["text"] for event in events if event["type"] == "text") == "最终回答"
 
     @pytest.mark.asyncio
     async def test_stream_replaces_whitespace_with_final_graph_answer(self, monkeypatch):

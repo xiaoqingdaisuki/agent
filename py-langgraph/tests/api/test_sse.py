@@ -7,6 +7,42 @@ from src.api.sse import SseEventSequencer, encode_sse_heartbeat, with_sse_heartb
 
 
 @pytest.mark.asyncio
+async def test_display_events_keep_tool_output_out_of_persisted_answer(monkeypatch):
+    import json
+    from unittest.mock import AsyncMock, Mock
+    from src.api.stream_coordinator import stream_turn
+
+    output = "工具输出" * 500
+    complete = Mock()
+    monkeypatch.setattr("src.services.TurnService.complete", complete)
+    request = Mock(is_disconnected=AsyncMock(return_value=False))
+
+    async def events():
+        yield {"type": "tool", "tool_name": "web_search", "status": "completed", "call_id": "call-display", "output": output}
+        yield {"type": "text", "text": "普通"}
+        yield {"type": "text", "text": "回答。", "delivery": "immediate"}
+
+    records = [record async for record in stream_turn(
+        request, "conversation", "user", {"id": "turn"}, None,
+        events, asyncio.get_running_loop().time() + 2,
+    )]
+    payloads = [json.loads(line[6:]) for record in records for line in record.splitlines() if line.startswith("data: {")]
+    assert next(payload for payload in payloads if payload.get("event") == "tool")["output"] == output
+    text_events = [payload for payload in payloads if "delta" in payload]
+    assert [payload["delivery"] for payload in text_events] == ["delta", "immediate"]
+    assert complete.call_args.args[2].content == "普通回答。"
+
+    completed = complete.call_args.args[2]
+    replay = "".join([record async for record in stream_turn(
+        request, "conversation", "user", {"id": "turn"}, completed,
+        events, asyncio.get_running_loop().time() + 2,
+    )])
+    assert '"delivery": "immediate"' in replay
+    assert '"replayed": true' in replay
+    assert complete.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_failed_terminal_write_retains_retry_and_preserves_error(monkeypatch):
     from unittest.mock import Mock
     from src.api.sse import _pending_settlements, terminate_stream_turn

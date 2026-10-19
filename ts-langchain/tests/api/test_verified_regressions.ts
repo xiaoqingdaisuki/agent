@@ -5,6 +5,43 @@ import { AgentService, ConversationService, TurnService, BusinessError } from ".
 import { parseSessionDocument } from "../../src/services/session-documents.js";
 
 describe("verified API regressions", () => {
+  it("separates tool output from persisted text and immediately replays completed answers", async () => {
+    const memoryEnabled = config.MEMORY_ENABLED;
+    config.MEMORY_ENABLED = false;
+    const user = `display-${crypto.randomUUID()}`;
+    const conversation = await ConversationService.create("display", "chat", user);
+    const output = "工具输出".repeat(500);
+    const stream = vi.spyOn(AgentService, "chatStream").mockImplementation(async function* () {
+      yield { type: "tool", toolName: "web_search", status: "completed", callId: "call-display", output };
+      yield { type: "text", text: "普通" };
+      yield { type: "text", text: "回答。", delivery: "immediate" };
+    });
+    const app = await buildApp();
+    const request = {
+      method: "POST" as const,
+      url: `/v1/conversations/${conversation.id}/messages/stream`,
+      headers: { authorization: "Bearer test-agent-secret", "x-agent-user-id": user },
+      payload: { content: "question", client_message_id: "display-one" },
+    };
+    try {
+      const response = await app.inject(request);
+      expect(response.statusCode).toBe(200);
+      const payloads = response.body.split("\n").filter((line) => line.startsWith("data: {")).map((line) => JSON.parse(line.slice(6)));
+      expect(payloads).toContainEqual(expect.objectContaining({ tool_name: "web_search", output }));
+      expect(payloads).toContainEqual(expect.objectContaining({ delta: "普通", delivery: "delta" }));
+      expect(payloads).toContainEqual(expect.objectContaining({ delta: "回答。", delivery: "immediate" }));
+      expect((await ConversationService.getMessages(conversation.id)).at(-1)?.content).toBe("普通回答。");
+      const replay = await app.inject(request);
+      expect(replay.body).toContain('"delivery":"immediate"');
+      expect(replay.body).toContain('"replayed":true');
+      expect(stream).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+      stream.mockRestore();
+      config.MEMORY_ENABLED = memoryEnabled;
+    }
+  });
+
   it("releases a disconnected stream Turn", async () => {
     const memoryEnabled = config.MEMORY_ENABLED;
     config.MEMORY_ENABLED = false;

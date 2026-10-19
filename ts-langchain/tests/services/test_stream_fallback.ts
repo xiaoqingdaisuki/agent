@@ -243,6 +243,37 @@ describe("AgentService empty streams", () => {
     ]);
   });
 
+  it("delivers a completed fallback answer immediately without artificial chunk delays", async () => {
+    const answer = "完整答案😀".repeat(500) + "。";
+    createToolAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        yield { event: "on_chain_end", parent_ids: [], data: { output: { output: answer } } };
+      },
+    });
+    const conversation = await ConversationService.create("immediate final answer");
+    const events = [];
+    for await (const event of AgentService.chatStream(conversation.id, "查广州美食")) events.push(event);
+    expect(events.filter((event) => event.type === "text")).toEqual([
+      { type: "text", text: answer, delivery: "immediate" },
+    ]);
+  });
+
+  it("keeps the whole tool output separate from streamed assistant text", async () => {
+    const output = "工具结果".repeat(500);
+    createToolAgentMock.mockResolvedValue({
+      streamEvents: async function* () {
+        yield { event: "on_tool_start", name: "web_search", run_id: "call-display" };
+        yield { event: "on_tool_end", name: "web_search", run_id: "call-display", data: { output: { content: output } } };
+        yield { event: "on_chat_model_stream", data: { chunk: { content: "最终回答" } } };
+      },
+    });
+    const conversation = await ConversationService.create("separate tool result");
+    const events = [];
+    for await (const event of AgentService.chatStream(conversation.id, "查广州美食")) events.push(event);
+    expect(events).toContainEqual({ type: "tool", toolName: "web_search", status: "completed", callId: "call-display", output });
+    expect(events.filter((event) => event.type === "text").map((event) => event.text).join("")).toBe("最终回答");
+  });
+
   it("uses the root graph answer after tools instead of an inner history snapshot", async () => {
     createToolAgentMock.mockResolvedValue({
       streamEvents: async function* () {

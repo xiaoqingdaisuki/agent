@@ -52,6 +52,7 @@ import {
 } from "../agents/response-handler.js";
 import type { ReActRunSummary } from "../agents/react-policy.js";
 import { config } from "../config/index.js";
+import { redactTextContent } from "../tools/runtime/data-redaction.js";
 import { retainBackgroundTask } from "../runtime.js";
 import { createRuntimeCache } from "../memory/runtime-cache.js";
 import { formatSessionDocumentContext, SessionDocument } from "./session-documents.js";
@@ -75,7 +76,7 @@ export interface Message {
 }
 
 export type AgentStreamEvent =
-  | { type: "text"; text: string; partial?: boolean }
+  | { type: "text"; text: string; partial?: boolean; delivery?: "immediate" }
   | {
       type: "agent";
       event: "agent.start" | "agent.complete";
@@ -89,10 +90,8 @@ export type AgentStreamEvent =
       status: "started" | "completed" | "failed";
       callId: string;
       durationMs?: number;
+      output?: string;
     };
-
-const STREAM_FALLBACK_CHUNK_SIZE = 50;
-const STREAM_FALLBACK_INTERVAL_MS = 30;
 
 const backgroundTasks = new Set<Promise<void>>();
 const backgroundChains = new Map<string, Promise<void>>();
@@ -521,21 +520,6 @@ export function scheduleAnswerPersistence(
     if (backgroundChains.get(label) === work) backgroundChains.delete(label);
   }).catch(() => undefined);
   return work;
-}
-
-// 将模型完整回答按可见字符拆成平滑的 SSE 分片，避免依赖厂商工具流格式
-async function* splitTextForStreaming(
-  text: string,
-): AsyncGenerator<string, void, unknown> {
-  const characters = Array.from(text);
-  for (let index = 0; index < characters.length; index += STREAM_FALLBACK_CHUNK_SIZE) {
-    yield characters.slice(index, index + STREAM_FALLBACK_CHUNK_SIZE).join("");
-    if (index + STREAM_FALLBACK_CHUNK_SIZE < characters.length) {
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, STREAM_FALLBACK_INTERVAL_MS),
-      );
-    }
-  }
 }
 
 class ToolProgressChannel {
@@ -1563,11 +1547,13 @@ export class AgentService {
             } else if (event.event === "on_tool_end") {
               if (!acceptToolLifecycleEvent(event, toolLifecycleState)) continue;
               observedToolEvent = true;
+              const toolOutput = redactTextContent(getStreamText(event.data?.output));
               yield {
                 type: "tool",
                 toolName: event.name || "tool",
                 status: "completed",
                 callId: event.run_id || "",
+                ...(toolOutput ? { output: toolOutput } : {}),
               };
             } else if (event.event === "on_tool_error") {
               if (!acceptToolLifecycleEvent(event, toolLifecycleState)) continue;
@@ -1598,9 +1584,7 @@ export class AgentService {
             if (chunk?.output) {
               fullAnswer = stripXmlToolStream(String(chunk.output));
               emittedText = true;
-              for await (const delta of splitTextForStreaming(fullAnswer)) {
-                yield { type: "text", text: delta };
-              }
+              yield { type: "text", text: fullAnswer, delivery: "immediate" };
             }
             for (const event of progress.drain()) yield event;
           }
@@ -1638,12 +1622,10 @@ export class AgentService {
         deadline.dispose();
       }
 
-      // 不支持 token 事件的模型仍返回完整答案，按兼容路径输出而不是空流。
+      // 已生成的完整答案立即追加，由客户端合并展示，避免人工分片延迟终态。
       if (fullAnswer.trim() && !emittedText) {
-        for await (const delta of splitTextForStreaming(fullAnswer)) {
-          emittedText = true;
-          yield { type: "text", text: delta };
-        }
+        emittedText = true;
+        yield { type: "text", text: fullAnswer, delivery: "immediate" };
       }
       // 工具调用或模型空响应不能让 SSE 以无文本事件结束，否则前端会误判接口失败。
       if (!fullAnswer.trim()) {
