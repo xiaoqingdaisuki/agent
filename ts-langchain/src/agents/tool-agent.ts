@@ -15,6 +15,19 @@ import {
   runWithReActTracker,
   toolCallSignature,
 } from "./react-policy.js";
+import {
+  AGENT_TRACE_CONTEXT_SCHEMA,
+  createAgentTraceContext,
+  getAgentTraceContext,
+  recordAgentTraceError,
+  recordModelInput,
+  recordModelOutput,
+  recordToolInput,
+  recordToolOutput,
+  withActiveAgentTrace,
+  withAgentSpan,
+  withAgentTrace,
+} from "../observability/agent-tracing.js";
 
 // ReAct 最大步骤与 Python 版共享配置，避免两种实现的安全边界不一致。
 export const MAX_AGENT_ITERATIONS = config.REACT_MAX_STEPS;
@@ -397,27 +410,32 @@ class DeclarativeToolAgent {
   // 调用 Agent 并将消息状态转换为旧接口的 output 字段。
   async invoke(
     input: { input: AgentUserContent; chat_history?: BaseMessage[]; memory_context?: BaseMessage[] },
-    options: { signal?: AbortSignal } = {},
+    options: { signal?: AbortSignal; conversationId?: string } = {},
   ): Promise<{ output: string; react: ReActRunSummary }> {
     const tracker = createReActTracker();
+    const traceContext = createAgentTraceContext(options.conversationId);
     try {
-      return await runWithReActTracker(tracker, async () => {
-        const result = await this.agent.invoke(
-          { messages: [...(input.memory_context || []), ...(input.chat_history || []), { role: "user", content: input.input }] },
-          { signal: options.signal, recursionLimit: this.maxIterations * 3 + 4 },
-        );
-        const answerMessage = [...(result.messages as BaseMessage[])]
-          .reverse()
-          .find((message) => {
-            const messageType = typeof (message as any)?._getType === "function"
-              ? (message as any)._getType()
-              : (message as any)?.type;
-            return messageType === "ai" || messageType === "assistant";
-          });
-        const output = getMessageText(answerMessage);
-        tracker.complete(output);
-        return { output, react: tracker.summary() };
-      });
+      return await withAgentTrace(traceContext, () => runWithReActTracker(tracker, async () => {
+          const result = await this.agent.invoke(
+            { messages: [...(input.memory_context || []), ...(input.chat_history || []), { role: "user", content: input.input }] },
+            {
+              signal: options.signal,
+              recursionLimit: this.maxIterations * 3 + 4,
+              context: traceContext,
+            },
+          );
+          const answerMessage = [...(result.messages as BaseMessage[])]
+            .reverse()
+            .find((message) => {
+              const messageType = typeof (message as any)?._getType === "function"
+                ? (message as any)._getType()
+                : (message as any)?.type;
+              return messageType === "ai" || messageType === "assistant";
+            });
+          const output = getMessageText(answerMessage);
+          tracker.complete(output);
+          return { output, react: tracker.summary() };
+        }));
     } catch (error) {
       tracker.fail(error);
       throw error;
@@ -429,11 +447,13 @@ class DeclarativeToolAgent {
     input: { input: AgentUserContent; chat_history?: BaseMessage[]; memory_context?: BaseMessage[] },
     options: {
       signal?: AbortSignal;
+      conversationId?: string;
       version?: "v1" | "v2";
       toolCallScope?: { run<T>(callback: () => T): T };
   } = {},
   ) {
     const tracker = createReActTracker();
+    const traceContext = createAgentTraceContext(options.conversationId);
     const events: unknown[] = [];
     const controller = new AbortController();
     const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
@@ -450,44 +470,46 @@ class DeclarativeToolAgent {
     const waitForBufferSpace = () => new Promise<void>((resolve) => {
       notifySpace = resolve;
     });
-    const pump = async () => {
-      try {
-        const stream = this.agent.streamEvents(
-      {
-        messages: [
-          ...(input.memory_context || []),
-          ...(input.chat_history || []),
-          { role: "user", content: input.input },
-        ],
-      },
-      {
-        signal,
-        recursionLimit: this.maxIterations * 3 + 4,
-        version: options.version || "v2",
-      },
-        );
-        for await (const event of stream) {
+    const pump = async () => withActiveAgentTrace(traceContext, async () => {
+        try {
+          const stream = this.agent.streamEvents(
+            {
+              messages: [
+                ...(input.memory_context || []),
+                ...(input.chat_history || []),
+                { role: "user", content: input.input },
+              ],
+            },
+            {
+              signal,
+              recursionLimit: this.maxIterations * 3 + 4,
+              version: options.version || "v2",
+              context: traceContext,
+            },
+          );
+          for await (const event of stream) {
+            while (!closed && events.length >= MAX_STREAM_EVENT_BUFFER) {
+              await waitForBufferSpace();
+            }
+            if (closed) return;
+            events.push(event);
+            notifyEvent();
+          }
           while (!closed && events.length >= MAX_STREAM_EVENT_BUFFER) {
             await waitForBufferSpace();
           }
           if (closed) return;
-          events.push(event);
+          events.push({ event: "on_chain_end", data: { output: { react: tracker.summary() } } });
+          notifyEvent();
+        } catch (error) {
+          tracker.fail(error);
+          failed = error;
+        } finally {
+          completed = true;
           notifyEvent();
         }
-        while (!closed && events.length >= MAX_STREAM_EVENT_BUFFER) {
-          await waitForBufferSpace();
-        }
-        if (closed) return;
-        events.push({ event: "on_chain_end", data: { output: { react: tracker.summary() } } });
-        notifyEvent();
-      } catch (error) {
-        tracker.fail(error);
-        failed = error;
-      } finally {
-        completed = true;
-        notifyEvent();
-      }
-    };
+        if (failed) throw failed;
+      });
     const runPump = () => runWithReActTracker(tracker, pump);
     const running = options.toolCallScope ? options.toolCallScope.run(runPump) : runPump();
     try {
@@ -526,17 +548,29 @@ function createReActTracker(): ReActRunTracker {
 export function createReActPolicyMiddleware() {
   return createMiddleware({
     name: "ReActPolicyMiddleware",
+    contextSchema: AGENT_TRACE_CONTEXT_SCHEMA,
     // 在模型调用前限制步骤，并在停止后只允许模型生成最终答案。
     wrapModelCall: async (request, handler) => {
       const tracker = getActiveReActTracker();
       const finalOnly = tracker?.beginModelCall() || false;
       const requestSignal = (request as unknown as { signal?: AbortSignal }).signal;
-      const response = await runWithModelCapacity(
-        () => handler(finalOnly
-          ? { ...request, tools: [], toolChoice: "none", systemPrompt: `${request.systemPrompt || ""}\n\n工具调用已因安全限制停止。请只基于已有结果给出最终回答，不要请求工具，也不要展示内部推理。` }
-          : request),
-        requestSignal,
+      const traceContext = getAgentTraceContext(request.runtime?.context);
+      const runModelCall = (modelRequest: typeof request) => withAgentSpan(
+        "chat",
+        traceContext,
+        async (span) => {
+          recordModelInput(span, modelRequest);
+          const response = await runWithModelCapacity(
+            () => handler(modelRequest),
+            requestSignal,
+          );
+          recordModelOutput(span, response);
+          return response;
+        },
       );
+      const response = await runModelCall(finalOnly
+        ? { ...request, tools: [], toolChoice: "none", systemPrompt: `${request.systemPrompt || ""}\n\n工具调用已因安全限制停止。请只基于已有结果给出最终回答，不要请求工具，也不要展示内部推理。` }
+        : request);
       // 无工具路径保留协议原文，交由服务层升级为完整工具 Agent。
       if (!request.tools?.length) {
         tracker?.complete(getMessageText(response));
@@ -556,11 +590,10 @@ export function createReActPolicyMiddleware() {
       } catch (error) {
         if (!(error instanceof ModelResponseError)) throw error;
         if (tracker?.beginModelCall()) throw error;
-        const retried = await runWithModelCapacity(
-          // 要求供应商纠正协议，仅允许一次受控重试。
-          () => handler({ ...request, systemPrompt: `${request.systemPrompt || ""}\n上次工具调用格式无效。请使用原生 tool_calls 和已提供的工具名称、JSON 参数；不要输出 XML。` }),
-          requestSignal,
-        );
+        const retried = await runModelCall({
+          ...request,
+          systemPrompt: `${request.systemPrompt || ""}\n上次工具调用格式无效。请使用原生 tool_calls 和已提供的工具名称、JSON 参数；不要输出 XML。`,
+        });
         normalized = convertXmlToolCalls(retried);
       }
       if (!normalized.tool_calls?.length) tracker?.complete(getMessageText(normalized));
@@ -568,31 +601,45 @@ export function createReActPolicyMiddleware() {
     },
     // 在工具调用前后记录执行事实，并把可恢复错误作为 ToolMessage 交还框架。
     wrapToolCall: async (request, handler) => {
-      const tracker = getActiveReActTracker();
-      if (!tracker) return handler(request);
-      const toolName = request.toolCall.name || "tool";
-      const toolCallId = request.toolCall.id || `call_${toolName}`;
-      const attempt = tracker.beforeTool(toolName, request.toolCall.args || {});
-      if (!attempt.allowed) {
-        return new ToolMessage({ content: "工具调用已达到本次请求的安全限制。请基于已有结果回答用户。", tool_call_id: toolCallId, name: toolName });
-      }
-      const startedAt = Date.now();
-      try {
-        const result = await handler(request);
-        const toolResult = ToolMessage.isInstance(result)
-          ? result
-          : new ToolMessage({
-              content: String((result as any)?.content || result),
-              tool_call_id: toolCallId,
-              name: toolName,
-            });
-        const toolError = toolResult.status === "error";
-        tracker.recordTool(toolCallId, toolName, attempt.signature, startedAt, toolResult.content, toolError ? new Error(String(toolResult.content)) : undefined);
-        return toolResult;
-      } catch (error) {
-        tracker.recordTool(toolCallId, toolName, attempt.signature, startedAt, null, error);
-        return new ToolMessage({ content: `Error: ${error instanceof Error ? error.message : "工具执行失败"}`, tool_call_id: toolCallId, name: toolName, status: "error" });
-      }
+      const traceContext = getAgentTraceContext(request.runtime?.context);
+      return withAgentSpan("execute_tool", traceContext, async (span) => {
+        recordToolInput(span, request);
+        const tracker = getActiveReActTracker();
+        if (!tracker) {
+          const result = await handler(request);
+          recordToolOutput(span, result);
+          return result;
+        }
+        const toolName = request.toolCall.name || "tool";
+        const toolCallId = request.toolCall.id || `call_${toolName}`;
+        const attempt = tracker.beforeTool(toolName, request.toolCall.args || {});
+        if (!attempt.allowed) {
+          const result = new ToolMessage({ content: "工具调用已达到本次请求的安全限制。请基于已有结果回答用户。", tool_call_id: toolCallId, name: toolName });
+          recordToolOutput(span, result);
+          return result;
+        }
+        const startedAt = Date.now();
+        try {
+          const result = await handler(request);
+          const toolResult = ToolMessage.isInstance(result)
+            ? result
+            : new ToolMessage({
+                content: String((result as any)?.content || result),
+                tool_call_id: toolCallId,
+                name: toolName,
+              });
+          const toolError = toolResult.status === "error";
+          tracker.recordTool(toolCallId, toolName, attempt.signature, startedAt, toolResult.content, toolError ? new Error(String(toolResult.content)) : undefined);
+          recordToolOutput(span, toolResult);
+          return toolResult;
+        } catch (error) {
+          tracker.recordTool(toolCallId, toolName, attempt.signature, startedAt, null, error);
+          const toolResult = new ToolMessage({ content: `Error: ${error instanceof Error ? error.message : "工具执行失败"}`, tool_call_id: toolCallId, name: toolName, status: "error" });
+          recordAgentTraceError(span, error);
+          recordToolOutput(span, toolResult);
+          return toolResult;
+        }
+      });
     },
   });
 }

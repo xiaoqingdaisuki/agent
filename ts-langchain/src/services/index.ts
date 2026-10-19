@@ -1251,10 +1251,10 @@ export class AgentService {
                     chat_history: history,
                     memory_context: memoryContext,
                   },
-                  { signal: deadline.signal },
+                  { signal: deadline.signal, conversationId },
                 );
                 if (isDirectChatMessage(content) && !extractAgentOutputText(result).trim()) {
-                  return (await createToolAgent()).invoke(input, { signal: deadline.signal });
+                  return (await createToolAgent()).invoke(input, { signal: deadline.signal, conversationId });
                 }
                 return result;
               },
@@ -1482,6 +1482,7 @@ export class AgentService {
               version: "v2",
               tags: ["stream"],
               signal: deadline.signal,
+              conversationId,
               toolCallScope: scope,
             })
           : null;
@@ -1567,10 +1568,7 @@ export class AgentService {
           // 兼容旧版 LangChain 或测试替身，仍保留工具进度通道。
           const stream = await deadline.run<any>(
             scope.run(() =>
-              (agent as any).stream(input, {
-                signal: deadline.signal,
-                toolCallScope: scope,
-              }),
+              (agent as any).stream(input, { signal: deadline.signal, conversationId, toolCallScope: scope }),
             ),
           );
           for await (const chunk of iterateWithAbort(stream as AsyncIterable<any>, deadline.signal)) {
@@ -1605,7 +1603,7 @@ export class AgentService {
           const fallbackAgent = directChat ? await createToolAgent() : agent;
           const fallbackResult = await deadline.run<any>(
             scope.run(() =>
-              (fallbackAgent as any).invoke(input, { signal: deadline.signal }),
+              (fallbackAgent as any).invoke(input, { signal: deadline.signal, conversationId }),
             ),
           );
           fullAnswer = stripXmlToolStream(extractAgentOutputText(fallbackResult));

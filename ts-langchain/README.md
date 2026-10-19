@@ -46,6 +46,8 @@ src/
 ├── services/
 │   ├── index.ts            # 业务编排、Turn、缓存、后台任务与流式回退
 │   └── session-documents.ts # 临时文档解析与上下文格式化
+├── observability/
+│   └── agent-tracing.ts     # Cloudflare Workers Agent tracing spans 与 payload
 ├── api/
 │   ├── routes/
 │   │   ├── v1/             # External API（前端 UI 使用）
@@ -72,6 +74,8 @@ src/
 ```
 
 Worker 部署相关文件为 `src/worker.ts`（入口）、`src/runtime.ts`（请求上下文）、`src/worker-router.ts`（路由兼容）和 `src/worker-readiness.ts`（启动前配置检查）。
+
+Cloudflare Agent tracing 使用 Workers custom spans API：每个 Agent turn 创建 `invoke_agent`，模型调用创建 `chat`，工具执行创建 `execute_tool`，并记录消息、系统指令、工具定义、工具参数和工具结果。
 
 ## 环境要求
 
