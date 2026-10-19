@@ -2,6 +2,8 @@
 
 使用 **TypeScript + LangChain** 和 **Python + LangGraph** 实现同一套 Agent API。TS 版通过 `createAgent` 做声明式编排，Python 版通过 `StateGraph` 显式控制节点与边；两版独立维护工具、Prompt、配置和运行状态。当前实现覆盖轻量直答与完整 ReAct 工具链、用户隔离的会话/画像/长期记忆/知识库、文本/PDF/DOCX 临时附件、图片生成、可恢复 Turn、流式 SSE、限流和分层超时。
 
+在线体验: [agent](https://vibe-xiaoqingdaisuki.vercel.app/lab/agent)
+
 ## 核心对比
 
 | 维度 | TS: LangChain | Python: LangGraph |
