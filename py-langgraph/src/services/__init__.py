@@ -25,8 +25,8 @@ from src.agents.response_handler import ModelResponseError
 
 logger = logging.getLogger(__name__)
 
-STREAM_FALLBACK_CHUNK_SIZE = 8
-STREAM_FALLBACK_INTERVAL_SECONDS = 0.06
+STREAM_FALLBACK_CHUNK_SIZE = 50
+STREAM_FALLBACK_INTERVAL_SECONDS = 0.03
 _background_tasks: set[asyncio.Task] = set()
 _background_chains: dict[str, asyncio.Task] = {}
 _background_semaphore: asyncio.Semaphore | None = None
