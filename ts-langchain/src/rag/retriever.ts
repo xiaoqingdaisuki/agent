@@ -1,8 +1,8 @@
 /**
  * RAG 检索器 — Cloudflare Service（通过 Memory Gateway）
  *
- * 封装文档向量搜索，对外提供统一接口。
- * 所有向量操作通过 Cloudflare Service Gateway 进行。
+ * 封装文档向量搜索，对外提供统一接口
+ * 所有向量操作通过 Cloudflare Service Gateway 进行
  */
 
 import { VectorStore, SearchResult } from "./vector-store.js";
@@ -31,10 +31,7 @@ export class Retriever {
     this.userId = userId;
   }
 
-  /**
-   * 检索相关文档
-   */
-  // 获取 retrieve 对应的数据
+  // 检索相关文档
   async retrieve(
     query: string,
     topK: number = this.topK,
@@ -42,14 +39,13 @@ export class Retriever {
     return this.vectorStore.search(this.userId, query, topK);
   }
 
-  /**
-   * 批量检索
-   */
-  // 获取 retrieveBatch 对应的数据
+  // 批量检索
   async retrieveBatch(
     queries: string[],
   ): Promise<Array<SearchResult & { query: string }>> {
+    // 并行执行每个查询的文档检索
     const results = await Promise.all(queries.map((q) => this.retrieve(q)));
+    // 为合并后的检索片段附加查询信息
     return results.flat().map((r, i) => ({
       ...r,
       query: queries[Math.floor(i / this.topK)],

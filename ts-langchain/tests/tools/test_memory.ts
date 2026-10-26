@@ -1,3 +1,5 @@
+/** 验证 tools/test_memory 对应模块的行为与边界条件 */
+
 import { describe, it, expect } from "vitest";
 import {
   memorySessionSearchTool,

@@ -1,8 +1,8 @@
 /**
  * IndexJobService — 索引补偿任务
  *
- * 处理 D1 ↔ Vectorize 之间非原子写入的补偿。
- * 支持两种实体类型：memory（长期记忆）和 document_chunk（文档块）。
+ * 处理 D1 ↔ Vectorize 之间非原子写入的补偿
+ * 支持两种实体类型：memory（长期记忆）和 document_chunk（文档块）
  */
 
 import { getConfig, DEFAULTS, RETRY_BACKOFF_SECONDS } from "../config/index.js";
@@ -167,6 +167,7 @@ async function processDocumentChunkJob(db: D1Database, index: VectorizeIndex, ai
       .bind(documentId)
       .all<any>();
 
+    // 提取待处理片段的向量索引标识
     const vectorizeIds = (chunks as any[]).map((c) => c.vectorize_id).filter(Boolean);
     if (vectorizeIds.length > 0) {
       await index.deleteByIds(vectorizeIds);

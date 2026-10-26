@@ -1,18 +1,17 @@
-"""
-web.search — Tavily-backed real-time search with retry, circuit breaking and cache fallback.
+"""web.search — 基于 Tavily 的实时检索，支持重试、熔断及缓存回退
 
-Core capabilities:
-1. Multi-level cache (fresh cache + stale fallback) avoids duplicate requests
-2. In-flight dedup prevents the same query from being sent concurrently
-3. Circuit breaker auto-degrades after consecutive failures, protecting upstream
-4. Auto-retry with backoff for robustness under network flakiness
-5. Returns structured results (title, URL, snippet, published_at) for Agent consumption
+核心能力：
+1. 使用新鲜缓存与过期缓存回退，避免重复请求
+2. 合并同一查询的并发请求
+3. 连续失败后自动熔断以保护上游服务
+4. 在网络不稳定时按退避间隔自动重试
+5. 为 Agent 返回标题、URL、摘要及发布时间等结构化结果
 
-Design notes:
-- Functional layering: settings / private helpers / public API
-- Cache key uses lowercased normalized query for consistent hits
-- Stale cache returns degraded results instead of hard failure when upstream is down
-- reset_search_state_for_tests exposes internal state for unit test isolation
+设计说明：
+- 按配置、私有辅助函数和公共接口组织功能
+- 使用规范化的小写查询作为缓存键
+- 上游不可用时通过过期缓存返回降级结果
+- reset_search_state_for_tests 暴露状态重置入口以隔离单元测试
 """
 
 from __future__ import annotations
@@ -43,6 +42,7 @@ class SearchResultItem:
     provider: str = "tavily"
     rank: int = 0
     published_at: str = ""
+    # 创建搜索结果时记录带 UTC 时区的检索时间
     retrieved_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
@@ -391,5 +391,5 @@ class SearchInput(BaseModel):
 @tool(args_schema=SearchInput)
 # 执行 web search 对应的业务逻辑
 def web_search(query: str) -> str:
-    """使用 Tavily 搜索实时互联网信息并返回来源链接。"""
+    """使用 Tavily 搜索实时互联网信息并返回来源链接"""
     return search_results_to_text(multi_source_search(query), query)

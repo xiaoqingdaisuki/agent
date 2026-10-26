@@ -1,3 +1,5 @@
+/** 验证 services/test_stream_fallback 对应模块的行为与边界条件 */
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createToolAgentMock, createDirectChatAgentMock, getFastPathAnswerMock } = vi.hoisted(() => ({
@@ -60,7 +62,7 @@ describe("AgentService empty streams", () => {
     });
     const consume = async () => {
       for await (const _event of AgentService.chatStream(conversation.id, "cancel question", undefined, controller.signal)) {
-        // 只等待流程取消，无需消费业务文本。
+        // 只等待流程取消，无需消费业务文本
       }
     };
     await expect(consume()).rejects.toBe(disconnected);

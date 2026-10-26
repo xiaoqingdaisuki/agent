@@ -1,8 +1,8 @@
 /**
  * 应用配置 — 从环境变量读取并校验
  *
- * 使用 zod 做运行时校验，确保必填字段和类型正确。
- * 所有 Agent 服务和 API 路由从此模块读取配置。
+ * 使用 zod 做运行时校验，确保必填字段和类型正确
+ * 所有 Agent 服务和 API 路由从此模块读取配置
  */
 
 import dotenv from "dotenv";
@@ -18,7 +18,7 @@ function parseBooleanEnv(value: unknown): unknown {
   return value;
 }
 
-// 限制模型总预算，为代理和路由的终态持久化预留时间。
+// 限制模型总预算，为代理和路由的终态持久化预留时间
 function capAgentDeadline(value: number): number {
   return Math.min(value, 240_000);
 }
@@ -111,10 +111,12 @@ const envSchema = z.object({
   CORS_ORIGIN: z
     .string()
     .default("")
+    // 将逗号分隔的跨域配置解析为来源列表
     .transform((val) =>
       val
         ? val
             .split(",")
+            // 移除各个跨域来源两端的空白字符
             .map((s) => s.trim())
             .filter(Boolean)
         : [],
@@ -128,6 +130,7 @@ const envSchema = z.object({
     .string()
     .default("hybrid")
     .refine(
+      // 校验检索模式仅允许混合检索或 SQL 检索
       (v) => v === "hybrid" || v === "sql",
       { message: "MEMORY_SEARCH_MODE must be 'hybrid' or 'sql'" },
     ),

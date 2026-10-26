@@ -1,3 +1,5 @@
+# 构建并运行 Python Agent 的容器镜像
+
 FROM python:3.11-slim AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1

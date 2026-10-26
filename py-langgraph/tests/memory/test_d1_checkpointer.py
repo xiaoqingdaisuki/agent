@@ -1,4 +1,4 @@
-"""D1 checkpointer compatibility tests."""
+"""验证 D1 检查点存储的兼容性"""
 
 import pytest
 import httpx

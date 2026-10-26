@@ -195,6 +195,7 @@ export function registerDocumentRoutes(app: any) {
             400,
           );
         }
+        // 提取文档片段正文用于嵌入计算
         fullText = existingChunks.map((ch) => ch.content).join("\n\n");
       }
 
@@ -204,6 +205,7 @@ export function registerDocumentRoutes(app: any) {
       // 重新切分 + 嵌入
       const textChunks = splitText(fullText);
 
+      // 并行计算片段内容哈希
       const hashPromises = textChunks.map((chunk) => hashContent(chunk));
       const hashes = await Promise.all(hashPromises);
 
@@ -213,6 +215,7 @@ export function registerDocumentRoutes(app: any) {
         embeddings = await getEmbeddingBatch(c.env.AI, textChunks);
       } catch (err) {
         console.error("Reindex embedding failed:", err);
+        // 在嵌入服务降级时生成固定维度的零向量
         embeddings = textChunks.map(() => new Array(1024).fill(0));
         degraded = true;
       }
@@ -236,6 +239,7 @@ export function registerDocumentRoutes(app: any) {
 
       // 写入 Vectorize
       const vectorizeIds = newChunks.map((ch) => `doc_${ch.id}`);
+      // 为文档片段构建向量索引元数据
       const vectorizeMetadata = newChunks.map((ch) => ({
         entity_type: "document_chunk",
         document_id: ch.document_id,
@@ -247,6 +251,7 @@ export function registerDocumentRoutes(app: any) {
       if (!degraded) {
         try {
           await c.env.MEMORY_INDEX.upsert(
+            // 按索引合并片段标识、嵌入向量和元数据
             vectorizeIds.map((id, i) => ({
               id,
               values: embeddings[i],

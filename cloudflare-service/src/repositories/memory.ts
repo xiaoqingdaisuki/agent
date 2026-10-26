@@ -50,6 +50,7 @@ export function normalizeContent(content: string): string {
 export async function computeContentHash(content: string): Promise<string> {
   const data = new TextEncoder().encode(content);
   const hashBuf = await crypto.subtle.digest("SHA-256", data);
+  // 将摘要字节编码为补零的十六进制字符串
   return Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -205,7 +206,9 @@ export async function searchMemories(
     const maxAge = 30 * 24 * 60 * 60 * 1000; // 30 天
 
     const scored = memories
+      // 过滤语义得分低于阈值的记忆
       .filter((m) => (scoreMap[m.id] ?? 0) >= minScore)
+      // 综合语义相似度、更新时间和重要性计算记忆得分
       .map((m) => {
         const semanticScore = scoreMap[m.id] ?? 0;
         const updatedTime = new Date(m.updated_at).getTime();
@@ -229,6 +232,7 @@ export async function searchMemories(
         };
       });
 
+    // 按综合得分从高到低排列记忆
     scored.sort((a, b) => b.final_score - a.final_score);
     return { results: scored.slice(0, limit), degraded: false };
   } catch (err) {
@@ -254,6 +258,7 @@ async function degradeSearch(db: D1Database, userId: string, category?: string, 
   const memories = (results as Memory[]) ?? [];
 
   return {
+    // 将降级查询中的记忆转换为检索结果
     results: memories.map((m) => ({
       id: m.id,
       content: m.content,
@@ -390,6 +395,7 @@ export async function clearUserMemories(
   userId: string,
 ): Promise<number> {
   const memories = await listMemories(db, userId, { limit: 100 });
+  // 收集待删除记忆的标识
   const memoryIds = memories.map((memory) => memory.id);
   if (memoryIds.length === 0) return 0;
 
@@ -403,6 +409,7 @@ export async function clearUserMemories(
     await index.deleteByIds(memoryIds);
   } catch (error) {
     await Promise.all(
+      // 为向量删除失败的记忆创建重试任务
       memoryIds.map((memoryId) => createIndexJob(db, memoryId, "delete", "memory", error)),
     );
   }

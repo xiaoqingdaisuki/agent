@@ -60,5 +60,6 @@ export const PUBLIC_PATHS = ["/v1/internal/health"];
 
 // 判断是否为公开路径
 export function isPublicPath(path: string): boolean {
+  // 匹配公开路径及其子路径以跳过内部认证
   return PUBLIC_PATHS.some((p) => path === p || path.startsWith(p));
 }

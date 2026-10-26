@@ -1,3 +1,5 @@
+/** 验证 services/test_verified_regressions 对应模块的行为与边界条件 */
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { config } from "../../src/config/index.js";
 import { AgentService, ConversationService, KnowledgeService, TurnService, flushBackgroundTasks } from "../../src/services/index.js";

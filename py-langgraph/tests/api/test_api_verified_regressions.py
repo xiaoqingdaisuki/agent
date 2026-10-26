@@ -1,3 +1,5 @@
+"""验证 test_api_verified_regressions 对应模块的行为与边界条件"""
+
 from unittest.mock import AsyncMock
 
 import pytest

@@ -1,3 +1,5 @@
+"""验证 test_xml_stream 对应模块的行为与边界条件"""
+
 from src.services import drain_xml_tool_stream
 
 

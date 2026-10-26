@@ -1,8 +1,8 @@
 /**
  * memory.user — 用户长期记忆管理
  *
- * 提供用户记忆的搜索和保存能力。
- * 统一通过 Repository 层访问当前配置的存储后端。
+ * 提供用户记忆的搜索和保存能力
+ * 统一通过 Repository 层访问当前配置的存储后端
  */
 
 import { DynamicStructuredTool } from "@langchain/core/tools";
@@ -13,7 +13,7 @@ import type { MemoryData } from "../repositories/types.js";
 import { getRepositories } from "../repositories/index.js";
 import { getToolCallContext } from "./runtime/executor.js";
 
-// ============ Tool Descriptors ==========
+// ============ 工具描述符 ==========
 
 export const memoryUserSearchInputSchema = z.object({
   user_id: z.string().describe("用户 ID"),
@@ -106,7 +106,7 @@ export const userMemoryDeleteDescriptor: ToolDescriptor = {
   input_schema: memoryUserDeleteInputSchema,
 };
 
-// ============ LangChain Tool: memory.user.search ==========
+// ============ LangChain 工具封装：memory.user.search ==========
 
 export const memoryUserSearchTool: DynamicStructuredTool =
   new DynamicStructuredTool({
@@ -114,6 +114,7 @@ export const memoryUserSearchTool: DynamicStructuredTool =
     description:
       "搜索当前用户的长期记忆。当需要了解用户的偏好、习惯、个人信息等持久化记忆时使用。",
     schema: memoryUserSearchInputSchema,
+    // 按类别或查询文本读取用户长期记忆
     func: async ({ user_id, query, category, max_results }) => {
       const repos = getRepositories();
 
@@ -124,6 +125,7 @@ export const memoryUserSearchTool: DynamicStructuredTool =
             category,
             limit: max_results || 10,
           });
+          // 提取记忆标识、内容、类别和重要性
           const results = items.map((m: MemoryData) => ({
             id: m.id,
             content: m.content,
@@ -179,7 +181,7 @@ export const memoryUserSearchTool: DynamicStructuredTool =
     },
   });
 
-// ============ LangChain Tool: memory.user.save ==========
+// ============ LangChain 工具封装：memory.user.save ==========
 
 export const memoryUserSaveTool: DynamicStructuredTool =
   new DynamicStructuredTool({
@@ -187,6 +189,7 @@ export const memoryUserSaveTool: DynamicStructuredTool =
     description:
       "保存一条关于用户的重要信息到长期记忆。只有用户明确表达或有长期价值的信息才应该保存。",
     schema: memoryUserSaveInputSchema,
+    // 通过网关去重并保存用户长期记忆
     func: async ({ user_id, content, category, importance }) => {
       const repos = getRepositories();
 
@@ -208,7 +211,7 @@ export const memoryUserSaveTool: DynamicStructuredTool =
     },
   });
 
-// 将长期记忆转换为面向对话的最小公开字段。
+// 将长期记忆转换为面向对话的最小公开字段
 function toPublicMemory(memory: MemoryData): { memory_id: string; content: string; category: string } {
   return {
     memory_id: memory.id,
@@ -217,11 +220,12 @@ function toPublicMemory(memory: MemoryData): { memory_id: string; content: strin
   };
 }
 
-// 列出当前可信用户的长期记忆。
+// 列出当前可信用户的长期记忆
 export const memoryUserListTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "memory_user_list",
   description: "查看当前用户保存了哪些长期记忆。",
   schema: memoryUserListInputSchema,
+  // 按可信用户身份列出指定类别的长期记忆
   func: async ({ category, max_results }) => {
     const userId = getToolCallContext()?.user_id;
     if (!userId) return JSON.stringify({ memories: [], error: "缺少可信用户上下文" });
@@ -237,11 +241,12 @@ export const memoryUserListTool: DynamicStructuredTool = new DynamicStructuredTo
   },
 });
 
-// 按精确 ID 删除当前可信用户的长期记忆。
+// 按精确 ID 删除当前可信用户的长期记忆
 export const memoryUserDeleteTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "memory_user_delete",
   description: "按精确 memory_id 删除当前用户的长期记忆；不能根据模糊语义猜测要删除的记忆。",
   schema: memoryUserDeleteInputSchema,
+  // 按可信用户身份逐条删除指定长期记忆
   func: async ({ memory_ids }) => {
     const userId = getToolCallContext()?.user_id;
     if (!userId) return JSON.stringify({ deleted: [], error: "缺少可信用户上下文" });

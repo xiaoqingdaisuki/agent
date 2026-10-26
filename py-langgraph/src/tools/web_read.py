@@ -38,8 +38,8 @@ _BLOCKED_HOSTS = {
     "127.0.0.1",
     "0.0.0.0",
     "::1",
-    "169.254.169.254",  # AWS metadata
-    "metadata.google.internal",  # GCP metadata
+    "169.254.169.254",  # AWS 元数据地址
+    "metadata.google.internal",  # GCP 元数据地址
 }
 
 
@@ -124,7 +124,7 @@ def _is_text_content(content_type: str) -> bool:
     return ct in _TEXT_CONTENT_TYPES or ct.startswith("text/")
 
 
-# ============ Tool Descriptor ============
+# ============ 工具描述符 ============
 
 _DESCRIPTOR = ToolDescriptor(
     name="web.read",
@@ -142,7 +142,7 @@ _DESCRIPTOR = ToolDescriptor(
 )
 
 
-# ============ LangChain Tool ============
+# ============ LangChain 工具封装 ============
 
 
 class WebReadInput(BaseModel):
@@ -153,7 +153,7 @@ class WebReadInput(BaseModel):
 @tool(args_schema=WebReadInput)
 # 执行 web read 对应的业务逻辑
 def web_read(url: str) -> str:
-    """读取指定 URL 的网页正文内容。通常在 web_search 之后使用来获取详细信息。"""
+    """读取指定 URL 的网页正文内容。通常在 web_search 之后使用来获取详细信息"""
     # 1. URL 安全检查
     safe, reason = _is_safe_url(url)
     if not safe:

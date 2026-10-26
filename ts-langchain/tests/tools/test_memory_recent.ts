@@ -1,3 +1,5 @@
+/** 验证 tools/test_memory_recent 对应模块的行为与边界条件 */
+
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/repositories/index.js", async (importOriginal) => {

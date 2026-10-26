@@ -9,7 +9,7 @@
  * - tool-context.ts:    工具调用上下文 schema（替代 context.schema.json）
  *
  * 所有路由 handlers 使用这些 schemas 做运行时校验，
- * OpenAPI spec 从这些 schemas 自动生成。
+ * OpenAPI spec 从这些 schemas 自动生成
  */
 
 export * from "./error-codes.js";

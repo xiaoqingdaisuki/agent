@@ -32,6 +32,7 @@ export async function getEmbeddingBatch(ai: Ai, texts: string[], concurrency = 3
   }
 
   for (const batch of batches) {
+    // 并行获取每段文本的嵌入向量
     const batchResults = await Promise.all(batch.map((t) => getEmbedding(ai, t)));
     results.push(...batchResults);
   }

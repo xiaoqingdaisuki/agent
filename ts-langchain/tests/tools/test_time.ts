@@ -1,3 +1,5 @@
+/** 验证 tools/test_time 对应模块的行为与边界条件 */
+
 import { describe, expect, it } from "vitest";
 import { convertTimezoneTool } from "../../src/tools/time.js";
 

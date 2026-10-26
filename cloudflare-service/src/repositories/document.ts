@@ -1,9 +1,9 @@
 /**
  * DocumentRepository — 文档仓储
  *
- * 负责文档和文档块的 D1 持久化，以及通过 Vectorize 的语义搜索。
+ * 负责文档和文档块的 D1 持久化，以及通过 Vectorize 的语义搜索
  * 与 MemoryRepository 共用 MEMORY_INDEX Vectorize 索引，通过 metadata 中的
- * `entity_type` 字段区分 memory 和 document_chunk。
+ * `entity_type` 字段区分 memory 和 document_chunk
  */
 
 import { getEmbedding, getEmbeddingBatch } from "../services/embedding.js";
@@ -54,10 +54,7 @@ export interface DocumentSearchResult {
 
 // ============ 工具函数 ==========
 
-/**
- * 简单文本切分：按段落分隔符拆分
- */
-// 执行 splitText 对应的业务逻辑
+// 简单文本切分：按段落分隔符拆分
 export function splitText(text: string, chunkSize = 1000, chunkOverlap = 200): string[] {
   const separators = ["\n\n", "\n", "。", ". ", " "];
   const chunks: string[] = [];
@@ -86,28 +83,24 @@ export function splitText(text: string, chunkSize = 1000, chunkOverlap = 200): s
     remaining = remaining.slice(splitPoint - chunkOverlap);
   }
 
+  // 过滤切分后不含内容的文档片段
   return chunks.filter((c) => c.length > 0);
 }
 
-/**
- * 计算文本的 SHA-256 哈希
- */
-// 校验并判断 hashContent 对应的状态
+// 计算文本的 SHA-256 哈希
 export async function hashContent(content: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(content.toLowerCase().replace(/\s+/g, " ").trim());
   const hash = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(hash))
+    // 将摘要字节编码为补零的十六进制字符串
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
 
 // ============ 文档 CRUD ==========
 
-/**
- * 创建文档及其块
- */
-// 创建或注册 createDocument 所需的数据
+// 创建文档及其块
 export async function createDocument(
   db: D1Database,
   index: VectorizeIndex,
@@ -139,6 +132,7 @@ export async function createDocument(
     embeddings = await getEmbeddingBatch(ai, textChunks);
   } catch (err) {
     console.error("Embedding generation failed:", err);
+    // 为降级索引生成固定维度的零向量
     embeddings = textChunks.map(() => new Array(1024).fill(0));
     degraded = true;
   }
@@ -225,6 +219,7 @@ export async function createDocument(
   // 写入 Vectorize
   if (!degraded) {
     try {
+      // 按索引合并向量标识、嵌入值和元数据
       const vectors: VectorizeVector[] = vectorizeIds.map((id, i) => ({
         id,
         values: vectorizeVectors[i],
@@ -262,10 +257,7 @@ export async function createDocument(
   return { document, degraded };
 }
 
-/**
- * 获取文档详情
- */
-// 获取 getDocument 对应的数据
+// 获取文档详情
 export async function getDocument(
   db: D1Database,
   documentId: string,
@@ -278,10 +270,7 @@ export async function getDocument(
   return result ?? null;
 }
 
-/**
- * 列出用户文档
- */
-// 获取 listDocuments 对应的数据
+// 列出用户文档
 export async function listDocuments(
   db: D1Database,
   userId: string,
@@ -313,10 +302,7 @@ export async function listDocuments(
   };
 }
 
-/**
- * 删除文档（软删除 + 清理 Vectorize）
- */
-// 删除或清理 deleteDocument 对应的数据
+// 删除文档（软删除 + 清理 Vectorize）
 export async function deleteDocument(
   db: D1Database,
   index: VectorizeIndex,
@@ -342,7 +328,9 @@ export async function deleteDocument(
     .all<Chunk>();
 
   const idsToDelete = (chunks as Chunk[])
+    // 筛选已分配向量标识的文档片段
     .filter((c) => c.vectorize_id)
+    // 提取待删除片段的向量标识
     .map((c) => c.vectorize_id!);
 
   // 删除 Vectorize 中的向量
@@ -370,10 +358,7 @@ export async function deleteDocument(
 
 // ============ 块操作 ==========
 
-/**
- * 批量创建块
- */
-// 创建或注册 createChunksBatch 所需的数据
+// 批量创建块
 export async function createChunksBatch(
   db: D1Database,
   chunks: Array<{
@@ -409,10 +394,7 @@ export async function createChunksBatch(
   }
 }
 
-/**
- * 获取文档的所有块
- */
-// 获取 getChunksByDocument 对应的数据
+// 获取文档的所有块
 export async function getChunksByDocument(
   db: D1Database,
   documentId: string,
@@ -425,10 +407,7 @@ export async function getChunksByDocument(
   return (results as Chunk[]) ?? [];
 }
 
-/**
- * 删除文档的所有块
- */
-// 删除或清理 deleteChunksByDocument 对应的数据
+// 删除文档的所有块
 export async function deleteChunksByDocument(
   db: D1Database,
   documentId: string,
@@ -438,10 +417,7 @@ export async function deleteChunksByDocument(
 
 // ============ 文档搜索 ==========
 
-/**
- * 语义搜索文档块
- */
-// 查询 searchDocuments 对应的结果
+// 语义搜索文档块
 export async function searchDocuments(
   db: D1Database,
   index: VectorizeIndex,
@@ -492,6 +468,7 @@ export async function searchDocuments(
     // D1 回表
     const placeholders = matchIds.map(() => "?").join(",");
     const documentFilter = documentIds.length
+      // 为每个片段标识生成 SQL 参数占位符
       ? ` AND document_id IN (${documentIds.map(() => "?").join(",")})`
       : "";
     const { results } = await db
@@ -508,18 +485,22 @@ export async function searchDocuments(
 
     // 获取关联的文档名称
     const docIds = [...new Set(chunks.map((c) => c.document_id))];
+    // 为每个文档标识生成 SQL 参数占位符
     const docPlaceholders = docIds.map(() => "?").join(",");
     const { results: docs } = await db
       .prepare(`SELECT id, name, filename FROM documents WHERE id IN (${docPlaceholders}) AND user_id = ? AND deleted_at IS NULL`)
       .bind(...docIds, userId)
       .all<Document>();
+    // 按文档标识建立详情映射
     const docMap = new Map((docs as Document[] ?? []).map((d) => [d.id, d]));
 
     // 过滤低分 + 构建结果
     const scored = chunks
       .filter(
+        // 过滤所属文档不可见或相似度不足的片段
         (c) => docMap.has(c.document_id) && (scoreMap[c.id] ?? 0) >= minScore,
       )
+      // 合并片段、文档详情与语义检索得分
       .map((c) => {
         const doc = docMap.get(c.document_id);
         return {
@@ -537,6 +518,7 @@ export async function searchDocuments(
         };
       });
 
+    // 按相关度从高到低排列片段
     scored.sort((a, b) => b.score - a.score);
     return { results: scored.slice(0, limit), degraded: false };
   } catch (err) {
@@ -545,10 +527,7 @@ export async function searchDocuments(
   }
 }
 
-/**
- * 降级搜索：纯 SQL 全文匹配
- */
-// 执行 degradeSearch 对应的业务逻辑
+// 降级搜索：纯 SQL 全文匹配
 async function degradeSearch(
   db: D1Database,
   userId: string,
@@ -558,6 +537,7 @@ async function degradeSearch(
 ): Promise<{ results: DocumentSearchResult[]; degraded: boolean }> {
   try {
     const documentFilter = documentIds.length
+      // 为查询词生成 SQL 参数占位符
       ? ` AND d.id IN (${documentIds.map(() => "?").join(",")})`
       : "";
     const { results } = await db
@@ -574,6 +554,7 @@ async function degradeSearch(
 
     const rows = (results ?? []) as any[];
     return {
+      // 将 SQL 检索片段转换为无语义得分的结果
       results: rows.map((r) => ({
         id: r.id,
         document_id: r.document_id,

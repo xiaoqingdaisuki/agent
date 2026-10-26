@@ -1,3 +1,5 @@
+"""验证 test_vector_store_scope 对应模块的行为与边界条件"""
+
 import pytest
 
 from src.rag.vector_store import VectorStore

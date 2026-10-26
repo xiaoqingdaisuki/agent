@@ -1,4 +1,4 @@
-"""Docker 可观测性：输出带请求上下文且已脱敏的错误日志。"""
+"""Docker 可观测性：输出带请求上下文且已脱敏的错误日志"""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def sanitize_log_value(value: Any, field_name: str = "") -> Any:
     return value
 
 
-# 从已缓存的请求体中仅提取字段元数据，避免记录用户原文。
+# 从已缓存的请求体中仅提取字段元数据，避免记录用户原文
 def get_logged_request_body(request: Request) -> Any:
     raw_body = getattr(request, "_body", b"")
     if not raw_body:

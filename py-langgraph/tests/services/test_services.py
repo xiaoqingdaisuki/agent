@@ -1,4 +1,4 @@
-"""Tests for service layer"""
+"""验证服务层的业务流程与异常处理"""
 
 import asyncio
 import io
@@ -92,21 +92,21 @@ def test_document_parser_extracts_docx_paragraphs():
 
 class TestBusinessError:
     def test_create_error(self):
-        """Should create error with code, message, and status"""
+        """验证创建包含错误码、消息和状态的异常"""
         err = BusinessError(BusinessErrorCode.NOT_FOUND, "Not found", 404)
         assert err.code == BusinessErrorCode.NOT_FOUND
         assert err.message == "Not found"
         assert err.status_code == 404
 
     def test_to_dict(self):
-        """Should serialize to dict"""
+        """验证序列化为字典"""
         err = BusinessError(BusinessErrorCode.INVALID_REQUEST, "Bad request", 400)
         result = err.to_dict()
         assert result["error"]["code"] == BusinessErrorCode.INVALID_REQUEST.value
         assert result["error"]["message"] == "Bad request"
 
     def test_inherits_from_exception(self):
-        """Should be catchable as Exception"""
+        """验证异常可通过 Exception 捕获"""
         with pytest.raises(BusinessError):
             raise BusinessError(BusinessErrorCode.INTERNAL_ERROR, "Test error")
 
@@ -126,7 +126,7 @@ class TestAgentOutputExtraction:
 
 class TestConversationService:
     def test_create_conversation(self):
-        """Should create a conversation with default mode"""
+        """验证以默认模式创建会话"""
         conv = ConversationService.create("Test Chat")
         assert conv.title == "Test Chat"
         assert conv.mode == "chat"
@@ -134,24 +134,24 @@ class TestConversationService:
         assert conv.created_at is not None
 
     def test_create_conversation_with_mode(self):
-        """Should create a conversation with custom mode"""
+        """验证以指定模式创建会话"""
         conv = ConversationService.create("Knowledge Chat", mode="knowledge")
         assert conv.mode == "knowledge"
 
     def test_get_conversation(self):
-        """Should retrieve a created conversation"""
+        """验证读取已创建会话"""
         conv = ConversationService.create("Test")
         retrieved = ConversationService.get(conv.id)
         assert retrieved is not None
         assert retrieved.title == "Test"
 
     def test_get_nonexistent_conversation(self):
-        """Should return None for non-existent conversation"""
+        """验证读取不存在的会话时返回 None"""
         result = ConversationService.get("nonexistent_id")
         assert result is None
 
     def test_list_conversations(self):
-        """Should list all conversations"""
+        """验证列出全部会话"""
         ConversationService.create("Conv 1")
         import time; time.sleep(0.01)
         ConversationService.create("Conv 2")
@@ -159,7 +159,7 @@ class TestConversationService:
         assert len(convs) >= 2
 
     def test_list_isolation_and_ensure_ownership(self):
-        """Only expose the requested user's conversations and reject ID takeover."""
+        """验证仅暴露指定用户的会话并拒绝会话标识冒用"""
         owned = ConversationService.create("Private", user_id="owner-a")
         other = ConversationService.create("Other", user_id="owner-b")
 
@@ -172,19 +172,19 @@ class TestConversationService:
         assert error.value.status_code == 403
 
     def test_delete_conversation(self):
-        """Should delete a conversation"""
+        """验证删除会话"""
         conv = ConversationService.create("To Delete")
         result = ConversationService.delete(conv.id)
         assert result is True
         assert ConversationService.get(conv.id) is None
 
     def test_delete_nonexistent_conversation(self):
-        """Should return False when deleting non-existent conversation"""
+        """验证删除不存在的会话时返回 False"""
         result = ConversationService.delete("nonexistent_id")
         assert result is False
 
     def test_append_user_message(self):
-        """Should append a user message to conversation"""
+        """验证向会话追加用户消息"""
         conv = ConversationService.create("Test")
         initial_count = conv.message_count
         msg = ConversationService.append_user_message(conv.id, "Hello")
@@ -193,7 +193,7 @@ class TestConversationService:
         assert conv.message_count == initial_count + 1
 
     def test_append_message_to_nonexistent_conversation(self):
-        """Should raise error when appending to non-existent conversation"""
+        """验证向不存在的会话追加消息时抛出错误"""
         with pytest.raises(BusinessError) as exc_info:
             ConversationService.append_user_message("nonexistent_id", "Hello")
         assert exc_info.value.code == BusinessErrorCode.NOT_FOUND
@@ -302,7 +302,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_chat_passes_persisted_history_as_supplemental_context(self, monkeypatch):
-        """跨轮请求必须把已持久化的会话记录传给 Agent。"""
+        """跨轮请求必须把已持久化的会话记录传给 Agent"""
         from langchain_core.messages import AIMessage
         from src.agents import graph_agents
 
@@ -352,7 +352,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_streamed_knowledge_conversation_uses_rag(self, monkeypatch):
-        """Knowledge streaming must use the same RAG path as non-streaming chat."""
+        """验证流式知识问答与非流式问答使用同一 RAG 路径"""
         from langchain_core.messages import AIMessage
         from src.agents import graph_agents
         from src.rag import rag_agent
@@ -454,7 +454,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_tool_only_stream_returns_retriable_error(self, monkeypatch):
-        """A tool-only response must fail explicitly so the user can retry."""
+        """验证仅包含工具调用的响应明确失败以便用户重试"""
         from src.agents import graph_agents
         from langchain_core.messages import AIMessage
 
@@ -491,7 +491,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_stream_ignores_tool_message_as_final_answer(self, monkeypatch):
-        """Tool node output must not be mistaken for the assistant's final answer."""
+        """验证工具节点输出不会被误认为助手最终回答"""
         from langchain_core.messages import ToolMessage
         from src.agents import graph_agents
 
@@ -527,7 +527,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_stream_extracts_final_ai_answer_after_tool_call(self, monkeypatch):
-        """A final AI message after a tool call must be exposed to the client."""
+        """验证工具调用后的最终 AI 消息可以送达客户端"""
         from src.agents import graph_agents
         from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
@@ -563,7 +563,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_stream_does_not_prepend_nested_history_snapshot(self, monkeypatch):
-        """Nested chain snapshots must never become part of the current answer."""
+        """验证嵌套链快照不会混入当前回答"""
         from langchain_core.messages import AIMessage, HumanMessage
         from src.agents import graph_agents
         from src.services import flush_background_tasks
@@ -619,7 +619,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_non_direct_model_stream_emits_deltas_before_completion(self, monkeypatch):
-        """Non-direct model text must reach the client before the model end event."""
+        """验证非直答模型文本在模型结束事件之前送达客户端"""
         from langchain_core.messages import AIMessage
         from src.agents import graph_agents
 
@@ -656,7 +656,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_stream_uses_root_tool_answer_after_nested_history(self, monkeypatch):
-        """A tool answer must come from the root graph result, not an inner history snapshot."""
+        """验证工具回答来自根图结果并避免使用内部历史快照"""
         from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
         from src.agents import graph_agents
 
@@ -753,7 +753,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_stream_replaces_whitespace_with_final_graph_answer(self, monkeypatch):
-        """Whitespace model chunks must not hide the graph's final assistant answer."""
+        """验证空白模型片段不会覆盖图的最终助手回答"""
         from langchain_core.messages import AIMessage, ToolMessage
         from src.agents import graph_agents
 
@@ -792,7 +792,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_stream_falls_back_to_invoke_for_whitespace_gateway(self, monkeypatch):
-        """A gateway with broken tool streaming must use its working invoke path."""
+        """验证工具流不可用的网关回退到可用的 invoke 路径"""
         from langchain_core.messages import AIMessage
         from src.agents import graph_agents
 
@@ -836,7 +836,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_stream_treats_whitespace_around_xml_as_empty(self, monkeypatch):
-        """Whitespace left after filtering an XML tool call must not count as an answer."""
+        """验证过滤 XML 工具调用后剩余的空白不会计为回答"""
         from langchain_core.messages import AIMessage
         from src.agents import graph_agents
 
@@ -867,13 +867,13 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_stream_returns_structured_timeout_when_tool_request_times_out(self, monkeypatch):
-        """A timeout before the first answer must become a retriable business error."""
+        """验证首个回答之前的超时转换为可重试业务错误"""
         from src.agents import graph_agents
 
         class FakeAgent:
             async def astream_events(self, *_args, **_kwargs):
                 raise TimeoutError
-                yield  # Make this an async generator for the stream contract.
+                yield  # 保留异步生成器结构以满足流式接口契约
 
         conversation = ConversationService.create("timeout stream")
         monkeypatch.setattr(graph_agents, "build_tool_agent", lambda **_kwargs: FakeAgent())
@@ -891,7 +891,7 @@ class TestAgentService:
 
     @pytest.mark.asyncio
     async def test_stream_timeout_does_not_resend_streamed_text(self, monkeypatch):
-        """超时事件只追加提示，不能重复已发送的文本增量。"""
+        """超时事件只追加提示，不能重复已发送的文本增量"""
         from langchain_core.messages import AIMessage
         from src.agents import graph_agents
 

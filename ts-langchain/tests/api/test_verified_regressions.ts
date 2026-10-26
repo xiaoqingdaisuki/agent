@@ -1,3 +1,5 @@
+/** 验证 api/test_verified_regressions 对应模块的行为与边界条件 */
+
 import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/api/index.js";
 import { config } from "../../src/config/index.js";

@@ -1,8 +1,8 @@
 /**
  * memory.session — 会话记忆管理
  *
- * 提供当前会话/对话的上下文检索能力。
- * 统一通过 Repository 层访问当前配置的存储后端。
+ * 提供当前会话/对话的上下文检索能力
+ * 统一通过 Repository 层访问当前配置的存储后端
  */
 
 import { DynamicStructuredTool } from "@langchain/core/tools";
@@ -12,7 +12,7 @@ import type { ToolDescriptor } from "./contracts.js";
 import { getRepositories } from "../repositories/index.js";
 import { config } from "../config/index.js";
 
-// ============ Tool Descriptor ==========
+// ============ 工具描述符 ==========
 
 export const sessionMemorySearchInputSchema = z.object({
   conversation_id: z.string().describe("会话 ID，用于标识当前对话"),
@@ -37,7 +37,7 @@ export const sessionMemoryDescriptor: ToolDescriptor = {
   input_schema: sessionMemorySearchInputSchema,
 };
 
-// ============ LangChain Tool ==========
+// ============ LangChain 工具封装 ==========
 
 export const memorySessionSearchTool: DynamicStructuredTool =
   new DynamicStructuredTool({
@@ -45,6 +45,7 @@ export const memorySessionSearchTool: DynamicStructuredTool =
     description:
       "在当前会话中搜索之前的对话内容。当需要回顾用户之前说过的话或查找之前的回答时使用。",
     schema: sessionMemorySearchInputSchema,
+  // 按会话及查询条件检索近期历史消息
   func: async ({ conversation_id, query, max_results }) => {
     const repos = getRepositories();
     const maxResults = max_results || 5;
@@ -63,6 +64,7 @@ export const memorySessionSearchTool: DynamicStructuredTool =
       // 关键词过滤
       if (query) {
         const queryLower = query.toLowerCase();
+        // 规范化历史消息正文以生成会话记忆结果
         messages = messages.filter((m: any) => {
           const content = typeof m.content_json === "string"
             ? m.content_json

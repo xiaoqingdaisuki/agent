@@ -1,3 +1,5 @@
+/** 验证 agents/test_tool_agent 对应模块的行为与边界条件 */
+
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { AIMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
@@ -311,10 +313,10 @@ describe("tool agent", () => {
     await iterator.next();
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-    // 队列容量之外允许一个已交付和一个等待入队的在途事件。
+    // 队列容量之外允许一个已交付和一个等待入队的在途事件
     expect(produced).toBeLessThanOrEqual(MAX_STREAM_EVENT_BUFFER + 2);
     for await (const _event of iterator) {
-      // 消费完事件以释放异步泵和测试资源。
+      // 消费完事件以释放异步泵和测试资源
     }
     expect(produced).toBe(total);
   });

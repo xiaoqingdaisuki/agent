@@ -14,7 +14,7 @@ pypdf>=6.18
 python-docx>=1.2
 tzdata>=2024.1
 
-# Dev dependencies
+# 开发依赖
 pytest>=8.3
 pytest-asyncio>=0.23
 ruff>=0.5

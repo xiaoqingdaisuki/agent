@@ -2,7 +2,7 @@
  * 工具统一返回信封 Zod Schemas
  *
  * 替代 contracts/tools/error.schema.json
- * 定义所有工具调用的统一返回格式。
+ * 定义所有工具调用的统一返回格式
  */
 
 import { z } from "zod";

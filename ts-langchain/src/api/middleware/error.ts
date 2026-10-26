@@ -1,3 +1,5 @@
+/** 脱敏请求日志并统一处理业务异常和 HTTP 错误响应 */
+
 import type { FastifyInstance } from "fastify";
 import { BusinessError } from "../../services/index.js";
 
@@ -12,9 +14,11 @@ function sanitizeLogValue(value: unknown, key = ""): unknown {
       ? `${value.slice(0, MAX_LOGGED_TEXT_LENGTH)}…[TRUNCATED]`
       : value;
   }
+  // 递归脱敏数组中的日志字段
   if (Array.isArray(value)) return value.map((item) => sanitizeLogValue(item));
   if (value && typeof value === "object") {
     return Object.fromEntries(
+      // 按字段名称递归脱敏对象中的日志值
       Object.entries(value).map(([field, item]) => [
         field,
         sanitizeLogValue(item, field),
@@ -24,7 +28,7 @@ function sanitizeLogValue(value: unknown, key = ""): unknown {
   return value;
 }
 
-// 仅记录请求体元数据，避免把对话和文档原文写入日志。
+// 仅记录请求体元数据，避免把对话和文档原文写入日志
 function summarizeRequestBody(body: unknown): Record<string, unknown> | undefined {
   if (body === undefined || body === null) return undefined;
   return {
@@ -68,6 +72,7 @@ export function logRequestError(
 
 // 注册全局错误处理中间件，将异常转换为统一 JSON 响应
 export function registerErrorMiddleware(app: FastifyInstance) {
+  // 记录请求异常并将业务错误转换为统一 HTTP 响应
   app.setErrorHandler((error: any, request: any, reply: any) => {
     logRequestError(request, error);
     if (error instanceof BusinessError) {

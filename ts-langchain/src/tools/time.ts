@@ -1,7 +1,7 @@
 /**
  * time — 时间查询与时区转换工具
  *
- * 使用 IANA 时区名称，并通过 Intl API 正确处理夏令时。
+ * 使用 IANA 时区名称，并通过 Intl API 正确处理夏令时
  */
 
 import { DynamicStructuredTool } from "@langchain/core/tools";
@@ -11,7 +11,7 @@ import type { ToolDescriptor } from "./contracts.js";
 
 const TIMEZONE_ERROR = "时区必须是有效的 IANA Time Zone，例如 Asia/Shanghai 或 America/New_York";
 
-// 校验 IANA 时区名称并返回统一错误信息。
+// 校验 IANA 时区名称并返回统一错误信息
 function validateTimezone(timezone: string): void {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format();
@@ -20,7 +20,7 @@ function validateTimezone(timezone: string): void {
   }
 }
 
-// 从 Intl 格式化结果中读取指定字段。
+// 从 Intl 格式化结果中读取指定字段
 function getDateParts(date: Date, timezone: string): Record<string, string> {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
@@ -36,11 +36,12 @@ function getDateParts(date: Date, timezone: string): Record<string, string> {
     timeZoneName: "longOffset",
   });
   return Object.fromEntries(
+    // 将格式化日期片段转换为按类型索引的字段
     formatter.formatToParts(date).map((part) => [part.type, part.value]),
   );
 }
 
-// 将 Intl 的 GMT 偏移文本转换成 ISO 8601 偏移。
+// 将 Intl 的 GMT 偏移文本转换成 ISO 8601 偏移
 function normalizeOffset(rawOffset: string): string {
   if (rawOffset === "GMT" || rawOffset === "UTC") return "+00:00";
   const match = rawOffset.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/);
@@ -48,7 +49,7 @@ function normalizeOffset(rawOffset: string): string {
   return `${match[1]}${match[2].padStart(2, "0")}:${match[3] ?? "00"}`;
 }
 
-// 把瞬时时间格式化为带时区偏移的 ISO 字符串。
+// 把瞬时时间格式化为带时区偏移的 ISO 字符串
 function formatZonedDate(date: Date, timezone: string): {
   datetime: string;
   weekday: string;
@@ -64,7 +65,7 @@ function formatZonedDate(date: Date, timezone: string): {
   };
 }
 
-// 解析不带时区偏移的本地日期时间。
+// 解析不带时区偏移的本地日期时间
 function parseLocalDateTime(value: string): [number, number, number, number, number, number] {
   const match = value.match(
     /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/,
@@ -94,7 +95,7 @@ function parseLocalDateTime(value: string): [number, number, number, number, num
   return values;
 }
 
-// 计算指定瞬时值在 IANA 时区中的 UTC 偏移毫秒数。
+// 计算指定瞬时值在 IANA 时区中的 UTC 偏移毫秒数
 function getTimezoneOffsetMs(instantMs: number, timezone: string): number {
   const parts = getDateParts(new Date(instantMs), timezone);
   const asUtc = Date.UTC(
@@ -108,9 +109,10 @@ function getTimezoneOffsetMs(instantMs: number, timezone: string): number {
   return asUtc - Math.floor(instantMs / 1000) * 1000;
 }
 
-// 验证本地时间存在性，并在夏令时回拨重叠时选择较早的 UTC 瞬时值。
+// 验证本地时间存在性，并在夏令时回拨重叠时选择较早的 UTC 瞬时值
 function localTimeToInstant(values: [number, number, number, number, number, number], timezone: string): Date {
   const utcGuess = Date.UTC(values[0], values[1] - 1, values[2], values[3], values[4], values[5]);
+  // 采样候选时刻对应的时区偏移
   const offsets = new Set([-36, 0, 36].map((hours) =>
     getTimezoneOffsetMs(utcGuess + hours * 3_600_000, timezone),
   ));
@@ -119,6 +121,7 @@ function localTimeToInstant(values: [number, number, number, number, number, num
     const instantMs = utcGuess - offset;
     const parts = getDateParts(new Date(instantMs), timezone);
     if ([parts.year, parts.month, parts.day, parts.hour, parts.minute, parts.second]
+      // 逐项校验格式化时间与目标数值是否一致
       .every((part, index) => Number(part) === values[index])) candidates.push(instantMs);
   }
   if (candidates.length === 0) throw new Error("datetime 在来源时区不存在（夏令时切换）");
@@ -169,6 +172,7 @@ export const currentTimeTool: DynamicStructuredTool = new DynamicStructuredTool(
   name: "get_current_time",
   description: "获取指定时区的当前日期、时间和星期几。",
   schema: currentTimeInputSchema,
+  // 校验时区并返回当前本地时间及结构化字段
   func: async ({ timezone }) => {
     try {
       validateTimezone(timezone);
@@ -188,6 +192,7 @@ export const convertTimezoneTool: DynamicStructuredTool = new DynamicStructuredT
   name: "convert_timezone",
   description: "将一个 IANA 时区的本地时间转换为另一个 IANA 时区。",
   schema: convertTimezoneInputSchema,
+  // 校验源时区与目标时区并转换指定时间
   func: async ({ datetime, from_timezone, to_timezone }) => {
     try {
       validateTimezone(from_timezone);

@@ -1,9 +1,9 @@
-/** Agent Turn Repository — 单轮执行、幂等与恢复状态。 */
+/** Agent Turn Repository — 单轮执行、幂等与恢复状态 */
 
 export type TurnStatus = "pending" | "streaming" | "completed" | "failed" | "cancelled";
 
 export class TurnTransitionError extends Error {
-  // 初始化非法 Turn 状态转换错误。
+  // 初始化非法 Turn 状态转换错误
   constructor(public readonly current: TurnStatus, public readonly requested: TurnStatus) {
     super(`Cannot transition Turn from ${current} to ${requested}`);
     this.name = "TurnTransitionError";
@@ -11,7 +11,7 @@ export class TurnTransitionError extends Error {
 }
 
 export class TurnConversationBusyError extends Error {
-  // 初始化会话已有活动 Turn 的并发冲突错误。
+  // 初始化会话已有活动 Turn 的并发冲突错误
   constructor(public readonly activeTurnId: string) {
     super("Conversation already has an active Turn");
     this.name = "TurnConversationBusyError";
@@ -43,7 +43,7 @@ export interface TurnCommandMessage {
   created_at: string;
 }
 
-// 新请求到达时即时回收已超过路由硬上限的孤儿 Turn，保留正常并发保护。
+// 新请求到达时即时回收已超过路由硬上限的孤儿 Turn，保留正常并发保护
 async function recoverConversationTurns(db: D1Database, conversationId: string): Promise<void> {
   const now = new Date().toISOString();
   const staleBefore = new Date(Date.now() - 330_000).toISOString();
@@ -52,7 +52,7 @@ async function recoverConversationTurns(db: D1Database, conversationId: string):
   ).bind(now, now, conversationId, staleBefore).run();
 }
 
-// 读取指定消息，供原子 Turn 命令返回实际分配的序号。
+// 读取指定消息，供原子 Turn 命令返回实际分配的序号
 async function getCommandMessage(db: D1Database, messageId: string): Promise<TurnCommandMessage | null> {
   const result = await db.prepare(
     "SELECT id, conversation_id, user_id, sequence_no, role, content_json, created_at FROM messages WHERE id = ?",
@@ -60,7 +60,7 @@ async function getCommandMessage(db: D1Database, messageId: string): Promise<Tur
   return result ?? null;
 }
 
-// 原子创建执行中 Turn 并追加用户消息，重复幂等键不会推进会话序号。
+// 原子创建执行中 Turn 并追加用户消息，重复幂等键不会推进会话序号
 export async function beginTurnWithUserMessage(
   db: D1Database,
   input: Pick<Turn, "id" | "conversation_id" | "user_id" | "client_message_id"> & {
@@ -130,7 +130,7 @@ export async function beginTurnWithUserMessage(
   return { turn, userMessage, created: true };
 }
 
-// 原子追加助手消息并完成 Turn，重复完成请求不会写入第二条消息。
+// 原子追加助手消息并完成 Turn，重复完成请求不会写入第二条消息
 export async function completeTurnWithAssistantMessage(
   db: D1Database,
   turnId: string,
@@ -192,7 +192,7 @@ export async function completeTurnWithAssistantMessage(
   return { turn, assistantMessage };
 }
 
-// 按会话和客户端消息 ID 读取唯一 Turn。
+// 按会话和客户端消息 ID 读取唯一 Turn
 export async function getTurnByClientMessageId(
   db: D1Database,
   conversationId: string,
@@ -204,7 +204,7 @@ export async function getTurnByClientMessageId(
   return result ?? null;
 }
 
-// 读取指定 Turn，供状态轮询和恢复使用。
+// 读取指定 Turn，供状态轮询和恢复使用
 export async function getTurn(db: D1Database, turnId: string): Promise<Turn | null> {
   const result = await db.prepare(
     "SELECT id, conversation_id, user_id, client_message_id, status, user_message_id, assistant_message_id, assistant_content_json, error_code, created_at, updated_at, completed_at FROM turns WHERE id = ?",
@@ -212,7 +212,7 @@ export async function getTurn(db: D1Database, turnId: string): Promise<Turn | nu
   return result ?? null;
 }
 
-// 原子创建或复用同一客户端消息的 Turn，冲突时返回已有记录。
+// 原子创建或复用同一客户端消息的 Turn，冲突时返回已有记录
 export async function createOrGetTurn(
   db: D1Database,
   input: Pick<Turn, "id" | "conversation_id" | "user_id" | "client_message_id">,
@@ -240,7 +240,7 @@ export async function createOrGetTurn(
   return { turn, created: true };
 }
 
-// 受限更新 Turn 状态及其最终结果，避免客户端改写身份和幂等键。
+// 受限更新 Turn 状态及其最终结果，避免客户端改写身份和幂等键
 export async function updateTurn(
   db: D1Database,
   turnId: string,
@@ -271,7 +271,7 @@ export async function updateTurn(
   return updated;
 }
 
-// 将超过恢复窗口的未完成 Turn 批量标记失败，避免服务重启后永久悬挂。
+// 将超过恢复窗口的未完成 Turn 批量标记失败，避免服务重启后永久悬挂
 export async function failStaleTurns(
   db: D1Database,
   staleBefore: string,

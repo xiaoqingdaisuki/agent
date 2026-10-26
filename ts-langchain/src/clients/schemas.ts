@@ -1,9 +1,9 @@
 /**
  * Gateway 响应数据模型 Zod Schemas
  *
- * 与 cloudflare-service 的 src/schemas/memory-models.ts 保持一致。
- * 用于运行时校验 Gateway 响应，确保数据不偏离契约。
- * 基于 Zod 3.x API（ts-langchain 项目使用 zod 3.25）。
+ * 与 cloudflare-service 的 src/schemas/memory-models.ts 保持一致
+ * 用于运行时校验 Gateway 响应，确保数据不偏离契约
+ * 基于 Zod 3.x API（ts-langchain 项目使用 zod 3.25）
  */
 
 import { z } from "zod";
@@ -88,10 +88,11 @@ export const MessagesPageSchema = z.object({
 export const SearchResponseSchema = z
   .object({
     items: z.array(MemorySearchResultSchema).optional(),
-    // 兼容旧版 Worker 曾返回的 results 字段。
+    // 兼容旧版 Worker 曾返回的 results 字段
     results: z.array(MemorySearchResultSchema).optional(),
     degraded: z.boolean(),
   })
+  // 统一新旧检索响应字段并保留降级标识
   .transform((data) => ({
     items: data.items ?? data.results ?? [],
     degraded: data.degraded,

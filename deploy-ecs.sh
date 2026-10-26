@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
+# 部署指定版本的 Agent 服务并校验环境配置与共享基础设施
 set -eu
 
 TARGET="${1:-}"
@@ -87,7 +88,7 @@ case "$TARGET" in
     ;;
 esac
 
-# Word splitting is intentional for the fixed profile and service lists above.
+# 对上方固定的配置组合与服务列表保留 Shell 单词拆分行为
 # shellcheck disable=SC2086
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" $PROFILES up -d --build $SERVICES
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" $PROFILES ps

@@ -1,8 +1,8 @@
 /**
  * ToolMetricsRepository — 工具调用指标仓储
  *
- * 记录每次工具调用的性能指标，用于监控 + 告警。
- * 由 ts-langchain / py-langgraph 的 tool runtime 上报。
+ * 记录每次工具调用的性能指标，用于监控 + 告警
+ * 由 ts-langchain / py-langgraph 的 tool runtime 上报
  */
 
 // ============ 类型定义 ==========
@@ -20,12 +20,9 @@ export interface ToolMetricEntry {
   timestamp: string;
 }
 
-// ============ CRUD ==========
+// ============ 数据增删改查 ==========
 
-/**
- * 批量写入工具指标
- */
-// 创建或注册 createToolMetrics 所需的数据
+// 批量写入工具指标
 export async function createToolMetrics(
   db: D1Database,
   entries: Array<{
@@ -64,10 +61,7 @@ export async function createToolMetrics(
   }
 }
 
-/**
- * 查询工具指标（按工具名 + 时间范围）
- */
-// 获取 getToolMetrics 对应的数据
+// 查询工具指标（按工具名 + 时间范围）
 export async function getToolMetrics(
   db: D1Database,
   toolName?: string,
@@ -103,10 +97,7 @@ export async function getToolMetrics(
   };
 }
 
-/**
- * 获取指标快照（汇总统计）
- */
-// 获取 getToolMetricsSnapshot 对应的数据
+// 获取指标快照（汇总统计）
 export async function getToolMetricsSnapshot(
   db: D1Database,
   sinceHours = 24,

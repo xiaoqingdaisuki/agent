@@ -25,10 +25,7 @@ export class Embedder {
     this.dimensions = options.dimensions || 1536;
   }
 
-  /**
-   * 将文本向量化
-   */
-  // 执行 embed 对应的业务逻辑
+  // 将文本向量化
   async embed(text: string): Promise<number[]> {
     const response = await this.client.embeddings.create({
       model: this.model,
@@ -39,10 +36,7 @@ export class Embedder {
     return response.data[0].embedding;
   }
 
-  /**
-   * 批量向量化
-   */
-  // 执行 embedBatch 对应的业务逻辑
+  // 批量向量化
   async embedBatch(texts: string[]): Promise<number[][]> {
     const response = await this.client.embeddings.create({
       model: this.model,
@@ -50,6 +44,7 @@ export class Embedder {
       dimensions: this.dimensions,
     });
 
+    // 从嵌入接口响应中提取向量数组
     return response.data.map((d) => d.embedding);
   }
 }

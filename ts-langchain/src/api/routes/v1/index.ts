@@ -49,7 +49,7 @@ interface ParsedMessagePayload {
   images: AttachmentImage[];
 }
 
-// 将文档解析错误转换为统一的 HTTP 错误响应数据。
+// 将文档解析错误转换为统一的 HTTP 错误响应数据
 function getSessionDocumentErrorResponse(error: unknown): { statusCode: number; body: ReturnType<BusinessError["toJSON"]> } | undefined {
   const code = String(error instanceof Error ? error.message : "");
   const messages: Record<string, { statusCode: number; message: string }> = {
@@ -69,9 +69,10 @@ function getSessionDocumentErrorResponse(error: unknown): { statusCode: number; 
     : undefined;
 }
 
-// 规范化前端暂存的文档引用，禁止把路径或任意对象带入模型上下文。
+// 规范化前端暂存的文档引用，禁止把路径或任意对象带入模型上下文
 function normalizeSessionDocuments(value: unknown): SessionDocument[] {
   if (!Array.isArray(value)) return [];
+  // 规范化临时文档字段并整理片段结构
   return value.slice(0, 10).map((item, index) => {
     const candidate = item && typeof item === "object" && !Array.isArray(item)
       ? item as Record<string, unknown>
@@ -86,6 +87,7 @@ function normalizeSessionDocuments(value: unknown): SessionDocument[] {
         ? Math.floor(candidate.size)
         : 0,
       parserVersion: (typeof candidate.parserVersion === "string" ? candidate.parserVersion : "session-text-v1").slice(0, 64),
+      // 校验临时文档片段并填充序号和页码
       parts: parts.slice(0, 200).flatMap((part, partIndex) => {
         const partRecord = part && typeof part === "object" && !Array.isArray(part)
           ? part as Record<string, unknown>
@@ -103,10 +105,11 @@ function normalizeSessionDocuments(value: unknown): SessionDocument[] {
           : [];
       }),
     };
+  // 仅保留包含有效片段的临时文档
   }).filter((document) => document.parts.length > 0);
 }
 
-// 校验客户端幂等标识，保持 v1 接口的输入边界一致。
+// 校验客户端幂等标识，保持 v1 接口的输入边界一致
 function normalizeClientMessageId(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.length < 1 || value.length > 128) {
@@ -115,7 +118,7 @@ function normalizeClientMessageId(value: unknown): string | undefined {
   return value;
 }
 
-// 读取 JSON 或 multipart 消息，并把图片保持在请求内存中交给 Agent。
+// 读取 JSON 或 multipart 消息，并把图片保持在请求内存中交给 Agent
 async function readMessagePayload(request: any): Promise<ParsedMessagePayload> {
   const contentType = String(request.headers?.["content-type"] || "").toLowerCase();
   if (!contentType.includes("multipart/form-data")) {
@@ -130,6 +133,7 @@ async function readMessagePayload(request: any): Promise<ParsedMessagePayload> {
       client_message_id: normalizeClientMessageId(body.client_message_id),
       session_documents: normalizeSessionDocuments(body.session_documents),
       document_attachment_ids: Array.isArray(body.document_attachment_ids)
+        // 仅保留字符串类型的附件标识
         ? body.document_attachment_ids.filter((id): id is string => typeof id === "string").slice(0, 20)
         : undefined,
       images: [],
@@ -179,13 +183,14 @@ async function readMessagePayload(request: any): Promise<ParsedMessagePayload> {
     ),
     session_documents: sessionDocuments,
     document_attachment_ids: Array.isArray(metadata.document_attachment_ids)
+      // 仅保留字符串类型的附件标识
       ? metadata.document_attachment_ids.filter((id): id is string => typeof id === "string").slice(0, 20)
       : undefined,
     images,
   };
 }
 
-// 将消息附件转换为 Agent Service 可消费的上下文，持久化模式先把文档写入知识库。
+// 将消息附件转换为 Agent Service 可消费的上下文，持久化模式先把文档写入知识库
 async function toAttachmentContext(
   payload: ParsedMessagePayload,
   userId: string,
@@ -196,6 +201,7 @@ async function toAttachmentContext(
   if (config.MEMORY_ENABLED && payload.session_documents?.length) {
     const uploadedIds = [];
     for (const document of payload.session_documents) {
+      // 提取文档片段正文用于组合附件内容
       const content = document.parts.map((part) => part.content).join("\n\n");
       const persisted = await KnowledgeService.uploadDocument(
         Buffer.from(content, "utf8"),
@@ -219,7 +225,7 @@ async function toAttachmentContext(
   };
 }
 
-// 要求当前运行在可持久化知识库模式，避免关闭记忆时误写长期数据。
+// 要求当前运行在可持久化知识库模式，避免关闭记忆时误写长期数据
 function requirePersistentKnowledge(): void {
   if (!config.MEMORY_ENABLED) {
     throw new BusinessError(BusinessErrorCode.FORBIDDEN, "memory_enabled=false 时不启用知识库持久化", 403);
@@ -264,12 +270,15 @@ function serializeDocument(document: Document) {
 // 创建或注册 registerV1Routes 所需的数据
 export async function registerV1Routes(app: FastifyInstance) {
   // ============ 健康检查 ============
+  // 返回服务健康状态、版本及当前时间
   app.get("/health", async () => ({
     status: "ok",
     version: "0.2.0",
     timestamp: new Date().toISOString(),
   }));
+  // 返回进程存活状态和 API 版本
   app.get("/health/live", async () => ({ status: "ok", live: true, version: "0.2.0" }));
+  // 根据依赖就绪状态返回健康响应及对应状态码
   app.get("/health/ready", async (_request, reply) => {
     const readiness = getReadiness();
     return reply.status(readiness.ready ? 200 : 503).send(readiness);
@@ -279,6 +288,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.post<{
     Body: { title: string; mode?: "chat" | "knowledge" | "mixed"; user_id?: string };
+  // 校验可信身份并创建用户会话
   }>("/conversations", async (request, reply) => {
     try {
       const { title, mode = "chat", user_id } = request.body;
@@ -315,6 +325,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   });
 
+  // 分页列出当前可信用户的会话
   app.get<{ Querystring: { user_id?: string } }>("/conversations", async (request) => {
     const trustedUserId = requireAgentUserId(request, request.query.user_id);
     const convs = await ConversationService.list(trustedUserId);
@@ -323,6 +334,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.get<{ Params: { id: string } }>(
     "/conversations/:id",
+    // 校验会话归属并返回会话详情
     async (request, reply) => {
       const conv = await ConversationService.get(request.params.id);
       if (!conv) {
@@ -337,6 +349,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.delete<{ Params: { id: string } }>(
     "/conversations/:id",
+    // 校验会话归属并删除会话
     async (request, reply) => {
       const conversation = await ConversationService.get(request.params.id);
       if (!conversation) {
@@ -357,6 +370,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.get<{ Params: { id: string } }>(
     "/conversations/:id/messages",
+    // 校验会话归属并读取历史消息
     async (request, reply) => {
       const conv = await ConversationService.get(request.params.id);
       if (!conv) {
@@ -373,6 +387,7 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.post<{
     Params: { id: string };
     Body: { content: string; user_id?: string; client_message_id?: string };
+  // 解析消息及附件并执行非流式对话
   }>("/conversations/:id/messages", async (request, reply) => {
     let activeTurn: { id: string; userId: string } | null = null;
     try {
@@ -390,7 +405,7 @@ export async function registerV1Routes(app: FastifyInstance) {
         || payload.images.length,
       );
 
-      // 确保会话存在于当前仓储并校验用户归属。
+      // 确保会话存在于当前仓储并校验用户归属
       await ConversationService.ensure(convId, trustedUserId);
 
       const conv = await ConversationService.get(convId);
@@ -436,6 +451,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       return reply.status(200).send({ ...serializeMessage(persistedAssistant), turn_id: turnResult.turn.id });
     } catch (error: any) {
       if (activeTurn) {
+        // 消费持久化清理任务的拒绝以保留原始请求错误
         await TurnService.terminate(activeTurn.id, activeTurn.userId, false, error?.code || "INTERNAL_ERROR").catch(() => undefined);
       }
       if (error instanceof BusinessError) {
@@ -455,6 +471,7 @@ export async function registerV1Routes(app: FastifyInstance) {
   app.post<{
     Params: { id: string };
     Body: { content: string; user_id?: string; client_message_id?: string };
+  // 解析消息及附件并启动 SSE 对话流
   }>("/conversations/:id/messages/stream", async (request, reply) => {
     let payload: ParsedMessagePayload;
     try {
@@ -480,7 +497,7 @@ export async function registerV1Routes(app: FastifyInstance) {
       || payload.images.length,
     );
 
-    // 确保会话存在于当前仓储并校验已有 thread_id 的用户归属。
+    // 确保会话存在于当前仓储并校验已有 thread_id 的用户归属
     await ConversationService.ensure(convId, trustedUserId);
 
     const conversation = await ConversationService.get(convId);
@@ -511,7 +528,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
     await streamTurn(request, reply, {
       conversationId: convId, userId: trustedUserId, turnId: turnResult.turn.id, completed,
-      // 附件准备与模型调用共用流式取消信号，保持 Turn 生命周期一致。
+      // 附件准备与模型调用共用流式取消信号，保持 Turn 生命周期一致
       events: async function* (signal) {
         const attachmentContext = await toAttachmentContext(payload, trustedUserId);
         signal.throwIfAborted();
@@ -522,6 +539,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.delete<{ Params: { id: string } }>(
     "/conversations/:id/messages",
+    // 校验会话归属并清空历史消息
     async (request, reply) => {
       const conv = await ConversationService.get(request.params.id);
       if (!conv) {
@@ -539,6 +557,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.post<{ Params: { id: string } }>(
     "/conversations/:id/session-documents/parse",
+    // 在允许的部署模式下解析会话临时文档
     async (request, reply) => {
       try {
         if (config.MEMORY_ENABLED) {
@@ -595,6 +614,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   // ============ 知识库管理 ==========
 
+  // 校验知识库能力并解析上传文档
   app.post("/knowledge/documents", async (request, reply) => {
     try {
       requirePersistentKnowledge();
@@ -638,6 +658,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   });
 
+  // 列出当前可信用户的知识库文档
   app.get("/knowledge/documents", async (request) => {
     requirePersistentKnowledge();
     const docs = await KnowledgeService.listDocuments(requireAgentUserId(request));
@@ -646,6 +667,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.get<{ Params: { id: string } }>(
     "/knowledge/documents/:id",
+    // 按用户归属读取知识库文档详情
     async (request, reply) => {
       requirePersistentKnowledge();
       const doc = await KnowledgeService.getDocument(request.params.id, requireAgentUserId(request));
@@ -660,6 +682,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.delete<{ Params: { id: string } }>(
     "/knowledge/documents/:id",
+    // 按用户归属删除知识库文档及索引
     async (request, reply) => {
       requirePersistentKnowledge();
       const deleted = await KnowledgeService.deleteDocument(request.params.id, requireAgentUserId(request));
@@ -674,6 +697,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.post<{ Params: { id: string } }>(
     "/knowledge/documents/:id/reindex",
+    // 为当前用户的知识库文档重新建立索引
     async (request, reply) => {
       try {
         requirePersistentKnowledge();
@@ -695,6 +719,7 @@ export async function registerV1Routes(app: FastifyInstance) {
 
   app.post<{ Body: { query: string; top_k?: number } }>(
     "/knowledge/search",
+    // 校验知识库检索请求并返回匹配片段
     async (request, reply) => {
       try {
         requirePersistentKnowledge();
@@ -734,12 +759,14 @@ export async function registerV1Routes(app: FastifyInstance) {
   );
 
   // ============ 能力查询 ==========
+  // 返回当前部署启用的 Agent 功能与限制
   app.get("/capabilities", async () => {
     return CapabilitiesService.getCapabilities();
   });
 
   // ============ 用户画像 + 记忆 + 历史 ==========
 
+  // 读取当前可信用户的个人画像
   app.get("/profile", async (request, reply) => {
     try {
       const submittedUserId = (request.query as any).user_id;
@@ -762,6 +789,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   });
 
+  // 更新当前可信用户的画像信息
   app.patch("/profile", async (request, reply) => {
     try {
       const { user_id } = request.query as any;
@@ -793,12 +821,14 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   });
 
+  // 读取当前用户记忆并按类别筛选
   app.get("/memory", async (request, reply) => {
     try {
       const { user_id, category } = request.query as any;
       const trustedUserId = requireAgentUserId(request, user_id);
       const memories = await MemoryService.listAll(trustedUserId);
       const filtered = category
+        // 仅保留指定类别的用户记忆
         ? memories.filter((m: any) => m.category === category)
         : memories;
       return { memories: filtered };
@@ -815,6 +845,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   });
 
+  // 为当前可信用户保存一条长期记忆
   app.post("/memory", async (request, reply) => {
     try {
       const { user_id } = request.query as any;
@@ -867,6 +898,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   });
 
+  // 按用户身份删除指定长期记忆
   app.delete("/memory", async (request, reply) => {
     try {
       const { user_id, memory_id } = request.query as any;
@@ -900,6 +932,7 @@ export async function registerV1Routes(app: FastifyInstance) {
     }
   });
 
+  // 按可信身份读取会话最近消息
   app.get("/history", async (request, reply) => {
     try {
       const { user_id, conversation_id, limit } = request.query as any;

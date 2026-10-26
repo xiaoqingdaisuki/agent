@@ -39,8 +39,10 @@ export async function createMessageBatch(db: D1Database, messages: Message[]): P
   );
 
   const conversationId = messages[0].conversation_id;
+  // 提取批量消息序号以更新会话计数
   const maxSequence = Math.max(...messages.map((message) => message.sequence_no));
   await db.batch([
+    // 为每条消息绑定批量写入参数
     ...messages.map((msg) =>
       stmt.bind(
         msg.id,
@@ -61,7 +63,7 @@ export async function createMessageBatch(db: D1Database, messages: Message[]): P
   ]);
 }
 
-// 使用会话计数器为无显式序号的消息批次原子分配连续序号。
+// 使用会话计数器为无显式序号的消息批次原子分配连续序号
 export async function createMessageBatchWithCounter(
   db: D1Database,
   conversationId: string,

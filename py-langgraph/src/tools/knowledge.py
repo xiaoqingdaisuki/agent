@@ -1,8 +1,8 @@
 """
 knowledge.search — 企业知识库检索 Tool
 
-将现有 RAG 检索封装为统一 Tool，接入 Runtime 管线。
-通过 Cloudflare Memory Gateway 访问文档向量。
+将现有 RAG 检索封装为统一 Tool，接入 Runtime 管线
+通过 Cloudflare Memory Gateway 访问文档向量
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def hits_to_text(hits: list[KnowledgeHit], query: str) -> str:
     return "\n".join(lines)
 
 
-# ============ Tool Descriptor ============
+# ============ 工具描述符 ============
 
 _DESCRIPTOR = ToolDescriptor(
     name="knowledge.search",
@@ -77,7 +77,7 @@ _DESCRIPTOR = ToolDescriptor(
 )
 
 
-# ============ LangChain Tool ============
+# ============ LangChain 工具封装 ============
 
 
 class KnowledgeSearchInput(BaseModel):
@@ -88,7 +88,7 @@ class KnowledgeSearchInput(BaseModel):
 @tool(args_schema=KnowledgeSearchInput)
 # 执行 knowledge search 对应的业务逻辑
 async def knowledge_search(query: str, top_k: int = 5) -> str:
-    """在企业知识库中搜索相关信息。适用于需要从公司文档、产品手册、技术文档等内部资料中查找答案的场景。"""
+    """在企业知识库中搜索相关信息。适用于需要从公司文档、产品手册、技术文档等内部资料中查找答案的场景"""
     try:
         context = get_tool_call_context()
         if context is None or not context.user_id:

@@ -1,3 +1,5 @@
+/** 验证 tools/test_calculator 对应模块的行为与边界条件 */
+
 import { describe, it, expect } from "vitest";
 import { safeCalculate } from "../../src/tools/calculator.js";
 

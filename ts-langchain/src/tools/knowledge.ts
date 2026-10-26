@@ -1,8 +1,8 @@
 /**
  * knowledge.search — 企业知识库检索 Tool
  *
- * 将 RAG 检索封装为统一 Tool，接入 Runtime 管线。
- * 通过 Cloudflare Memory Gateway 访问文档向量。
+ * 将 RAG 检索封装为统一 Tool，接入 Runtime 管线
+ * 通过 Cloudflare Memory Gateway 访问文档向量
  */
 
 import { DynamicStructuredTool } from "@langchain/core/tools";
@@ -47,7 +47,7 @@ function hitsToText(hits: KnowledgeHit[], query: string): string {
   return lines.join("\n");
 }
 
-// ============ Tool Descriptor ============
+// ============ 工具描述符 ============
 
 export const knowledgeSearchInputSchema = z.object({
   query: z.string().describe("检索关键词或问题，尽量简洁明确"),
@@ -77,11 +77,12 @@ export const knowledgeSearchTool: DynamicStructuredTool =
     description:
       "在企业知识库中搜索相关信息。适用于需要从公司文档、产品手册、技术文档等内部资料中查找答案的场景。返回带文档来源和页码的引用。",
     schema: knowledgeSearchInputSchema,
+    // 按可信用户身份检索知识库并整理工具响应
     func: async ({ query, top_k }) => {
       try {
         const userId = getToolCallContext()?.user_id;
         if (!userId) return "📚 缺少可信用户上下文，无法检索知识库。";
-        // 延迟加载避免与 services / tools 形成循环依赖。
+        // 延迟加载避免与 services / tools 形成循环依赖
         const { KnowledgeService } = await import("../services/index.js");
         const results = await KnowledgeService.search(query, top_k || 5, userId);
 
@@ -89,6 +90,7 @@ export const knowledgeSearchTool: DynamicStructuredTool =
           return `📚 知识库中未找到与"${query}"相关的内容。`;
         }
 
+        // 提取文档标识、正文和相关度以生成检索结果
         const hits: KnowledgeHit[] = results.map((r) => ({
           doc_id: r.document_id,
           doc_name: r.document_name,

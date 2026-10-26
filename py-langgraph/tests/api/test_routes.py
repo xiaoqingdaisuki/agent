@@ -1,4 +1,4 @@
-"""Tests for API routes"""
+"""验证 API 路由的响应、身份校验与边界条件"""
 
 import io
 
@@ -41,7 +41,7 @@ def _build_docx_fixture() -> bytes:
 
 @pytest.fixture
 async def client():
-    """Create test client"""
+    """创建测试客户端"""
     settings.agent_api_secret = "test-agent-secret"
     transport = ASGITransport(app=app)
     async with AsyncClient(
@@ -58,7 +58,7 @@ async def client():
 class TestHealthEndpoint:
     @pytest.mark.asyncio
     async def test_health_returns_ok(self, client: AsyncClient):
-        """Health endpoint should return ok status"""
+        """验证健康接口返回正常状态"""
         response = await client.get("/v1/health")
         assert response.status_code == 200
         data = response.json()
@@ -66,7 +66,7 @@ class TestHealthEndpoint:
 
     @pytest.mark.asyncio
     async def test_health_includes_version(self, client: AsyncClient):
-        """Health endpoint should include version"""
+        """验证健康接口包含版本信息"""
         response = await client.get("/v1/health")
         data = response.json()
         assert "version" in data
@@ -165,7 +165,7 @@ class TestChatEndpoint:
 
     @pytest.mark.asyncio
     async def test_stream_text_includes_text_and_delta_fields(self, client: AsyncClient):
-        """流式文本同时提供新旧字段，避免客户端因协议差异误判空回复。"""
+        """流式文本同时提供新旧字段，避免客户端因协议差异误判空回复"""
         conversation = await client.post(
             "/v1/conversations",
             json={"title": "sse compatibility", "user_id": "test-user"},
@@ -206,7 +206,7 @@ class TestCapabilitiesRateLimit:
 class TestCapabilitiesEndpoint:
     @pytest.mark.asyncio
     async def test_capabilities(self, client: AsyncClient):
-        """Capabilities endpoint should return available features"""
+        """验证能力接口返回可用功能"""
         response = await client.get("/v1/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -218,7 +218,7 @@ class TestCapabilitiesEndpoint:
 class TestConversationEndpoints:
     @pytest.mark.asyncio
     async def test_rejects_missing_auth_and_user_spoofing(self):
-        """Protected routes require service auth and bind inputs to trusted identity."""
+        """验证受保护路由要求服务认证并将输入绑定到可信身份"""
         settings.agent_api_secret = "test-agent-secret"
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as raw_client:
@@ -271,7 +271,7 @@ class TestConversationEndpoints:
 
     @pytest.mark.asyncio
     async def test_create_conversation(self, client: AsyncClient):
-        """Should create a new conversation"""
+        """验证创建新会话"""
         response = await client.post("/v1/conversations", json={"title": "Test"})
         assert response.status_code == 201
         data = response.json()
@@ -280,26 +280,26 @@ class TestConversationEndpoints:
 
     @pytest.mark.asyncio
     async def test_create_conversation_requires_title(self, client: AsyncClient):
-        """Should reject conversation without title"""
+        """验证拒绝缺少标题的会话"""
         response = await client.post("/v1/conversations", json={})
         assert response.status_code == 400
 
     @pytest.mark.asyncio
     async def test_list_conversations(self, client: AsyncClient):
-        """Should list conversations"""
+        """验证列出会话"""
         response = await client.get("/v1/conversations")
         assert response.status_code == 200
         assert isinstance(response.json(), list)
 
     @pytest.mark.asyncio
     async def test_get_nonexistent_conversation(self, client: AsyncClient):
-        """Should return 404 for non-existent conversation"""
+        """验证不存在的会话返回 404"""
         response = await client.get("/v1/conversations/nonexistent_id")
         assert response.status_code == 404
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_conversation(self, client: AsyncClient):
-        """Should return 404 when deleting non-existent conversation"""
+        """验证删除不存在的会话时返回 404"""
         response = await client.delete("/v1/conversations/nonexistent_id")
         assert response.status_code == 404
 

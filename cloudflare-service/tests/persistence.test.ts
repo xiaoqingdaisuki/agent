@@ -1,3 +1,5 @@
+/** 验证 persistence.test 对应模块的行为与边界条件 */
+
 import { describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";

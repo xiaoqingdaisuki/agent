@@ -1,3 +1,5 @@
+/** 验证 worker/test_image_gateway 对应模块的行为与边界条件 */
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/api/index.js";
 import { config } from "../../src/config/index.js";

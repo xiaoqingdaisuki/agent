@@ -1,7 +1,7 @@
 """不完整响应处理器 — Python 版
 
 与 TS 版 src/agents/response-handler.ts 功能对等，
-统一处理三类响应中断场景的检测与提示生成。
+统一处理三类响应中断场景的检测与提示生成
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 class ModelResponseError(ValueError):
     code = "MODEL_RESPONSE_INVALID"
 
-    # 将空响应和无法解析的工具协议标记为可重试的上游错误。
+    # 将空响应和无法解析的工具协议标记为可重试的上游错误
     def __init__(self, message: str = "AI服务未生成有效回答，请重试。"):
         super().__init__(message)
 
@@ -52,7 +52,7 @@ _TERMINAL_PUNCTUATION = frozenset(
 
 # 校验并判断 is likely truncated 对应的状态
 def is_likely_truncated(text: str, finish_reason: str | None = None) -> bool:
-    """检测文本是否可能被 LLM 截断。
+    """检测文本是否可能被 LLM 截断
 
     检测策略（按优先级）：
       a) finish_reason == "length" → 确定截断
@@ -80,7 +80,7 @@ def is_likely_truncated(text: str, finish_reason: str | None = None) -> bool:
 
 # 获取 get finish reason 对应的数据
 def get_finish_reason(message) -> str | None:
-    """从 LangChain AIMessage 中提取 finish_reason。"""
+    """从 LangChain AIMessage 中提取 finish_reason"""
     meta = getattr(message, "response_metadata", None)
     if not meta or not isinstance(meta, dict):
         return None
@@ -100,7 +100,7 @@ def get_finish_reason(message) -> str | None:
     return None
 
 
-# 从 Agent 输出或消息列表中提取最后一个 AI 消息的结束原因。
+# 从 Agent 输出或消息列表中提取最后一个 AI 消息的结束原因
 def get_finish_reason_from_output(output) -> str | None:
     direct = get_finish_reason(output)
     if direct:
@@ -138,13 +138,13 @@ _CONTINUATION_PROMPT = "\n\n---\n⚠️ 以上回答尚未完成。如需继续�
 
 # 创建或注册 append continuation hint 所需的数据
 def append_continuation_hint(text: str) -> str:
-    """为不完整响应追加继续提示。"""
+    """为不完整响应追加继续提示"""
     return text + _CONTINUATION_PROMPT
 
 
 # 执行 maybe append continuation hint 对应的业务逻辑
 def maybe_append_continuation_hint(text: str, finish_reason: str | None = None) -> str:
-    """检查响应是否需要附加继续提示，需要则追加。"""
+    """检查响应是否需要附加继续提示，需要则追加"""
     if text.endswith(_CONTINUATION_PROMPT):
         return text
     if not is_likely_truncated(text, finish_reason):

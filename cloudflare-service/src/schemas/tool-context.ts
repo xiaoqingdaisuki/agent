@@ -2,7 +2,7 @@
  * 工具调用上下文 Zod Schemas
  *
  * 替代 contracts/tools/context.schema.json
- * 定义 ToolCallContext 的结构，由服务端注入。
+ * 定义 ToolCallContext 的结构，由服务端注入
  */
 
 import { z } from "zod";

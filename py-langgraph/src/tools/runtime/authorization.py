@@ -1,4 +1,4 @@
-"""工具角色和权限策略。"""
+"""工具角色和权限策略"""
 
 from src.tools.contracts import ToolCallContext, ToolDescriptor
 
@@ -9,13 +9,13 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
 }
 
 
-# 根据服务端角色计算允许的工具权限集合。
+# 根据服务端角色计算允许的工具权限集合
 def permissions_for_roles(roles: list[str] | None = None) -> frozenset[str]:
     resolved_roles = roles or ["member"]
     return frozenset(permission for role in resolved_roles for permission in ROLE_PERMISSIONS.get(role, frozenset()))
 
 
-# 判断可信上下文是否满足工具声明的全部权限。
+# 判断可信上下文是否满足工具声明的全部权限
 def has_tool_permissions(context: ToolCallContext, descriptor: ToolDescriptor) -> bool:
     if descriptor.risk_level == "R0":
         return True
@@ -26,6 +26,6 @@ def has_tool_permissions(context: ToolCallContext, descriptor: ToolDescriptor) -
     return "*" in granted or all(permission in granted for permission in required)
 
 
-# 返回安全默认角色，避免未声明身份时获得写权限。
+# 返回安全默认角色，避免未声明身份时获得写权限
 def default_tool_roles() -> list[str]:
     return ["member"]

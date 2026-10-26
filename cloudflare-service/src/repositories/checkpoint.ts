@@ -1,9 +1,9 @@
 /**
  * CheckpointRepository — LangGraph 图状态持久化
  *
- * 为 py-langgraph 的 D1Checkpointer 提供底层存储。
+ * 为 py-langgraph 的 D1Checkpointer 提供底层存储
  * 每次 Agent 运行后，checkpoint 数据异步写入 D1；
- * 重启后从 D1 加载最新 checkpoint 恢复图状态。
+ * 重启后从 D1 加载最新 checkpoint 恢复图状态
  */
 
 // ============ 类型定义 ==========
@@ -17,12 +17,9 @@ export interface CheckpointRow {
   created_at: string;
 }
 
-// ============ CRUD ==========
+// ============ 数据增删改查 ==========
 
-/**
- * 保存或更新 checkpoint（upsert）
- */
-// 执行 upsertCheckpoint 对应的业务逻辑
+// 保存或更新 checkpoint（upsert）
 export async function upsertCheckpoint(
   db: D1Database,
   row: {
@@ -55,10 +52,7 @@ export async function upsertCheckpoint(
     .run();
 }
 
-/**
- * 获取指定线程的最新 checkpoint
- */
-// 获取 getLatestCheckpoint 对应的数据
+// 获取指定线程的最新 checkpoint
 export async function getLatestCheckpoint(
   db: D1Database,
   threadId: string,
@@ -76,10 +70,7 @@ export async function getLatestCheckpoint(
   return result ?? null;
 }
 
-/**
- * 获取指定线程的所有 checkpoint 列表
- */
-// 获取 listCheckpoints 对应的数据
+// 获取指定线程的所有 checkpoint 列表
 export async function listCheckpoints(
   db: D1Database,
   threadId: string,
@@ -107,10 +98,7 @@ export async function listCheckpoints(
   };
 }
 
-/**
- * 删除指定线程的所有 checkpoints
- */
-// 删除或清理 deleteThreadCheckpoints 对应的数据
+// 删除指定线程的所有 checkpoints
 export async function deleteThreadCheckpoints(
   db: D1Database,
   threadId: string,

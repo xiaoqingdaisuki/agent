@@ -1,4 +1,4 @@
-"""web.extract — 从网页中提取结构化字段。"""
+"""web.extract — 从网页中提取结构化字段"""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ MAX_RESPONSE_CHARS = 200 * 1024
 
 
 class WebExtractInput(BaseModel):
-    """网页结构化提取工具的输入模型。"""
+    """网页结构化提取工具的输入模型"""
 
     url: str = Field(description="要提取数据的网页 URL")
     fields: list[str] = Field(min_length=1, max_length=20, description="需要提取的字段名")
@@ -39,12 +39,12 @@ _DESCRIPTOR = ToolDescriptor(
 )
 
 
-# 解码网页中常见的 HTML 实体。
+# 解码网页中常见的 HTML 实体
 def _decode_html(value: str) -> str:
     return html_module.unescape(value)
 
 
-# 清理 HTML 标签、脚本和样式，保留可匹配的文本。
+# 清理 HTML 标签、脚本和样式，保留可匹配的文本
 def _clean_html(value: str) -> str:
     text = re.sub(r"<script[^>]*>[\s\S]*?</script>", " ", value, flags=re.IGNORECASE)
     text = re.sub(r"<style[^>]*>[\s\S]*?</style>", " ", text, flags=re.IGNORECASE)
@@ -52,7 +52,7 @@ def _clean_html(value: str) -> str:
     return re.sub(r"\s+", " ", _decode_html(text)).strip()
 
 
-# 生成字段的宽松匹配键，兼容常见产品字段别名。
+# 生成字段的宽松匹配键，兼容常见产品字段别名
 def _field_keys(field: str) -> list[str]:
     normalized = field.strip().lower().replace("_", " ").replace("-", " ")
     aliases = {
@@ -64,7 +64,7 @@ def _field_keys(field: str) -> list[str]:
     return [normalized, *aliases.get(normalized, [])]
 
 
-# 从一个 HTML 片段中按字段名提取值。
+# 从一个 HTML 片段中按字段名提取值
 def _extract_field(fragment: str, field: str) -> str:
     keys = [re.escape(key) for key in _field_keys(field)]
     key_pattern = "|".join(keys)
@@ -79,7 +79,7 @@ def _extract_field(fragment: str, field: str) -> str:
     return label_match.group(1).strip()[:500] if label_match else ""
 
 
-# 提取 HTML 表格中的数据行。
+# 提取 HTML 表格中的数据行
 def _extract_table_items(page: str, fields: list[str]) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
     for table_match in re.finditer(r"<table[^>]*>([\s\S]*?)</table>", page, re.IGNORECASE):
@@ -103,7 +103,7 @@ def _extract_table_items(page: str, fields: list[str]) -> list[dict[str, str]]:
     return items
 
 
-# 提取产品卡片、列表项或 article 中的字段。
+# 提取产品卡片、列表项或 article 中的字段
 def _extract_block_items(page: str, fields: list[str]) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
     pattern = re.compile(
@@ -121,9 +121,9 @@ def _extract_block_items(page: str, fields: list[str]) -> list[dict[str, str]]:
     return items
 
 
-# 从网页 HTML 中提取请求字段。
+# 从网页 HTML 中提取请求字段
 def extract_structured_items(page: str, fields: list[str]) -> list[dict[str, str]]:
-    """从网页 HTML 中提取结构化字段，供测试和工具复用。"""
+    """从网页 HTML 中提取结构化字段，供测试和工具复用"""
     table_items = _extract_table_items(page, fields)
     if table_items:
         return table_items
@@ -134,7 +134,7 @@ def extract_structured_items(page: str, fields: list[str]) -> list[dict[str, str
     return [fallback] if fallback else []
 
 
-# 安全抓取网页正文并复检每个重定向目标。
+# 安全抓取网页正文并复检每个重定向目标
 def _fetch_safe_html(url: str) -> str:
     safe, reason = _is_safe_url(url)
     if not safe:
@@ -163,11 +163,11 @@ def _fetch_safe_html(url: str) -> str:
     raise ValueError("重定向次数超过 3 次")
 
 
-# 从指定网页提取结构化字段。
+# 从指定网页提取结构化字段
 @tool(args_schema=WebExtractInput)
 # 执行 web extract 对应的业务逻辑
 def web_extract(url: str, fields: list[str]) -> str:
-    """从网页列表或表格中提取结构化字段。"""
+    """从网页列表或表格中提取结构化字段"""
     try:
         return json.dumps({"items": extract_structured_items(_fetch_safe_html(url), fields)}, ensure_ascii=False)
     except Exception as exc:

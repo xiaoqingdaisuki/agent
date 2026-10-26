@@ -1,10 +1,12 @@
+/** 验证 profile/test_profile 对应模块的行为与边界条件 */
+
 import { describe, it, expect } from "vitest";
 
-// ============ Profile Service Tests ============
+// ============ 用户画像服务测试 ============
 
 describe("ProfileService", () => {
   it("should create profile with defaults", () => {
-    // Simulate getOrCreate
+    // 模拟 getOrCreate 的创建或读取行为
     const profiles = new Map<string, any>();
     const create = (id: string, name = "") => {
       if (!profiles.has(id)) {
@@ -34,7 +36,7 @@ describe("ProfileService", () => {
   });
 });
 
-// ============ Memory Service Tests ============
+// ============ 长期记忆服务测试 ============
 
 describe("MemoryService", () => {
   const memories: any[] = [];
@@ -97,7 +99,7 @@ describe("MemoryService", () => {
   });
 });
 
-// ============ Memory Extraction Tests ============
+// ============ 记忆提取测试 ============
 
 describe("Memory extraction rules", () => {
   const extractPreferences = (message: string) => {
@@ -160,7 +162,7 @@ describe("Memory extraction rules", () => {
   });
 });
 
-// ============ History Service Tests ============
+// ============ 历史记录服务测试 ============
 
 describe("HistoryService", () => {
   const records: any[] = [];

@@ -1,3 +1,5 @@
+"""加载环境配置并校验模型、网关及运行参数"""
+
 from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator
@@ -72,7 +74,7 @@ class Settings(BaseSettings):
 
     @field_validator("openai_base_url")
     @classmethod
-    # 规范化 OpenAI 兼容网关根地址，避免 SDK 请求根路径而得到 404。
+    # 规范化 OpenAI 兼容网关根地址，避免 SDK 请求根路径而得到 404
     def normalize_openai_base_url(cls, value: str | None) -> str | None:
         if not value:
             return value
@@ -81,7 +83,7 @@ class Settings(BaseSettings):
 
     @field_validator("agent_deadline_ms", "agent_deadline_with_tools_ms")
     @classmethod
-    # 限制模型总预算，为代理和路由的终态持久化预留至少五十秒。
+    # 限制模型总预算，为代理和路由的终态持久化预留至少五十秒
     def cap_agent_deadline(cls, value: int) -> int:
         return min(value, 240000)
 

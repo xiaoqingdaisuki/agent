@@ -1,4 +1,4 @@
-"""有界文档解析器，支持文本、PDF 和 DOCX。"""
+"""有界文档解析器，支持文本、PDF 和 DOCX"""
 
 from __future__ import annotations
 
@@ -21,16 +21,16 @@ SESSION_DOCUMENT_JSON_MAX_BYTES = 5_000_000
 
 
 class DocumentParseError(ValueError):
-    """表示用户上传文档无法通过格式、大小或正文校验。"""
+    """表示用户上传文档无法通过格式、大小或正文校验"""
 
-    # 初始化文档解析错误及其对外 HTTP 状态。
+    # 初始化文档解析错误及其对外 HTTP 状态
     def __init__(self, code: str, message: str, status_code: int):
         self.code = code
         self.status_code = status_code
         super().__init__(message)
 
 
-# 将文本正文切分为有界的临时上下文段落。
+# 将文本正文切分为有界的临时上下文段落
 def _build_parts(content: str, page: int | None = None) -> list[dict[str, Any]]:
     normalized = content.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not normalized:
@@ -51,7 +51,7 @@ def _build_parts(content: str, page: int | None = None) -> list[dict[str, Any]]:
     ]
 
 
-# 从 PDF 每一页提取文本并保留页码。
+# 从 PDF 每一页提取文本并保留页码
 def _parse_pdf(buffer: bytes) -> list[dict[str, Any]]:
     try:
         reader = PdfReader(io.BytesIO(buffer))
@@ -72,7 +72,7 @@ def _parse_pdf(buffer: bytes) -> list[dict[str, Any]]:
         raise DocumentParseError("SESSION_DOCUMENT_PARSE_FAILED", "PDF 文档解析失败", 422) from error
 
 
-# 从 DOCX 段落和表格中提取可检索文本。
+# 从 DOCX 段落和表格中提取可检索文本
 def _parse_docx(buffer: bytes) -> list[dict[str, Any]]:
     try:
         document = DocxDocument(io.BytesIO(buffer))
@@ -87,7 +87,7 @@ def _parse_docx(buffer: bytes) -> list[dict[str, Any]]:
         raise DocumentParseError("SESSION_DOCUMENT_PARSE_FAILED", "DOCX 文档解析失败", 422) from error
 
 
-# 解析上传文档，返回与两套 Agent API 共用的会话文档结构。
+# 解析上传文档，返回与两套 Agent API 共用的会话文档结构
 def parse_document(file_content: bytes, filename: str, mime_type: str = "application/octet-stream") -> dict[str, Any]:
     if len(file_content) > SESSION_DOCUMENT_MAX_BYTES:
         raise DocumentParseError("SESSION_DOCUMENT_TOO_LARGE", "临时文档不能超过 2.5MB", 413)
@@ -129,7 +129,7 @@ def parse_document(file_content: bytes, filename: str, mime_type: str = "applica
     }
 
 
-# 将解析后的文档段落拼接为知识库上传正文。
+# 将解析后的文档段落拼接为知识库上传正文
 def document_text(document: dict[str, Any]) -> str:
     return "\n\n".join(
         str(part.get("content") or "").strip()

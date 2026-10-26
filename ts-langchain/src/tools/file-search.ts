@@ -1,7 +1,7 @@
 /**
  * file.search — 用户文件内容检索
  *
- * 通过文档向量索引先定位相关文件片段，并保留文件标识、文件名和位置。
+ * 通过文档向量索引先定位相关文件片段，并保留文件标识、文件名和位置
  */
 
 import { DynamicStructuredTool } from "@langchain/core/tools";
@@ -33,12 +33,13 @@ export const fileSearchDescriptor: ToolDescriptor = {
   input_schema: fileSearchInputSchema,
 };
 
-// 将文档搜索结果转换为 file.search 的稳定 JSON 输出。
+// 将文档搜索结果转换为 file.search 的稳定 JSON 输出
 function formatFileSearchResults(
   results: Array<{ document_id: string; document_name?: string; chunk_index?: number; content: string; degraded?: boolean }>,
   degraded: boolean,
 ): string {
   return JSON.stringify({
+    // 将知识片段转换为文件搜索结果结构
     results: results.map((result) => ({
       file_id: result.document_id,
       filename: result.document_name ?? "",
@@ -55,6 +56,7 @@ export const fileSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
   description:
     "搜索当前用户文件中的相关内容，返回文件 ID、文件名、位置和原文片段。大型文件应先搜索再读取。",
   schema: fileSearchInputSchema,
+  // 校验可信用户身份并检索指定文件范围内的片段
   func: async ({ query, file_ids, top_k }) => {
     const userId = getToolCallContext()?.user_id;
     if (!userId) {
@@ -62,7 +64,7 @@ export const fileSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
     }
 
     try {
-      // 延迟加载避免与 services / tools 形成循环依赖。
+      // 延迟加载避免与 services / tools 形成循环依赖
       const { KnowledgeService } = await import("../services/index.js");
       const results = await KnowledgeService.search(
         query,
@@ -70,6 +72,7 @@ export const fileSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
         userId,
         file_ids?.length ? file_ids : undefined,
       );
+      // 检测文件搜索结果是否发生降级
       const degraded = results.some((r) => r.degraded);
       return formatFileSearchResults(results, degraded);
     } catch (error) {

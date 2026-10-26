@@ -1,8 +1,8 @@
 """
 memory.session — 会话记忆管理
 
-提供当前会话/对话的上下文检索能力。
-统一通过 Repository 层访问当前配置的存储后端。
+提供当前会话/对话的上下文检索能力
+统一通过 Repository 层访问当前配置的存储后端
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from src.tools.contracts import (
 from src.repositories import get_repositories
 
 
-# ============ Tool Descriptor ==========
+# ============ 工具描述符 ==========
 
 _SESSION_DESCRIPTOR = ToolDescriptor(
     name="memory.session.search",
@@ -39,7 +39,7 @@ _SESSION_DESCRIPTOR = ToolDescriptor(
 )
 
 
-# ============ LangChain Tool ==========
+# ============ LangChain 工具封装 ==========
 
 
 class SessionSearchInput(BaseModel):
@@ -57,7 +57,7 @@ def memory_session_search(
     max_results: int = 5,
     runtime: Any = None,
 ) -> str:
-    """在当前会话中搜索之前的对话内容。当需要回顾用户之前说过的话或查找之前的回答时使用。"""
+    """在当前会话中搜索之前的对话内容。当需要回顾用户之前说过的话或查找之前的回答时使用"""
     scoped_conversation_id = conversation_id
     if runtime is not None:
         thread_id = runtime.config.get("configurable", {}).get("thread_id")

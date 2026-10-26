@@ -1,3 +1,5 @@
+/** 验证 config/test_config 对应模块的行为与边界条件 */
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 describe("配置契约", () => {

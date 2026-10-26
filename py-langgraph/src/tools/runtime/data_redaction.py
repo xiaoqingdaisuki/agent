@@ -40,7 +40,7 @@ _SENSITIVE_KEYS = frozenset(
 
 # 执行 redact structured data 对应的业务逻辑
 def redact_structured_data(data):
-    """对结构化数据递归脱敏 — 按 key 过滤 + 字符串值内容级脱敏。"""
+    """对结构化数据递归脱敏 — 按 key 过滤 + 字符串值内容级脱敏"""
     if data is None or isinstance(data, (bool, int, float)):
         return data
 
@@ -67,7 +67,7 @@ def redact_structured_data(data):
 # ============ 内容级脱敏 ============
 
 
-# 仅遮蔽具有 JSON 头部和载荷的 JWT，保留普通域名和版本号。
+# 仅遮蔽具有 JSON 头部和载荷的 JWT，保留普通域名和版本号
 def _redact_jwt_candidate(match: re.Match[str]) -> str:
     candidate = match.group(0)
     try:
@@ -90,31 +90,31 @@ def _redact_jwt_candidate(match: re.Match[str]) -> str:
 
 
 _CONTENT_REDACTION_RULES: list[tuple[str, re.Pattern, str | Callable[[re.Match[str]], str]]] = [
-    # Bearer tokens
+    # Bearer 认证令牌
     (
         "bearer_token",
         re.compile(r"(Bearer\s+)[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE),
         r"\1[REDACTED]",
     ),
-    # Authorization headers
+    # Authorization 认证请求头
     (
         "auth_header",
         re.compile(r"(Authorization:[ \t]*)[^\r\n,;]+", re.IGNORECASE),
         r"\1[REDACTED]",
     ),
-    # Long hex strings (64+ chars) — likely API keys
+    # 长度不少于 64 字符的十六进制字符串可能是 API 密钥
     (
         "hex_api_key",
         re.compile(r"\b[a-f0-9]{64,}\b", re.IGNORECASE),
         "[REDACTED]",
     ),
-    # JWT tokens
+    # JWT 认证令牌
     (
         "jwt",
         re.compile(r"[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*"),
         _redact_jwt_candidate,
     ),
-    # Private keys
+    # 私钥内容
     (
         "private_key",
         re.compile(
@@ -124,13 +124,13 @@ _CONTENT_REDACTION_RULES: list[tuple[str, re.Pattern, str | Callable[[re.Match[s
         ),
         "[REDACTED]",
     ),
-    # AWS-style keys
+    # AWS 格式访问密钥
     (
         "aws_key",
         re.compile(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b"),
         "[REDACTED]",
     ),
-    # Internal file paths
+    # 内部文件路径
     (
         "server_path",
         re.compile(
@@ -139,13 +139,13 @@ _CONTENT_REDACTION_RULES: list[tuple[str, re.Pattern, str | Callable[[re.Match[s
         ),
         "[INTERNAL_PATH]",
     ),
-    # Email addresses
+    # 电子邮箱地址
     (
         "email",
         re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"),
         "[REDACTED_EMAIL]",
     ),
-    # Internal IP ranges
+    # 内部 IP 地址范围
     (
         "internal_ip",
         re.compile(
@@ -155,7 +155,7 @@ _CONTENT_REDACTION_RULES: list[tuple[str, re.Pattern, str | Callable[[re.Match[s
         ),
         "[REDACTED_IP]",
     ),
-    # Inline password patterns
+    # 行内密码格式
     (
         "password_inline",
         re.compile(
@@ -169,7 +169,7 @@ _CONTENT_REDACTION_RULES: list[tuple[str, re.Pattern, str | Callable[[re.Match[s
 
 # 执行 redact text content 对应的业务逻辑
 def redact_text_content(text: str) -> str:
-    """对纯文本内容做内容级脱敏。"""
+    """对纯文本内容做内容级脱敏"""
     result = text
     for _name, pattern, replacement in _CONTENT_REDACTION_RULES:
         result = pattern.sub(replacement, result)
@@ -178,7 +178,7 @@ def redact_text_content(text: str) -> str:
 
 # 执行 redact data 对应的业务逻辑
 def redact_data(data):
-    """对任意类型数据做脱敏：结构化按 key 过滤 + 文本内容正则脱敏。"""
+    """对任意类型数据做脱敏：结构化按 key 过滤 + 文本内容正则脱敏"""
     if isinstance(data, str):
         return redact_text_content(data)
     return redact_structured_data(data)

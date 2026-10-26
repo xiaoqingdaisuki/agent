@@ -1,4 +1,4 @@
-"""V2 工具注册、路由边界和对话式调用测试。"""
+"""V2 工具注册、路由边界和对话式调用测试"""
 
 import json
 
@@ -27,7 +27,7 @@ V2_DESCRIPTOR_NAMES = {
 
 
 async def test_v2_registers_all_descriptors_but_hides_write_tools_by_default():
-    """默认 Agent 只暴露成员可执行的只读工具。"""
+    """默认 Agent 只暴露成员可执行的只读工具"""
     descriptor_names = {descriptor.name for descriptor in get_registry().get_descriptors()}
     assert V2_DESCRIPTOR_NAMES <= descriptor_names
     expected_count = 14 if "knowledge.search" in descriptor_names else 13
@@ -37,7 +37,7 @@ async def test_v2_registers_all_descriptors_but_hides_write_tools_by_default():
 
 
 async def test_current_time_returns_requested_timezone():
-    """当前时间工具应返回带偏移的日期时间和英文星期。"""
+    """当前时间工具应返回带偏移的日期时间和英文星期"""
     result = json.loads(await get_current_time.ainvoke({"timezone": "Asia/Shanghai"}))
     assert result["timezone"] == "Asia/Shanghai"
     assert result["datetime"].endswith("+08:00")
@@ -45,7 +45,7 @@ async def test_current_time_returns_requested_timezone():
 
 
 async def test_timezone_conversion_handles_dst():
-    """时区转换应正确处理纽约夏令时。"""
+    """时区转换应正确处理纽约夏令时"""
     result = json.loads(await convert_timezone.ainvoke({
         "datetime": "2026-08-21T15:00:00",
         "from_timezone": "Asia/Shanghai",
@@ -55,7 +55,7 @@ async def test_timezone_conversion_handles_dst():
 
 
 def test_web_extract_parses_repeated_product_cards():
-    """网页提取器应能从重复卡片中提取请求字段。"""
+    """网页提取器应能从重复卡片中提取请求字段"""
     html = (
         '<div class="product"><span class="name">Product A</span>'
         '<span class="price">99</span><span class="rating">4.8</span></div>'
@@ -69,7 +69,7 @@ def test_web_extract_parses_repeated_product_cards():
 
 
 async def test_dialogue_routes_current_time_to_the_dedicated_tool(monkeypatch):
-    """模拟一轮对话，确认“现在几点”会进入 time.current 工具链。"""
+    """模拟一轮对话，确认“现在几点”会进入 time.current 工具链"""
 
     class ToolCapableFakeModel(FakeMessagesListChatModel):
         bound_tool_names: list[str] = []
@@ -107,13 +107,13 @@ async def test_dialogue_routes_current_time_to_the_dedicated_tool(monkeypatch):
 
 
 async def test_file_search_requires_trusted_user_context():
-    """文件搜索不能接受模型伪造的用户身份，必须依赖运行时上下文。"""
+    """文件搜索不能接受模型伪造的用户身份，必须依赖运行时上下文"""
     result = await file_search.ainvoke({"query": "违约责任", "file_ids": ["file_123"]})
     assert "可信用户上下文" in json.loads(result)["error"]
 
 
 async def test_memory_list_delete_dialogue_flow():
-    """记忆应通过保存→列表定位 ID→按精确 ID 删除完成闭环。"""
+    """记忆应通过保存→列表定位 ID→按精确 ID 删除完成闭环"""
     user_id = "v2-memory-user"
     await memory_user_save.ainvoke({"user_id": user_id, "content": "用户偏好简洁回答", "category": "preference"})
     context = create_tool_call_context(user_id, "v2-memory-conversation", roles=["admin"])

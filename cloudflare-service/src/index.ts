@@ -56,7 +56,7 @@ app.use("*", async (c, next) => {
 
 app.use("*", requestLogMiddleware);
 
-// CORS
+// 跨域请求配置
 app.use("*", cors({
   origin: "*",
   allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -116,6 +116,6 @@ export async function scheduled(event: ScheduledEvent, env: GatewayEnv) {
 
 }
 
-// 在保留 Hono 测试接口的同时，让默认导出暴露 Cron handler。
+// 在保留 Hono 测试接口的同时，让默认导出暴露 Cron handler
 Object.assign(app, { scheduled });
 export default app;

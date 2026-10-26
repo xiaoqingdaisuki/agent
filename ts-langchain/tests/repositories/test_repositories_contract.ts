@@ -2,13 +2,13 @@
  * Repository Contract Test — 验证 Repository 层接口契约
  *
  * 对 CloudflareRepositories 运行完整 CRUD 测试，
- * 通过 mock CloudflareMemoryClient 避免真实 HTTP 请求。
+ * 通过 mock CloudflareMemoryClient 避免真实 HTTP 请求
  */
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { getRepositories, inMemoryRepositories } from "../../src/repositories/index.js";
 
-// ============ Mock CloudflareMemoryClient ============
+// ============ 模拟 CloudflareMemoryClient 客户端 ============
 
 const mockProfiles = new Map<string, any>();
 const mockConversations = new Map<string, any>();
@@ -25,7 +25,7 @@ function resetMocks() {
 }
 
 const mockCloudflareClient = {
-  // Profile
+  // 用户画像
   putProfile: vi.fn(async (userId: string, name: string = "", preferences?: any) => {
     const now = new Date().toISOString();
     if (!mockProfiles.has(userId)) {
@@ -50,7 +50,7 @@ const mockCloudflareClient = {
     return profile ? { ...profile } : null;
   }),
 
-  // Conversation
+  // 会话
   createConversation: vi.fn(async (userId: string, title: string, mode: string = "chat") => {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -78,7 +78,7 @@ const mockCloudflareClient = {
     return true;
   }),
 
-  // Message
+  // 消息
   createMessagesBatch: vi.fn(async (convId: string, userId: string, messages: any[]) => {
     const existing = mockMessages.get(convId) || [];
     const keys = new Set(existing.map((m: any) => m.sequence_no));
@@ -105,14 +105,14 @@ const mockCloudflareClient = {
     mockMessages.delete(convId);
   }),
 
-  // Memory
+  // 长期记忆
   saveMemory: vi.fn(async (userId: string, memoryId: string, content: string, category: string = "fact",
     importance: number = 3, source: string = "user_explicit",
     sourceConversationId?: string, idempotencyKey?: string) => {
     const normalized = content.trim().toLowerCase();
     const saved = mockSavedContents.get(userId) || new Set<string>();
 
-    // Deduplicate
+    // 按内容去重
     if (saved.has(normalized)) {
       const existing = mockMemories.get(userId) || [];
       const found = existing.find((m: any) => m.status !== "deleted" && m.normalized_content === normalized);
@@ -213,7 +213,7 @@ const mockCloudflareClient = {
   }),
 };
 
-// Mock the module
+// 替换模块为模拟实现
 vi.mock("../../src/clients/memory_gateway", () => ({
   CloudflareMemoryClient: vi.fn(() => mockCloudflareClient),
   MemoryGatewayError: class extends Error {
@@ -225,7 +225,7 @@ vi.mock("../../src/clients/memory_gateway", () => ({
   },
 }));
 
-// ============ Tests ============
+// ============ 测试用例 ============
 
 describe("Repository Contract — CloudflareRepositories", () => {
   let repos: ReturnType<typeof getRepositories>;
@@ -235,7 +235,7 @@ describe("Repository Contract — CloudflareRepositories", () => {
     repos = getRepositories();
   });
 
-  // ============ Profile ============
+  // ============ 用户画像 ============
 
   describe("ProfileRepository", () => {
     it("getOrCreate creates profile with defaults", async () => {
@@ -274,7 +274,7 @@ describe("Repository Contract — CloudflareRepositories", () => {
     });
   });
 
-  // ============ Conversation ============
+  // ============ 会话 ============
 
   describe("ConversationRepository", () => {
     it("create returns conversation with generated id", async () => {
@@ -336,7 +336,7 @@ describe("Repository Contract — CloudflareRepositories", () => {
     });
   });
 
-  // ============ Message ============
+  // ============ 消息 ============
 
   describe("MessageRepository", () => {
     it("createBatch stores messages", async () => {
@@ -357,7 +357,7 @@ describe("Repository Contract — CloudflareRepositories", () => {
       const msg = { id: "msg1", conversation_id: conv.id, user_id: "idem-user", sequence_no: 0, role: "user" as const, content_json: "Hello", created_at: new Date().toISOString() };
 
       await repos.message.createBatch(conv.id, "idem-user", [msg]);
-      await repos.message.createBatch(conv.id, "idem-user", [msg]); // duplicate
+      await repos.message.createBatch(conv.id, "idem-user", [msg]); // 重复内容
 
       const result = await repos.message.getMessages(conv.id);
       expect(result.messages.length).toBe(1);
@@ -393,7 +393,7 @@ describe("Repository Contract — CloudflareRepositories", () => {
     });
   });
 
-  // ============ Memory ============
+  // ============ 长期记忆 ============
 
   describe("MemoryRepository", () => {
     it("save creates a new memory with given id", async () => {

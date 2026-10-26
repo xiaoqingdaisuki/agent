@@ -1,8 +1,8 @@
 /**
  * AuditLogRepository — 审计日志仓储
  *
- * 记录所有工具调用的审计信息，用于合规 + 排障。
- * 由 ts-langchain / py-langgraph 的 tool runtime 上报。
+ * 记录所有工具调用的审计信息，用于合规 + 排障
+ * 由 ts-langchain / py-langgraph 的 tool runtime 上报
  */
 
 // ============ 类型定义 ==========
@@ -23,12 +23,9 @@ export interface AuditLogEntry {
   created_at: string;
 }
 
-// ============ CRUD ==========
+// ============ 数据增删改查 ==========
 
-/**
- * 批量写入审计日志
- */
-// 创建或注册 createAuditLogs 所需的数据
+// 批量写入审计日志
 export async function createAuditLogs(
   db: D1Database,
   entries: Array<{
@@ -75,10 +72,7 @@ export async function createAuditLogs(
   }
 }
 
-/**
- * 查询用户的审计日志（分页）
- */
-// 获取 getAuditLogs 对应的数据
+// 查询用户的审计日志（分页）
 export async function getAuditLogs(
   db: D1Database,
   userId: string,
@@ -106,10 +100,7 @@ export async function getAuditLogs(
   };
 }
 
-/**
- * 清空用户的审计日志
- */
-// 删除或清理 clearAuditLogs 对应的数据
+// 清空用户的审计日志
 export async function clearAuditLogs(db: D1Database, userId: string): Promise<number> {
   await db
     .prepare(`DELETE FROM audit_logs WHERE user_id = ?`)

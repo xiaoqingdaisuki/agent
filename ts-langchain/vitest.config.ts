@@ -1,3 +1,5 @@
+/** 配置 Vitest 测试环境、初始化文件及测试执行选项 */
+
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -10,6 +12,6 @@ export default defineConfig({
       reporter: ["text", "json"],
     },
   },
-  // Use tsconfig.tests.json for type checking (includes tests/ + src/)
+  // 使用 tsconfig.tests.json 对 tests/ 和 src/ 执行类型检查
   tsconfig: "./tsconfig.tests.json",
 });

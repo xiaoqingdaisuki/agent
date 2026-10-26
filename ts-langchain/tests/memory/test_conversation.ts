@@ -1,3 +1,5 @@
+/** 验证 memory/test_conversation 对应模块的行为与边界条件 */
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 

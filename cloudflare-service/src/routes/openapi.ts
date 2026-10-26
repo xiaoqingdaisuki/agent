@@ -6,7 +6,7 @@
  * 替代 contracts/memory/gateway.openapi.yaml
  *
  * 该规范是 Gateway API 的单一事实来源，
- * SDK 可在构建时拉取此端点进行契约校验。
+ * SDK 可在构建时拉取此端点进行契约校验
  */
 
 import { z } from "zod";
@@ -27,14 +27,8 @@ import {
 
 // ============ Schema 引用辅助函数 ==========
 
-/**
- * 将 Zod schema 转换为 OpenAPI Schema Object
- * 基于 Zod 4 API
- */
-/**
- * 将 Zod Schema 实例属性提取为 OpenAPI 约束条件（Zod 4 兼容）
- */
-// 获取 getStringConstraints 对应的数据
+// 将 Zod schema 转换为 OpenAPI Schema Object；基于 Zod 4 API
+// 将 Zod Schema 实例属性提取为 OpenAPI 约束条件（Zod 4 兼容）
 function getStringConstraints(schema: any): Record<string, unknown> {
   const constraints: Record<string, unknown> = {};
   if (schema.minLength != null) constraints.minLength = schema.minLength;
@@ -42,10 +36,7 @@ function getStringConstraints(schema: any): Record<string, unknown> {
   return constraints;
 }
 
-/**
- * 将 Zod Schema 实例的数字约束提取为 OpenAPI 约束条件（Zod 4 兼容）
- */
-// 获取 getNumberConstraints 对应的数据
+// 将 Zod Schema 实例的数字约束提取为 OpenAPI 约束条件（Zod 4 兼容）
 function getNumberConstraints(schema: any): Record<string, unknown> {
   const constraints: Record<string, unknown> = {};
   if (schema.isInt) constraints.type = "integer";
@@ -54,24 +45,17 @@ function getNumberConstraints(schema: any): Record<string, unknown> {
   return constraints;
 }
 
-/**
- * 获取 Zod schema 内部类型标识（Zod 4: _def.type / Zod 3: _def.typeName）
- */
-// 获取 getSchemaType 对应的数据
+// 获取 Zod schema 内部类型标识（Zod 4: _def.type / Zod 3: _def.typeName）
 function getSchemaType(schema: any): string {
   return schema._def?.type || "";
 }
 
-/**
- * 将 Zod Schema 转换为 OpenAPI Schema Object
- * 适配 Zod 4 内部 API（_def.type 替代 _def.typeName，实例属性替代 checks[].kind）
- */
-// 执行 zodToOpenApi 对应的业务逻辑
+// 将 Zod Schema 转换为 OpenAPI Schema Object；适配 Zod 4 内部 API（_def.type 替代 _def.typeName，实例属性替代 checks[].kind）
 function zodToOpenApi(schema: z.ZodTypeAny): Record<string, unknown> {
   const anySchema = schema as any;
   const type = getSchemaType(anySchema);
 
-  // String
+  // 字符串类型
   if (type === "string") {
     const result: Record<string, unknown> = { type: "string" };
     Object.assign(result, getStringConstraints(anySchema));
@@ -86,19 +70,19 @@ function zodToOpenApi(schema: z.ZodTypeAny): Record<string, unknown> {
     return result;
   }
 
-  // Number
+  // 数值类型
   if (type === "number") {
     const result: Record<string, unknown> = { type: "number" };
     Object.assign(result, getNumberConstraints(anySchema));
     return result;
   }
 
-  // Boolean
+  // 布尔类型
   if (type === "boolean") {
     return { type: "boolean" };
   }
 
-  // Array
+  // 数组类型
   if (type === "array") {
     return {
       type: "array",
@@ -106,27 +90,27 @@ function zodToOpenApi(schema: z.ZodTypeAny): Record<string, unknown> {
     };
   }
 
-  // Optional
+  // 可选字段
   if (type === "optional") {
     return zodToOpenApi((anySchema._def?.innerType as z.ZodTypeAny) || z.unknown() as any);
   }
 
-  // Default
+  // 默认值
   if (type === "default") {
     return zodToOpenApi((anySchema._def?.innerType as z.ZodTypeAny) || z.unknown() as any);
   }
 
-  // Nullable
+  // 可空字段
   if (type === "nullable") {
     return zodToOpenApi((anySchema._def?.innerType as z.ZodTypeAny) || z.unknown() as any);
   }
 
-  // Enum
+  // 枚举类型
   if (type === "enum") {
     return { type: "string", enum: Object.values(anySchema._def?.entries || {}) };
   }
 
-  // Object
+  // 对象类型
   if (type === "object") {
     const shape = anySchema._def?.shape || {};
     const properties: Record<string, unknown> = {};
@@ -143,13 +127,14 @@ function zodToOpenApi(schema: z.ZodTypeAny): Record<string, unknown> {
     return { type: "object", properties, required };
   }
 
-  // Record
+  // 键值映射类型
   if (type === "record") {
     return { type: "object", additionalProperties: {} };
   }
 
-  // Union
+  // 联合类型
   if (type === "union") {
+    // 递归转换联合类型的各个候选 Schema
     const options = (anySchema._def?.options || []).map((o: any) => zodToOpenApi(o));
     return options.length === 1 ? options[0] : { oneOf: options };
   }
@@ -817,6 +802,7 @@ function getOpenApiSpec(): Record<string, unknown> {
 
 // 创建或注册 registerOpenApiRoute 所需的数据
 export function registerOpenApiRoute(app: any) {
+  // 返回内部网关的 OpenAPI 接口定义
   app.get("/v1/internal/openapi.json", async (c: any) => {
     const spec = getOpenApiSpec();
     return c.json(spec);

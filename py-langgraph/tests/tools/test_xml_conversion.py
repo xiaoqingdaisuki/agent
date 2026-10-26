@@ -1,8 +1,8 @@
-"""Test XML tool call conversion - pytest compatible"""
+"""验证 XML 工具调用转换并保持 pytest 兼容"""
 import os
 import sys
 
-# Ensure src is importable
+# 确保 src 包可以正常导入
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 os.chdir(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage
 
 from src.agents.graph_agents import _convert_xml_tool_calls
 
-# Build XML content using string concat to avoid literal XML patterns
+# 通过字符串拼接构造 XML 内容以避免直接出现完整 XML 模式
 F_OPEN = chr(60) + "function=get_weather>"       # <
 F_CLOSE = chr(60) + "/function>"                 # </>
 P_OPEN = chr(60) + "parameter=city>"             # <
@@ -23,7 +23,7 @@ DOTS_CLOSE = chr(60) + "/search></dots_function_call>"
 
 
 def test_convert_xml_tool_calls():
-    """XML format tool calls should be converted to standard AIMessage.tool_calls"""
+    """验证 XML 工具调用转换为标准 AIMessage.tool_calls"""
     xml_content = F_OPEN + "\n" + P_OPEN + "\n北京\n" + P_CLOSE + "\n" + F_CLOSE
     msg = AIMessage(content=xml_content)
     result = _convert_xml_tool_calls(msg)
@@ -36,7 +36,7 @@ def test_convert_xml_tool_calls():
 
 
 def test_non_xml_unchanged():
-    """Non-XML messages should pass through unchanged"""
+    """验证非 XML 消息原样通过"""
     msg = AIMessage(content="Hello world")
     result = _convert_xml_tool_calls(msg)
     assert result.content == "Hello world"
@@ -44,7 +44,7 @@ def test_non_xml_unchanged():
 
 
 def test_native_tool_calls_take_priority_over_dots_xml():
-    """Native calls must not be replaced or duplicated by XML fallback calls."""
+    """验证 XML 回退调用不会替换或重复原生工具调用"""
     msg = AIMessage(
         content=(
             "已准备查询。"
@@ -75,7 +75,7 @@ def test_native_tool_calls_take_priority_over_dots_xml():
 
 
 def test_already_standard_tool_calls():
-    """Messages with standard tool_calls should pass through"""
+    """验证包含标准 tool_calls 的消息直接通过"""
     msg = AIMessage(
         content="",
         tool_calls=[{"name": "test", "args": {}, "id": "call_1"}],
@@ -85,7 +85,7 @@ def test_already_standard_tool_calls():
 
 
 def test_multiple_xml_calls():
-    """Multiple XML tool calls should all be converted"""
+    """验证多个 XML 工具调用全部完成转换"""
     xml = (
         F_OPEN + "\n" + P_OPEN + "\nBeijing\n" + P_CLOSE + "\n" + F_CLOSE + "\n"
         + F_OPEN + "\n" + P_OPEN + "\nhello\n" + P_CLOSE + "\n" + F_CLOSE
@@ -100,7 +100,7 @@ def test_multiple_xml_calls():
 
 
 def test_invoke_name_xml_tool_call():
-    """Provider invoke/name XML calls should be converted and removed from content."""
+    """验证模型服务的 invoke/name XML 调用转换后从正文中移除"""
     xml_content = (
         INVOKE_OPEN
         + "\n"
@@ -124,7 +124,7 @@ def test_invoke_name_xml_tool_call():
 
 
 def test_invoke_name_xml_normalizes_descriptor_tool_name():
-    """Descriptor names must resolve to the actual registered LangGraph tool."""
+    """验证描述符名称解析为实际注册的 LangGraph 工具"""
     xml_content = (
         '<invoke name="web.search">'
         '<parameter name="query">南山美食</parameter>'
@@ -143,7 +143,7 @@ def test_invoke_name_xml_normalizes_descriptor_tool_name():
 
 
 def test_dots_function_search_calls_are_converted_and_removed():
-    """dots function call envelopes should become web search tool calls."""
+    """验证 dots 函数调用封装转换为网页搜索工具调用"""
     xml_content = (
         DOTS_OPEN
         + "<query>深圳南山区 2026年8月天气游玩</query>"

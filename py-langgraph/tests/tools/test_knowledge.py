@@ -1,6 +1,4 @@
-"""
-Tests for knowledge.search Tool
-"""
+"""验证 knowledge.search 知识库检索工具"""
 
 import pytest
 from src.tools.knowledge import knowledge_search, _DESCRIPTOR, KnowledgeHit, hits_to_text

@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import type { ToolDescriptor } from "./contracts.js";
 
-// ============ WMO Weather Codes ============
+// ============ WMO 天气代码映射 ============
 
 const WEATHER_CODES: Record<number, string> = {
   0: "晴朗",
@@ -36,7 +36,7 @@ const WEATHER_CODES: Record<number, string> = {
   99: "雷暴伴大冰雹",
 };
 
-// ============ Tool Descriptor ============
+// ============ 工具描述符 ============
 
 export const weatherInputSchema = z.object({
   city: z
@@ -70,13 +70,14 @@ export const weatherDescriptor: ToolDescriptor = {
   input_schema: weatherInputSchema,
 };
 
-// ============ LangChain Tool ============
+// ============ LangChain 工具封装 ============
 
 export const weatherTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "get_weather",
   description:
     "【天气查询工具】查询指定城市的实时天气及未来 7 天天气预报。用户问天气、气温、下雨、下雪、冷不冷、热不热、未来几天天气时，必须先调用此工具。优先通过 Open-Meteo 获取，如果失败再用 web.search 搜索。",
   schema: weatherInputSchema,
+  // 校验城市并查询天气预报及备用数据源
   func: async ({ city, days = 7 }) => {
     const signal = AbortSignal.timeout(10000);
     // 尝试 Open-Meteo

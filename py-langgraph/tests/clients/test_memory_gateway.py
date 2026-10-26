@@ -1,4 +1,4 @@
-"""Cloudflare Memory Gateway 客户端契约测试。"""
+"""Cloudflare Memory Gateway 客户端契约测试"""
 
 import httpx
 import pytest
@@ -9,7 +9,7 @@ from src.repositories import _run_sync
 
 @pytest.mark.asyncio
 async def test_sync_repository_calls_reuse_one_event_loop():
-    """同步仓储适配器必须在固定事件循环中复用异步 HTTP 客户端。"""
+    """同步仓储适配器必须在固定事件循环中复用异步 HTTP 客户端"""
 
     async def current_loop_id() -> int:
         import asyncio
@@ -21,7 +21,7 @@ async def test_sync_repository_calls_reuse_one_event_loop():
 
 @pytest.mark.asyncio
 async def test_preserves_gateway_not_found_codes():
-    """404 必须保留网关错误码，供各资源的缺失分支识别。"""
+    """404 必须保留网关错误码，供各资源的缺失分支识别"""
     error_codes = {
         "/v1/internal/users/missing/profile": "MEMORY_USER_NOT_FOUND",
         "/v1/internal/conversations/missing": "MEMORY_CONVERSATION_NOT_FOUND",
@@ -117,7 +117,7 @@ async def test_maps_exhausted_transport_failures(error_type, expected_code, expe
 
 @pytest.mark.asyncio
 async def test_encodes_identifiers_as_single_path_segments():
-    """用户输入中的斜杠不得改变网关路由结构。"""
+    """用户输入中的斜杠不得改变网关路由结构"""
     observed_path = ""
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -146,7 +146,7 @@ async def test_encodes_identifiers_as_single_path_segments():
 
 @pytest.mark.asyncio
 async def test_encodes_document_list_query_parameters():
-    """文档列表中的用户标识不得注入额外查询参数。"""
+    """文档列表中的用户标识不得注入额外查询参数"""
     observed_params: httpx.QueryParams | None = None
 
     async def handler(request: httpx.Request) -> httpx.Response:

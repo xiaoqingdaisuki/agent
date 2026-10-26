@@ -1,3 +1,5 @@
+/** 验证 api/test_session_attachments 对应模块的行为与边界条件 */
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../../src/api/index.js";

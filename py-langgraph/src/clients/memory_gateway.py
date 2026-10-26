@@ -1,9 +1,9 @@
 """
 Cloudflare Service HTTP Client — Cloudflare 长期存储服务客户端
 
-提供与 Cloudflare Service 通信的 HTTP 客户端。
-所有请求通过 Service 进行，Agent 服务不直接持有 Cloudflare API Token。
-所有响应经过 Pydantic 运行时校验，确保数据不偏离契约。
+提供与 Cloudflare Service 通信的 HTTP 客户端
+所有请求通过 Service 进行，Agent 服务不直接持有 Cloudflare API Token
+所有响应经过 Pydantic 运行时校验，确保数据不偏离契约
 """
 
 from __future__ import annotations
@@ -169,7 +169,7 @@ class CloudflareMemoryClient:
             )
         return data
 
-    # ============ Profile ============
+    # ============ 用户画像 ============
 
     # 获取 get profile 对应的数据
     async def get_profile(self, user_id: str) -> dict | None:
@@ -194,7 +194,7 @@ class CloudflareMemoryClient:
         result = await self._request("PUT", f"/v1/internal/users/{_path_segment(user_id)}/profile", body)
         return UserProfileData.model_validate(result["data"]).model_dump()
 
-    # ============ Conversation ============
+    # ============ 会话 ============
 
     # 创建或注册 create conversation 所需的数据
     async def create_conversation(
@@ -245,7 +245,7 @@ class CloudflareMemoryClient:
                 return False
             raise
 
-    # ============ Message ============
+    # ============ 消息 ============
 
     # 创建或注册 create messages batch 所需的数据
     async def create_messages_batch(self, conversation_id: str, user_id: str, messages: list[dict]) -> None:
@@ -272,7 +272,7 @@ class CloudflareMemoryClient:
         """清空会话消息"""
         await self._request("DELETE", f"/v1/internal/conversations/{_path_segment(conversation_id)}/messages")
 
-    # 原子创建或复用客户端消息对应的 Turn。
+    # 原子创建或复用客户端消息对应的 Turn
     async def create_or_get_turn(
         self,
         conversation_id: str,
@@ -289,7 +289,7 @@ class CloudflareMemoryClient:
         raw = result["data"]
         return TurnData.model_validate(raw).model_dump(mode="json"), bool(raw.get("created"))
 
-    # 原子创建 Turn 并保存用户消息。
+    # 原子创建 Turn 并保存用户消息
     async def begin_turn(
         self,
         conversation_id: str,
@@ -318,7 +318,7 @@ class CloudflareMemoryClient:
             bool(raw.get("created")),
         )
 
-    # 原子保存助手消息并完成 Turn。
+    # 原子保存助手消息并完成 Turn
     async def complete_turn(
         self,
         turn_id: str,
@@ -340,7 +340,7 @@ class CloudflareMemoryClient:
         )
         return TurnData.model_validate(result["data"]).model_dump(mode="json")
 
-    # 按用户读取指定 Turn。
+    # 按用户读取指定 Turn
     async def get_turn(self, turn_id: str, user_id: str) -> dict | None:
         try:
             result = await self._request(
@@ -353,7 +353,7 @@ class CloudflareMemoryClient:
                 return None
             raise
 
-    # 按合法状态机更新 Turn。
+    # 按合法状态机更新 Turn
     async def update_turn(self, turn_id: str, user_id: str, **changes) -> dict:
         result = await self._request(
             "PATCH",
@@ -363,7 +363,7 @@ class CloudflareMemoryClient:
         )
         return TurnData.model_validate(result["data"]).model_dump(mode="json")
 
-    # ============ Memory ============
+    # ============ 长期记忆 ============
 
     # 更新或保存 save memory 对应的数据
     async def save_memory(self, user_id: str, memory_id: str, content: str, category: str = "fact", importance: int = 3, source: str = "user_explicit", source_conversation_id: str | None = None) -> dict:
@@ -421,12 +421,12 @@ class CloudflareMemoryClient:
             body["category"] = category
         result = await self._request("POST", f"/v1/internal/users/{_path_segment(user_id)}/memories:search", body)
         data = result.get("data", {})
-        # 兼容旧版 Worker 曾返回的 results 字段。
+        # 兼容旧版 Worker 曾返回的 results 字段
         if "items" not in data and "results" in data:
             data = {**data, "items": data["results"]}
         return SearchResponseData.model_validate(data).model_dump()
 
-    # ============ Document ============
+    # ============ 文档 ============
 
     # 创建或注册 upload document 所需的数据
     async def upload_document(self, user_id: str, filename: str, content: str, file_type: str | None = None, category: str = "general") -> dict:

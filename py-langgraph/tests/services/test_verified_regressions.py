@@ -1,3 +1,5 @@
+"""验证 test_verified_regressions 对应模块的行为与边界条件"""
+
 from src.config.settings import settings
 from src.repositories import InMemoryRepositories
 from src.services import AgentService, ConversationService, KnowledgeService, Message, TurnService, flush_background_tasks

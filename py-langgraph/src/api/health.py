@@ -1,11 +1,11 @@
-"""健康检查与 readiness 状态。"""
+"""健康检查与 readiness 状态"""
 
 from datetime import UTC, datetime
 
 from src.config.settings import settings
 
 
-# 汇总不含秘密的关键依赖配置状态，供 readiness 探针与编排器使用。
+# 汇总不含秘密的关键依赖配置状态，供 readiness 探针与编排器使用
 def get_readiness() -> dict:
     model_ready = bool(
         settings.anthropic_api_key

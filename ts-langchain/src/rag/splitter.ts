@@ -41,15 +41,13 @@ export class TextSplitter {
     this.chunkOverlap = options.chunkOverlap;
   }
 
-  /**
-   * 切分文档内容
-   */
-  // 执行 split 对应的业务逻辑
+  // 切分文档内容
   split(doc: {
     content: string;
     metadata: { source: string; filename: string };
   }): TextChunk[] {
     const chunks = this.splitText(doc.content);
+    // 为切分片段附加序号和文档来源元数据
     return chunks.map((text, index) => ({
       text,
       index,
@@ -62,11 +60,8 @@ export class TextSplitter {
     }));
   }
 
-  /**
-   * 迭代字符切分
-   * 优先按段落（\n\n）切分，其次按句子（\n）切分，最后按字符切分
-   */
-  // 逐个有界窗口选择分隔点，确保重叠后仍向前推进且大文档不耗尽调用栈。
+  // 迭代字符切分；优先按段落（\n\n）切分，其次按句子（\n）切分，最后按字符切分
+  // 逐个有界窗口选择分隔点，确保重叠后仍向前推进且大文档不耗尽调用栈
   private splitText(text: string): string[] {
     const chunks: string[] = [];
     const separators = ["\n\n", "\n", "。", ". ", " "];

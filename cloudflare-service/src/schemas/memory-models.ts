@@ -2,7 +2,7 @@
  * Memory 数据模型 Zod Schemas
  *
  * 替代 contracts/memory/models.schema.json
- * 定义 Gateway API 请求/响应的数据结构，作为 API 契约的唯一事实来源。
+ * 定义 Gateway API 请求/响应的数据结构，作为 API 契约的唯一事实来源
  */
 
 import { z } from "zod";

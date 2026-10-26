@@ -1,7 +1,7 @@
 """
 Pytest fixtures — 全局测试配置
 
-所有测试自动注入 FakeCloudflareMemoryClient，避免真实 HTTP 请求。
+所有测试自动注入 FakeCloudflareMemoryClient，避免真实 HTTP 请求
 """
 
 import time
@@ -12,10 +12,10 @@ from unittest.mock import patch
 import sys
 import os
 
-# 保证测试使用 Cloudflare 客户端替身而不是禁用记忆模式的进程内实现。
+# 保证测试使用 Cloudflare 客户端替身而不是禁用记忆模式的进程内实现
 os.environ["MEMORY_ENABLED"] = "true"
 
-# Ensure the project root is importable so `src` remains a top-level package.
+# 将项目根目录加入导入路径，确保 src 作为顶层包导入
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
@@ -350,7 +350,7 @@ class FakeCloudflareMemoryClient:
         """重置所有状态"""
         self._repos = FakeRepositories()
 
-    # Profile
+    # 用户画像
     async def get_profile(self, user_id: str):
         return self._repos.profile.get(user_id)
 
@@ -359,7 +359,7 @@ class FakeCloudflareMemoryClient:
         now = time.time()
         iso_now = __import__("datetime").datetime.fromtimestamp(now).isoformat()
         if user_id not in self._repos.profile._profiles:
-            # Create new profile
+            # 创建新的用户画像
             self._repos.profile._profiles[user_id] = {
                 "user_id": user_id,
                 "name": name,
@@ -368,19 +368,19 @@ class FakeCloudflareMemoryClient:
                 "updated_at": iso_now,
             }
         else:
-            # Update existing profile (put = upsert)
+            # 更新现有用户画像，put 采用新增或更新语义
             if name:
                 self._repos.profile._profiles[user_id]["name"] = name
             if preferences is not None:
                 self._repos.profile._profiles[user_id]["preferences_json"] = json.dumps(preferences)
-            # Always update timestamp
+            # 每次写入都更新时间戳
             self._repos.profile._profiles[user_id]["updated_at"] = iso_now
         return dict(self._repos.profile._profiles[user_id])
 
     async def update_profile(self, user_id: str, name: str = "", preferences=None):
         return self._repos.profile.update(user_id, name, preferences)
 
-    # Conversation
+    # 会话
     async def create_conversation(
         self,
         user_id: str,
@@ -404,7 +404,7 @@ class FakeCloudflareMemoryClient:
     async def delete_conversation(self, conversation_id: str):
         return self._repos.conversation.delete(conversation_id)
 
-    # Message
+    # 消息
     async def create_messages_batch(self, conversation_id: str, user_id: str, messages: list[dict]):
         formatted = [
             {
@@ -445,7 +445,7 @@ class FakeCloudflareMemoryClient:
     async def update_turn(self, turn_id, user_id, **changes):
         return self._repos.turn.update(turn_id, user_id, **changes)
 
-    # Memory
+    # 长期记忆
     async def save_memory(self, user_id: str, memory_id: str, content: str,
                           category: str = "fact", importance: int = 3,
                           source: str = "user_explicit",
@@ -484,7 +484,7 @@ class FakeCloudflareMemoryClient:
     async def clear_user_memories(self, user_id: str):
         return self._repos.memory.clear_user(user_id)
 
-    # Document
+    # 文档
     async def upload_document(self, user_id: str, filename: str, content: str, file_type: str = None, category: str = "general") -> dict:
         doc_id = f"doc_{hash(filename) % 10**8}"
         return {
@@ -531,7 +531,7 @@ class _FakeClientClass:
 
 @pytest.fixture
 def mock_settings(monkeypatch):
-    """Mock settings to avoid requiring real API keys"""
+    """模拟配置以避免测试依赖真实 API 密钥"""
     import src.config.settings as settings_module
     monkeypatch.setattr(settings_module, "settings", settings_module.Settings(
         openai_api_key="test-key",
@@ -554,11 +554,11 @@ def mock_repositories(monkeypatch):
 
     # 重置 fake client 状态，确保测试隔离
     _fake_client.reset()
-    # 绝大多数服务测试验证的是已 mock 的 Cloudflare 持久化路径，不能受本地 .env 影响。
+    # 绝大多数服务测试验证的是已 mock 的 Cloudflare 持久化路径，不能受本地 .env 影响
     monkeypatch.setattr(settings, "memory_enabled", True)
 
-    # Patch CloudflareMemoryClient at its source module.
-    # get_repositories() does late import: from src.clients.memory_gateway import CloudflareMemoryClient
+    # 在定义模块中替换 CloudflareMemoryClient 为模拟实现
+    # get_repositories() 从 src.clients.memory_gateway 延迟导入 CloudflareMemoryClient
     monkeypatch.setattr("src.clients.memory_gateway.CloudflareMemoryClient", _FakeClientClass)
     # 重置模块级缓存，确保下次调用使用 patched client
     monkeypatch.setattr("src.repositories._repositories", None, raising=False)

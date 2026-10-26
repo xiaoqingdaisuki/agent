@@ -26,12 +26,12 @@ from src.tools.contracts import (
 
 _TOKEN_RE = re.compile(
     r"\s*(?:"
-    r"(\d+(?:\.\d*)?|\.\d+)"  # 1: number
-    r"|(\*\*)"  # 2: power (must be before single *)
-    r"|([+\-*/%])"  # 3: binary op
-    r"|(\^)"  # 4: caret (alias for power)
-    r"|(\()"  # 5: lparen
-    r"|(\))"  # 6: rparen
+    r"(\d+(?:\.\d*)?|\.\d+)"  # 分组 1：数值
+    r"|(\*\*)"  # 分组 2：幂运算，必须先于单个乘号匹配
+    r"|([+\-*/%])"  # 分组 3：二元运算符
+    r"|(\^)"  # 分组 4：脱字符，作为幂运算别名
+    r"|(\()"  # 分组 5：左括号
+    r"|(\))"  # 分组 6：右括号
     r")\s*"
 )
 
@@ -168,7 +168,7 @@ def _eval_tokens(tokens: list[dict]) -> float:
 # 执行 safe calculate 对应的业务逻辑
 def safe_calculate(expression: str) -> float:
     """
-    安全计算数学表达式。
+    安全计算数学表达式
 
     只允许: 数字、+ - * / % ** ^、括号、空格
     """
@@ -219,7 +219,7 @@ def safe_calculate(expression: str) -> float:
     return result
 
 
-# ============ LangChain Tool ============
+# ============ LangChain 工具封装 ============
 
 
 class CalculatorInput(BaseModel):
@@ -243,7 +243,7 @@ DESCRIPTOR = ToolDescriptor(
 @tool(args_schema=CalculatorInput)
 # 执行 calculator 对应的业务逻辑
 def calculator(expression: str) -> str:
-    """安全计算数学表达式（四则运算、幂运算、括号）。"""
+    """安全计算数学表达式（四则运算、幂运算、括号）"""
     try:
         result = safe_calculate(expression)
         # 如果是整数，去掉小数点

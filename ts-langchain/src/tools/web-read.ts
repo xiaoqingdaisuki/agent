@@ -23,8 +23,8 @@ const BLOCKED_HOSTS = new Set([
   "127.0.0.1",
   "0.0.0.0",
   "::1",
-  "169.254.169.254", // AWS metadata
-  "metadata.google.internal", // GCP metadata
+  "169.254.169.254", // AWS 元数据地址
+  "metadata.google.internal", // GCP 元数据地址
 ]);
 
 // 检查 URL 是否安全，防止 SSRF 攻击
@@ -48,9 +48,10 @@ export function isSafeUrl(url: string): { safe: boolean; reason?: string } {
 
     // 检查是否为私有 IP
     const parts = hostname.split(".").map(Number);
+    // 排除无法解析为数值的 IP 地址段
     if (parts.length === 4 && parts.every((p) => !Number.isNaN(p))) {
       const [a, b] = parts;
-      // Private, loopback, link-local, carrier-grade NAT, multicast/reserved.
+      // 私网、回环、链路本地、运营商级 NAT、组播及保留地址
       if (
         a === 0 ||
         a === 10 ||
@@ -103,9 +104,11 @@ export async function validateNetworkUrl(
   try {
     const addresses = process.env.AGENT_RUNTIME === "workers"
       ? (await Promise.allSettled([resolve4(parsed.hostname), resolve6(parsed.hostname)]))
+          // 将成功的 DNS 查询地址转换为统一结构
           .flatMap((result) => result.status === "fulfilled" ? result.value.map((address) => ({ address })) : [])
       : await lookup(parsed.hostname, { all: true });
     if (addresses.length === 0) return { safe: false, reason: `无法解析目标主机: ${parsed.hostname}` };
+    // 检测解析地址中是否包含禁止访问的 IP
     const blocked = addresses.find(({ address }) => isBlockedIp(address));
     if (blocked) {
       return {
@@ -192,7 +195,7 @@ function isTextContent(contentType: string): boolean {
   return TEXT_CONTENT_TYPES.has(ct) || ct.startsWith("text/");
 }
 
-// ============ Tool Descriptor ============
+// ============ 工具描述符 ============
 
 export const webReadInputSchema = z.object({
   url: z
@@ -218,13 +221,14 @@ export const webReadDescriptor: ToolDescriptor = {
   input_schema: webReadInputSchema,
 };
 
-// ============ LangChain Tool ============
+// ============ LangChain 工具封装 ============
 
 export const webReadTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "web_read",
   description:
     "读取指定 URL 的网页正文内容。自动去除 HTML 标签、脚本和样式，提取可读文本。通常在 web_search 之后使用来获取详细信息。",
   schema: webReadInputSchema,
+  // 检查 URL 和 DNS 安全性后读取并提取网页正文
   func: async ({ url }) => {
     // 1. URL 和 DNS 安全检查
     const { safe, reason } = await validateNetworkUrl(url);
@@ -233,6 +237,7 @@ export const webReadTool: DynamicStructuredTool = new DynamicStructuredTool({
     }
 
     const controller = new AbortController();
+    // 网页读取超时时取消网络请求
     const timeoutId = setTimeout(() => controller.abort(), 10000);
     try {
       let currentUrl = url;

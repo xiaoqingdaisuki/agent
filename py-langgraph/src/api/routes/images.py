@@ -1,3 +1,5 @@
+"""处理图片生成请求、任务轮询及图片结果响应"""
+
 import asyncio
 import base64
 import random
@@ -22,7 +24,7 @@ class ImageGenerationResponse(BaseModel):
 MAX_IMAGE_REQUEST_ATTEMPTS = 3
 
 
-# 调用图片模型接口，并在网络异常时重试。
+# 调用图片模型接口，并在网络异常时重试
 async def _request_with_retry(url: str, api_key: str, prompt: str) -> httpx.Response:
     last_error: httpx.HTTPError | None = None
     uses_multipart = "/flux-2-" in settings.image_model
@@ -53,7 +55,7 @@ async def _request_with_retry(url: str, api_key: str, prompt: str) -> httpx.Resp
     raise last_error or RuntimeError("Image generation failed after retries")
 
 
-# 从 Cloudflare 响应中提取可安全返回给调用方的错误信息。
+# 从 Cloudflare 响应中提取可安全返回给调用方的错误信息
 def _get_error_message(payload: dict) -> str:
     errors = payload.get("errors") or []
     if errors and isinstance(errors[0], dict) and errors[0].get("message"):
@@ -65,7 +67,7 @@ def _get_error_message(payload: dict) -> str:
 
 
 @router.post("/generations", response_model=ImageGenerationResponse)
-# 生成图片并将 Cloudflare 的 Base64 图片转为 data URL。
+# 生成图片并将 Cloudflare 的 Base64 图片转为 data URL
 async def generate_image(request: ImageGenerationRequest):
     prompt = request.prompt.strip()
     if not prompt or len(prompt) > 2000:

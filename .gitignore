@@ -1,28 +1,28 @@
-# Dependencies
+# 项目依赖
 node_modules/
 
-# Build output
+# 构建产物
 dist/
 
-# Environment
+# 环境配置
 .env
 .env.local
 .env.ecs
 
-# IDE
+# 开发工具配置
 .idea/
 .vscode/
 
-# OS
+# 操作系统文件
 .DS_Store
 Thumbs.db
 
-# Logs
+# 运行日志
 *.log
 
 .claude
 *.md
 .wrangler/
 
-# Local verification caches
+# 本地验证缓存
 .test-tmp/

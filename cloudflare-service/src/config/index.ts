@@ -1,8 +1,8 @@
 /**
  * Gateway 环境配置
  *
- * 在 Cloudflare Worker 中，配置来自 env bindings。
- * 本模块导出配置键常量和读取函数。
+ * 在 Cloudflare Worker 中，配置来自 env bindings
+ * 本模块导出配置键常量和读取函数
  */
 
 // Gateway Env 类型

@@ -55,11 +55,11 @@ class TestToolRegistry:
 
     def test_r0_visible_without_permissions(self, registry):
         tools = registry.get_visible_tools([])
-        # R0 tools should be visible without any permissions
-        assert len(tools) >= 1  # test.calculate
+        # R0 级别工具无需额外权限即可见
+        assert len(tools) >= 1  # 校验 test.calculate 工具
 
     def test_r2_hidden_without_permissions(self, registry):
-        # test.write should be in the list but marked unavailable
+        # test.write 应出现在工具列表中并标记为不可用
         descs = registry.get_visible_descriptors([])
         desc_map = {d["name"]: d for d in descs}
         assert "test.write" in desc_map

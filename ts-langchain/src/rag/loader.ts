@@ -20,9 +20,7 @@ export interface Document {
 }
 
 export class DocumentLoader {
-  /**
-   * 根据文件类型选择加载器
-   */
+  // 根据文件类型选择加载器
   // 根据文件类型选择合适的加载器读取文档
   static async load(filePath: string, filename: string): Promise<Document> {
     const ext = path.extname(filename).toLowerCase();
@@ -44,9 +42,7 @@ export class DocumentLoader {
     return doc;
   }
 
-  /**
-   * 从 Buffer 加载（用于上传场景）
-   */
+  // 从 Buffer 加载（用于上传场景）
   // 从 Buffer 加载文档（用于上传场景）
   static async loadFromBuffer(
     buffer: Buffer,
@@ -57,6 +53,7 @@ export class DocumentLoader {
     const content = contentAlreadyParsed
       ? buffer.toString("utf-8")
       : (await parseSessionDocument(buffer, filename, "application/octet-stream"))
+          // 提取解析后的文档片段正文
           .parts.map((part) => part.content)
           .join("\n\n");
 

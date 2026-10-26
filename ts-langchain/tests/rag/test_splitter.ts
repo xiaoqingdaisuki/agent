@@ -1,3 +1,5 @@
+/** 验证 rag/test_splitter 对应模块的行为与边界条件 */
+
 import { describe, expect, it } from "vitest";
 
 import { TextSplitter } from "../../src/rag/splitter.js";

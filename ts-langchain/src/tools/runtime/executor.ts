@@ -1,7 +1,7 @@
 /**
  * Tool Runtime — 统一执行管线
  *
- * 所有工具必须通过此 Runtime 执行，禁止绕过。
+ * 所有工具必须通过此 Runtime 执行，禁止绕过
  *
  * 执行管线：
  *   1. 参数校验（JSON Schema 严格模式）
@@ -63,11 +63,13 @@ export async function flushAuditLogs(): Promise<void> {
   if (!config.MEMORY_ENABLED) return;
   if (auditFlush) return auditFlush;
   if (auditLog.length === 0) return;
+  // 分批上报审计日志并在失败时保留待发送记录
   auditFlush = (async () => {
     while (auditLog.length > 0) {
       const entries = auditLog.splice(0, 500);
       try {
         await getGatewayClient().writeAuditLogs(
+          // 将审计条目转换为网关写入结构
           entries.map((e) => ({
             user_id: e.user_id, tenant_id: e.tenant_id,
             conversation_id: e.conversation_id, tool_name: e.tool_name,
@@ -109,7 +111,7 @@ const permissionCache = new Map<
 >();
 const PERMISSION_CACHE_TTL_MS = 5_000;
 
-// 基于可信身份和服务端角色检查工具权限。
+// 基于可信身份和服务端角色检查工具权限
 export function permissionCheck(
   context: ToolCallContext,
   descriptor: ToolDescriptor,
@@ -142,12 +144,7 @@ export function permissionCheck(
 
 // ============ 参数校验 ============
 
-/**
- * 使用 Zod schema 校验输入参数
- *
- * 严格模式：拒绝额外字段。
- */
-// 校验并判断 validateInput 对应的状态
+// 使用 Zod schema 校验输入参数；严格模式：拒绝额外字段
 export function validateInput<T>(
   schema: { parse: (input: unknown) => T },
   rawInput: unknown,
@@ -170,8 +167,8 @@ export function validateInput<T>(
 /**
  * 对工具返回结果进行基本脱敏
  *
- * 移除可能的密钥、Token、密码等敏感字段。
- * 当前为最小实现：递归过滤常见敏感键。
+ * 移除可能的密钥、Token、密码等敏感字段
+ * 当前为最小实现：递归过滤常见敏感键
  */
 const SENSITIVE_KEYS = new Set([
   "api_key",
@@ -248,7 +245,7 @@ function createBudgetState(): BudgetState {
   };
 }
 
-// 仅供没有请求上下文的直接调用使用；Agent 请求使用 AsyncLocalStorage 隔离预算。
+// 仅供没有请求上下文的直接调用使用；Agent 请求使用 AsyncLocalStorage 隔离预算
 const fallbackBudgetState = createBudgetState();
 
 // 获取 getBudgetState 对应的数据
@@ -343,11 +340,7 @@ export interface ToolExecutor<TInput, TOutput> {
   execute: (input: TInput, context: ToolCallContext) => Promise<TOutput>;
 }
 
-/**
- * 统一执行管线：
- *   validate → permission_check → budget_guard → execute → sanitize → audit
- */
-// 执行 invokeTool 对应的业务逻辑
+// 统一执行管线：；validate → permission_check → budget_guard → execute → sanitize → audit
 export async function invokeTool<TInput, TOutput>(
   executor: ToolExecutor<TInput, TOutput>,
   rawInput: unknown,
@@ -457,7 +450,7 @@ export async function invokeTool<TInput, TOutput>(
     };
   }
 
-  // 高风险工具在确认服务上线前始终拒绝直接执行，防止模型自行批准副作用。
+  // 高风险工具在确认服务上线前始终拒绝直接执行，防止模型自行批准副作用
   if (executor.descriptor.approval_policy === "always") {
     const error = { code: "APPROVAL_REQUIRED" as const, message: "该高风险操作需要用户显式确认" };
     recordAudit({
@@ -480,7 +473,9 @@ export async function invokeTool<TInput, TOutput>(
 
     rawOutput = await Promise.race([
       executor.execute(validatedInput, context),
+      // 将工具超时转换为可参与竞速的拒绝承诺
       new Promise<never>((_, reject) => {
+        // 达到工具时间上限时拒绝执行承诺
         timeoutId = setTimeout(() => reject(new Error("TIMEOUT")), timeoutMs);
       }),
     ]);
@@ -566,9 +561,7 @@ export function getToolCallContext(): ToolCallContext | undefined {
   return runtimeStorage.getStore()?.context;
 }
 
-/**
- * 在独立异步上下文中运行一次 Agent 请求，隔离用户身份与工具预算。
- */
+// 在独立异步上下文中运行一次 Agent 请求，隔离用户身份与工具预算
 // 在独立异步上下文中运行一次请求，隔离用户身份与工具预算
 export function runWithToolCallContext<T>(
   context: ToolCallContext,
@@ -583,6 +576,7 @@ export function createToolCallScope(
   context: ToolCallContext,
   options: { onToolProgress?: (event: ToolProgressEvent) => void } = {},
 ): {
+  // 在隔离的工具调用作用域中执行回调
   run<T>(callback: () => T): T;
 } {
   const store = {
@@ -604,18 +598,7 @@ export function createToolCallScope(
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { redactTextContent, redactStructuredData } from "./data-redaction.js";
 
-/**
- * 将 LangChain DynamicStructuredTool 包装为走 invokeTool 管线的版本。
- *
- * 替换原始 tool.func，使其在 AgentExecutor 调用时自动经过：
- *   预算守卫 → 参数校验 → 权限检查 → 执行(超时) → 脱敏 → 审计 → 指标
- *
- * @param tool 原始 LangChain 工具
- * @param descriptor 工具描述符（ToolDescriptor）
- * @param schema Zod schema（用于参数校验，可选）
- * @returns 新的 DynamicStructuredTool，func 已包装
- */
-// 执行 wrapToolWithRuntime 对应的业务逻辑
+// 将 LangChain DynamicStructuredTool 包装为走 invokeTool 管线的版本；替换原始 tool.func，使其在 AgentExecutor 调用时自动经过：；预算守卫 → 参数校验 → 权限检查 → 执行(超时) → 脱敏 → 审计 → 指标；@param tool 原始 LangChain 工具；@param descriptor 工具描述符（ToolDescriptor）；@param schema Zod schema（用于参数校验，可选）；@returns 新的 DynamicStructuredTool，func 已包装
 export function wrapToolWithRuntime(
   tool: DynamicStructuredTool,
   descriptor: ToolDescriptor,
@@ -628,7 +611,7 @@ export function wrapToolWithRuntime(
       throw new Error("Tool runtime context is required");
     }
 
-    // 用户/会话 ID 属于服务端上下文，禁止模型通过工具参数越权覆盖。
+    // 用户/会话 ID 属于服务端上下文，禁止模型通过工具参数越权覆盖
     let scopedInput = rawInput;
     if (rawInput && typeof rawInput === "object") {
       const input = { ...(rawInput as Record<string, unknown>) };
@@ -659,6 +642,7 @@ export function wrapToolWithRuntime(
     const executor: ToolExecutor<unknown, string> = {
       descriptor,
       schema,
+      // 将原始工具函数适配为运行时执行接口
       execute: async (input: unknown) => tool.func(input as any),
     };
 

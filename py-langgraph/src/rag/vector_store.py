@@ -51,7 +51,7 @@ class VectorStore:
         if not user_id:
             raise ValueError("知识库操作需要可信用户标识")
 
-        # 用户范围由调用服务端传入，不能退回共享默认命名空间。
+        # 用户范围由调用服务端传入，不能退回共享默认命名空间
         await self._client.upload_document(
             user_id=user_id,
             filename=f"{self._collection_name}_{doc_id}",

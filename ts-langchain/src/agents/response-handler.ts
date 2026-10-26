@@ -11,7 +11,7 @@
  *      → stream 中断时返回已累积的部分内容
  *
  * 所有场景统一输出格式：部分结果 + 继续提示
- * 前端识别到继续提示后，可展示「继续」按钮让用户决定是否续写。
+ * 前端识别到继续提示后，可展示「继续」按钮让用户决定是否续写
  */
 
 import { AIMessage } from "@langchain/core/messages";
@@ -19,7 +19,7 @@ import { AIMessage } from "@langchain/core/messages";
 export class ModelResponseError extends Error {
   readonly code = "MODEL_RESPONSE_INVALID";
 
-  // 将空响应和无法解析的工具协议标记为可重试的上游错误。
+  // 将空响应和无法解析的工具协议标记为可重试的上游错误
   constructor(message = "AI服务未生成有效回答，请重试。") {
     super(message);
     this.name = "ModelResponseError";
@@ -29,7 +29,7 @@ export class ModelResponseError extends Error {
 // ============ 截断检测 ============
 
 /**
- * 终端标点集合 — 以这些字符结尾的文本大概率是完整句子。
+ * 终端标点集合 — 以这些字符结尾的文本大概率是完整句子
  */
 const TERMINAL_PUNCTUATION = new Set([
   "。",
@@ -61,16 +61,7 @@ const TERMINAL_PUNCTUATION = new Set([
   ",",
 ]);
 
-/**
- * 检测一段文本是否可能被 LLM 截断。
- *
- * 检测策略（按优先级）：
- *   a) finish_reason === "length" → 确定截断
- *   b) 文本 < 100 字符 → 不视为截断（短回答正常）
- *   c) 末字符是终端标点/空白 → 大概率完整
- *   d) 末字符不是终端标点且文本 > 200 字符 → 可能截断
- */
-// 校验并判断 isLikelyTruncated 对应的状态
+// 检测一段文本是否可能被 LLM 截断；检测策略（按优先级）：；a) finish_reason === "length" → 确定截断；b) 文本 < 100 字符 → 不视为截断（短回答正常）；c) 末字符是终端标点/空白 → 大概率完整；d) 末字符不是终端标点且文本 > 200 字符 → 可能截断
 export function isLikelyTruncated(
   text: string,
   finishReason?: string,
@@ -103,10 +94,7 @@ export function isLikelyTruncated(
   return true;
 }
 
-/**
- * 从 LangChain AIMessage 的 response_metadata 中提取 finish_reason。
- */
-// 获取 getFinishReason 对应的数据
+// 从 LangChain AIMessage 的 response_metadata 中提取 finish_reason
 export function getFinishReason(message: AIMessage): string | undefined {
   const meta = (message as any).response_metadata;
   if (!meta || typeof meta !== "object") return undefined;
@@ -123,7 +111,7 @@ export function getFinishReason(message: AIMessage): string | undefined {
   return undefined;
 }
 
-// 从 Agent 输出或消息列表中提取最后一个 AI 消息的结束原因。
+// 从 Agent 输出或消息列表中提取最后一个 AI 消息的结束原因
 export function getFinishReasonFromOutput(output: unknown): string | undefined {
   if (!output || typeof output !== "object") return undefined;
   const direct = getFinishReason(output as AIMessage);
@@ -151,19 +139,12 @@ export function getFinishReasonFromOutput(output: unknown): string | undefined {
 
 const CONTINUATION_PROMPT = "\n\n---\n⚠️ 以上回答尚未完成。如需继续，请回复「继续」。";
 
-/**
- * 为不完整响应追加继续提示，并返回完整文本。
- */
-// 创建或注册 appendContinuationHint 所需的数据
+// 为不完整响应追加继续提示，并返回完整文本
 export function appendContinuationHint(text: string): string {
   return text + CONTINUATION_PROMPT;
 }
 
-/**
- * 检查响应是否需要附加继续提示。
- * 如果已包含继续提示则不再重复添加。
- */
-// 执行 maybeAppendContinuationHint 对应的业务逻辑
+// 检查响应是否需要附加继续提示；如果已包含继续提示则不再重复添加
 export function maybeAppendContinuationHint(
   text: string,
   finishReason?: string,
@@ -181,11 +162,9 @@ export function maybeAppendContinuationHint(
 
 import type { AgentStep } from "@langchain/core/agents";
 
-/**
- * 判断 AgentStep 数组是否表明迭代已耗尽（至少有一条有效观察结果）。
- */
-// 校验并判断 hasCollectedObservations 对应的状态
+// 判断 AgentStep 数组是否表明迭代已耗尽（至少有一条有效观察结果）
 export function hasCollectedObservations(steps: AgentStep[]): boolean {
+  // 筛选包含非空文本观察结果的工具步骤
   return steps.some((step) => {
     const obs = step.observation;
     return typeof obs === "string" && obs.trim().length > 0;

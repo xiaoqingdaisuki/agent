@@ -13,7 +13,7 @@ export interface UserProfile {
   updated_at: string;
 }
 
-// 基于前值生成单调递增的 ISO 时间戳，避免同一毫秒更新被排序或同步逻辑忽略。
+// 基于前值生成单调递增的 ISO 时间戳，避免同一毫秒更新被排序或同步逻辑忽略
 function nextIsoTimestamp(previous?: string): string {
   return new Date(Math.max(Date.now(), previous ? Date.parse(previous) + 1 : 0)).toISOString();
 }

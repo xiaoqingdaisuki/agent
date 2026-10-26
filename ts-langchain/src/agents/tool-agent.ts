@@ -1,3 +1,5 @@
+/** 构建具备工具调用、协议修复和执行追踪的 LangChain Agent */
+
 import { createChatModel } from "../config/model.js";
 import { AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
 import { createAgent, createMiddleware } from "langchain";
@@ -29,14 +31,15 @@ import {
   withAgentTrace,
 } from "../observability/agent-tracing.js";
 
-// ReAct 最大步骤与 Python 版共享配置，避免两种实现的安全边界不一致。
+// ReAct 最大步骤与 Python 版共享配置，避免两种实现的安全边界不一致
 export const MAX_AGENT_ITERATIONS = config.REACT_MAX_STEPS;
 
-// 将字符串或内容块数组转换为可用于 XML 检测和 API 回退的文本。
+// 将字符串或内容块数组转换为可用于 XML 检测和 API 回退的文本
 function contentToText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
+    // 将消息中的字符串及文本块合并为正文
     .map((part) => {
       if (typeof part === "string") return part;
       if (part && typeof part === "object" && "text" in part) return String((part as { text?: unknown }).text || "");
@@ -70,14 +73,15 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   "memory.user.delete": "memory_user_delete",
 };
 
-// 将供应商使用的 Descriptor 名称映射为 LangChain 实际注册的工具名称。
+// 将供应商使用的 Descriptor 名称映射为 LangChain 实际注册的工具名称
 function normalizeToolName(name: string): string {
   return TOOL_NAME_ALIASES[name] || name;
 }
 
-// 规范化工具别名并合并同一响应中相同参数的记忆保存调用。
+// 规范化工具别名并合并同一响应中相同参数的记忆保存调用
 function normalizeToolCalls(calls: unknown[]): unknown[] {
   const seenMemorySaves = new Set<string>();
+  // 规范化工具调用名称并保留其他调用信息
   return calls.map((call) => {
     if (!call || typeof call !== "object") return call;
     const candidate = call as Record<string, any>;
@@ -94,7 +98,7 @@ function normalizeToolCalls(calls: unknown[]): unknown[] {
       };
     }
     return call;
-  // 仅合并相同参数的记忆保存，其他工具保留原始顺序。
+  // 仅合并相同参数的记忆保存，其他工具保留原始顺序
   }).filter((call) => {
     if (!call || typeof call !== "object") return true;
     const candidate = call as Record<string, any>;
@@ -107,7 +111,7 @@ function normalizeToolCalls(calls: unknown[]): unknown[] {
   });
 }
 
-// 解码模型工具参数中的常见 XML 实体，避免把转义文本传给工具。
+// 解码模型工具参数中的常见 XML 实体，避免把转义文本传给工具
 function decodeXmlText(value: string): string {
   return value
     .replace(/&lt;/g, "<")
@@ -117,7 +121,7 @@ function decodeXmlText(value: string): string {
     .replace(/&amp;/g, "&");
 }
 
-// 解析一次 XML 工具调用中的参数，兼容两种供应商标签格式。
+// 解析一次 XML 工具调用中的参数，兼容两种供应商标签格式
 function parseXmlParameters(body: string): Record<string, string> {
   const args: Record<string, string> = {};
   const patterns = [
@@ -133,7 +137,7 @@ function parseXmlParameters(body: string): Record<string, string> {
   return args;
 }
 
-// 提取模型返回的 invoke/function XML，并记录原文范围以便从最终回答中移除。
+// 提取模型返回的 invoke/function XML，并记录原文范围以便从最终回答中移除
 function parseXmlToolCalls(content: string): ParsedXmlToolCall[] {
   const matches: ParsedXmlToolCall[] = [];
   const patterns = [
@@ -175,13 +179,15 @@ function parseXmlToolCalls(content: string): ParsedXmlToolCall[] {
       });
     }
   }
+  // 按起始位置升序排列工具调用片段
   return matches.sort((left, right) => left.start - right.start);
 }
 
-// 从回答中移除兼容协议文本，但不改变模型已经返回的原生工具调用。
+// 从回答中移除兼容协议文本，但不改变模型已经返回的原生工具调用
 function removeXmlToolCallText(content: string, calls: ParsedXmlToolCall[]): string {
   let cleanContent = content;
   const removedRanges = new Set<string>();
+  // 按起始位置倒序删除片段以避免偏移失效
   for (const call of [...calls].sort((left, right) => right.start - left.start)) {
     const range = `${call.start}:${call.end}`;
     if (removedRanges.has(range)) continue;
@@ -191,7 +197,7 @@ function removeXmlToolCallText(content: string, calls: ParsedXmlToolCall[]): str
   return cleanContent.trim();
 }
 
-// 将任意模型响应规范化为当前 LangChain 运行时可识别的 AIMessage，并兼容 XML 工具调用。
+// 将任意模型响应规范化为当前 LangChain 运行时可识别的 AIMessage，并兼容 XML 工具调用
 export function convertXmlToolCalls(message: unknown): AIMessage {
   const candidate = message as Partial<BaseMessage> | null;
   const rawContent = candidate?.content ?? "";
@@ -205,7 +211,7 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
   }
   if (originalToolCalls.length > 0) {
     return new AIMessage({
-      // 原生 tool_calls 是模型与当前 Agent 协商出的正式结果，兼容 XML 只允许被隐藏，不能覆盖或追加执行。
+      // 原生 tool_calls 是模型与当前 Agent 协商出的正式结果，兼容 XML 只允许被隐藏，不能覆盖或追加执行
       content: parsedCalls.length > 0 ? removeXmlToolCallText(content, parsedCalls) : rawContent as any,
       tool_calls: normalizeToolCalls(originalToolCalls) as any,
       id: candidate?.id,
@@ -223,6 +229,7 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
     });
   }
 
+  // 为解析出的工具调用生成稳定标识并规范化名称
   const toolCalls = parsedCalls.map((call, index) => ({
     id: `call_${normalizeToolName(call.name)}_${index + 1}`,
     type: "tool_call" as const,
@@ -238,7 +245,7 @@ export function convertXmlToolCalls(message: unknown): AIMessage {
   });
 }
 
-// 按系统提示缓存声明式 Agent，避免重复构建模型和工具绑定。
+// 按系统提示缓存声明式 Agent，避免重复构建模型和工具绑定
 const agentCache = new Map<string, Promise<DeclarativeToolAgent>>();
 const directAgentCache = new Map<string, Promise<DeclarativeToolAgent>>();
 const MAX_CACHE_SIZE = 10;
@@ -253,7 +260,7 @@ type ModelWaiter = {
 const modelWaiters: ModelWaiter[] = [];
 let activeModelCalls = 0;
 
-// 在模型服务可承受的并发范围内执行调用，避免上游排队造成请求长尾。
+// 在模型服务可承受的并发范围内执行调用，避免上游排队造成请求长尾
 async function runWithModelCapacity<T>(
   operation: () => T | Promise<T>,
   signal?: AbortSignal,
@@ -265,8 +272,10 @@ async function runWithModelCapacity<T>(
     if (modelWaiters.length >= config.LLM_QUEUE_MAX) {
       throw Object.assign(new Error("Model capacity queue is full"), { code: "RATE_LIMITED" });
     }
+    // 排队等待模型容量并登记取消与超时处理
     await new Promise<void>((resolve, reject) => {
       const waiter: ModelWaiter = {
+        // 获得容量后清理计时器并唤醒等待请求
         resolve: () => {
           if (waiter.timer) clearTimeout(waiter.timer);
           resolve();
@@ -274,6 +283,7 @@ async function runWithModelCapacity<T>(
         reject,
         signal,
       };
+      // 请求取消时移除等待项并拒绝容量申请
       const onAbort = () => {
         const index = modelWaiters.indexOf(waiter);
         if (index >= 0) modelWaiters.splice(index, 1);
@@ -281,6 +291,7 @@ async function runWithModelCapacity<T>(
         reject(signal?.reason || new DOMException("Aborted", "AbortError"));
       };
       waiter.onAbort = onAbort;
+      // 等待超时时移除队列项并清理取消监听
       waiter.timer = setTimeout(() => {
         const index = modelWaiters.indexOf(waiter);
         if (index >= 0) modelWaiters.splice(index, 1);
@@ -304,7 +315,7 @@ async function runWithModelCapacity<T>(
         waiter.reject(waiter.signal.reason || new DOMException("Aborted", "AbortError"));
         continue;
       }
-      // 将当前占用的槽位直接转交给队首，避免新请求在等待者恢复前插队。
+      // 将当前占用的槽位直接转交给队首，避免新请求在等待者恢复前插队
       waiter.resolve();
       transferred = true;
       break;
@@ -313,7 +324,7 @@ async function runWithModelCapacity<T>(
   }
 }
 
-// 集中定义必须保留完整工具链的意图，避免实时、文件或记忆请求被误送到轻量模型路径。
+// 集中定义必须保留完整工具链的意图，避免实时、文件或记忆请求被误送到轻量模型路径
 const TOOL_INTENT_PATTERNS = [
   /(?:20\d{2}|今年|明年).{0,12}(?:APEC|展会|会议|活动)/i,
   /(?:推荐|查询|查找|介绍).{0,30}(?:门店|店铺|餐厅|美食)|(?:门店|店铺|餐厅).{0,12}(?:地址|营业)/i,
@@ -339,7 +350,7 @@ const MEMORY_RECALL_PATTERNS = [
 
 const MEMORY_MUTATION_PATTERN = /(?:记住|保存|添加|记录|删除|忘记|更新|修改).{0,24}(?:记忆|偏好|信息|习惯|我)|^(?:please\s+)?(?:remember|save|store|delete|forget|update|change)\b.{0,24}(?:memory|preference|information|about me)/i;
 
-// 仅白名单明确的普通生成任务进入无工具路径，未识别请求继续走保守路由。
+// 仅白名单明确的普通生成任务进入无工具路径，未识别请求继续走保守路由
 const DIRECT_CHAT_PATTERNS = [
   /^(?:你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好|你是谁|你叫什么|介绍一下你自己|你能做什么|你会做什么|你的能力是什么)[！!。.?？]?$/i,
   /(?:解释|说明|什么是|为什么|如何理解|科普|讲讲|介绍|\bexplain\b|\bwhat\s+is\b|\bwhy\b)/i,
@@ -349,29 +360,32 @@ const DIRECT_CHAT_PATTERNS = [
   /(?:只输出|用(?:一|两|三|四|\d+)句话|列出|归纳|(?:简要|深入)分析)/i,
 ];
 
-// 判断消息是否明确需要工具，保守保留实时数据、计算、文件和记忆能力。
+// 判断消息是否明确需要工具，保守保留实时数据、计算、文件和记忆能力
 export function requiresToolMessage(content: string): boolean {
   const normalized = content.trim().toLowerCase();
+  // 匹配请求文本是否符合当前策略模式
   return TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-// 判断消息是否只是查询用户长期记忆，避免为确定性读取启动两轮模型工具编排。
+// 判断消息是否只是查询用户长期记忆，避免为确定性读取启动两轮模型工具编排
 export function isMemoryRecallMessage(content: string): boolean {
   const normalized = content.trim().toLowerCase().replace(/\s+/g, " ");
   return Boolean(normalized)
     && !MEMORY_MUTATION_PATTERN.test(normalized)
+    // 匹配请求文本是否符合当前策略模式
     && MEMORY_RECALL_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-// 判断消息是否可安全走无工具的快速对话路径，避免普通回答携带完整工具定义。
+// 判断消息是否可安全走无工具的快速对话路径，避免普通回答携带完整工具定义
 export function isDirectChatMessage(content: string): boolean {
   const normalized = content.trim().toLowerCase();
   return Boolean(normalized)
     && !requiresToolMessage(normalized)
+    // 匹配请求文本是否符合当前策略模式
     && DIRECT_CHAT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-// 返回无需模型调用的高频短问答，避免简单问题受外部模型抖动影响。
+// 返回无需模型调用的高频短问答，避免简单问题受外部模型抖动影响
 export function getFastPathAnswer(content: string): string | undefined {
   const normalized = content.trim().toLowerCase().replace(/\s+/g, "");
   if (["你好", "您好", "嗨", "hi", "hello"].includes(normalized)) {
@@ -390,7 +404,7 @@ export function getFastPathAnswer(content: string): string | undefined {
   return undefined;
 }
 
-// 将消息内容规范化为可返回给 API 的文本。
+// 将消息内容规范化为可返回给 API 的文本
 function getMessageText(message: BaseMessage | undefined): string {
   return message ? contentToText(message.content) : "";
 }
@@ -398,16 +412,16 @@ function getMessageText(message: BaseMessage | undefined): string {
 export type AgentContentBlock = Record<string, unknown>;
 export type AgentUserContent = string | AgentContentBlock[];
 
-// 以 createAgent 封装旧调用约定，并保留现有服务层输入接口。
+// 以 createAgent 封装旧调用约定，并保留现有服务层输入接口
 class DeclarativeToolAgent {
   readonly maxIterations = MAX_AGENT_ITERATIONS;
 
-  // 初始化声明式 LangChain Agent。
+  // 初始化声明式 LangChain Agent
   constructor(
     readonly agent: ReturnType<typeof createAgent>,
   ) {}
 
-  // 调用 Agent 并将消息状态转换为旧接口的 output 字段。
+  // 调用 Agent 并将消息状态转换为旧接口的 output 字段
   async invoke(
     input: { input: AgentUserContent; chat_history?: BaseMessage[]; memory_context?: BaseMessage[] },
     options: { signal?: AbortSignal; conversationId?: string } = {},
@@ -415,6 +429,7 @@ class DeclarativeToolAgent {
     const tracker = createReActTracker();
     const traceContext = createAgentTraceContext(options.conversationId);
     try {
+      // 在追踪与 ReAct 上下文中调用模型并记录完成状态
       return await withAgentTrace(traceContext, () => runWithReActTracker(tracker, async () => {
           const result = await this.agent.invoke(
             { messages: [...(input.memory_context || []), ...(input.chat_history || []), { role: "user", content: input.input }] },
@@ -426,6 +441,7 @@ class DeclarativeToolAgent {
           );
           const answerMessage = [...(result.messages as BaseMessage[])]
             .reverse()
+            // 查找模型返回消息中的助手回答
             .find((message) => {
               const messageType = typeof (message as any)?._getType === "function"
                 ? (message as any)._getType()
@@ -442,14 +458,17 @@ class DeclarativeToolAgent {
     }
   }
 
-  // 直接转发 LangChain 原生事件流，提供真实 token 和工具进度。
+  // 直接转发 LangChain 原生事件流，提供真实 token 和工具进度
   async *streamEvents(
     input: { input: AgentUserContent; chat_history?: BaseMessage[]; memory_context?: BaseMessage[] },
     options: {
       signal?: AbortSignal;
       conversationId?: string;
       version?: "v1" | "v2";
-      toolCallScope?: { run<T>(callback: () => T): T };
+      toolCallScope?: {
+        // 在隔离的工具调用作用域中执行回调
+        run<T>(callback: () => T): T;
+      };
   } = {},
   ) {
     const tracker = createReActTracker();
@@ -460,16 +479,19 @@ class DeclarativeToolAgent {
     let closed = false;
     let completed = false;
     let failed: unknown;
+    // 初始化事件唤醒回调以支持消费者尚未等待的状态
     let notifyEvent = () => {};
+    // 初始化缓冲区唤醒回调以支持上游尚未阻塞的状态
     let notifySpace = () => {};
-    // 等待上游产生事件，避免消费者空转轮询。
+    // 等待上游产生事件，避免消费者空转轮询
     const waitForEvent = () => new Promise<void>((resolve) => {
       notifyEvent = resolve;
     });
-    // 缓冲区写满时反压上游模型事件，避免慢客户端导致进程内存无限增长。
+    // 缓冲区写满时反压上游模型事件，避免慢客户端导致进程内存无限增长
     const waitForBufferSpace = () => new Promise<void>((resolve) => {
       notifySpace = resolve;
     });
+    // 在追踪上下文中消费模型事件并处理背压和结束状态
     const pump = async () => withActiveAgentTrace(traceContext, async () => {
         try {
           const stream = this.agent.streamEvents(
@@ -510,6 +532,7 @@ class DeclarativeToolAgent {
         }
         if (failed) throw failed;
       });
+    // 在当前 ReAct 上下文中启动事件生产任务
     const runPump = () => runWithReActTracker(tracker, pump);
     const running = options.toolCallScope ? options.toolCallScope.run(runPump) : runPump();
     try {
@@ -529,12 +552,13 @@ class DeclarativeToolAgent {
       controller.abort();
       events.length = 0;
       notifySpace();
+      // 消费流结束后的后台拒绝以避免未处理异常
       void running.catch(() => undefined);
     }
   }
 }
 
-// 为每个请求创建共享配置的独立 ReAct 策略状态。
+// 为每个请求创建共享配置的独立 ReAct 策略状态
 function createReActTracker(): ReActRunTracker {
   return new ReActRunTracker(createDefaultReActLimits({
     maxSteps: config.REACT_MAX_STEPS,
@@ -544,23 +568,26 @@ function createReActTracker(): ReActRunTracker {
   }));
 }
 
-// 将 createAgent 的模型与工具钩子映射到公共 ReAct 策略，而不重写框架循环。
+// 将 createAgent 的模型与工具钩子映射到公共 ReAct 策略，而不重写框架循环
 export function createReActPolicyMiddleware() {
   return createMiddleware({
     name: "ReActPolicyMiddleware",
     contextSchema: AGENT_TRACE_CONTEXT_SCHEMA,
-    // 在模型调用前限制步骤，并在停止后只允许模型生成最终答案。
+    // 在模型调用前限制步骤，并在停止后只允许模型生成最终答案
     wrapModelCall: async (request, handler) => {
       const tracker = getActiveReActTracker();
       const finalOnly = tracker?.beginModelCall() || false;
       const requestSignal = (request as unknown as { signal?: AbortSignal }).signal;
       const traceContext = getAgentTraceContext(request.runtime?.context);
+      // 为模型请求创建追踪跨度并限制并发容量
       const runModelCall = (modelRequest: typeof request) => withAgentSpan(
         "chat",
         traceContext,
+        // 记录模型输入并在容量限制内执行和追踪请求
         async (span) => {
           recordModelInput(span, modelRequest);
           const response = await runWithModelCapacity(
+            // 获得模型容量后调用实际模型处理器
             () => handler(modelRequest),
             requestSignal,
           );
@@ -571,10 +598,10 @@ export function createReActPolicyMiddleware() {
       const response = await runModelCall(finalOnly
         ? { ...request, tools: [], toolChoice: "none", systemPrompt: `${request.systemPrompt || ""}\n\n工具调用已因安全限制停止。请只基于已有结果给出最终回答，不要请求工具，也不要展示内部推理。` }
         : request);
-      // 无工具路径保留协议原文，交由服务层升级为完整工具 Agent。
+      // 无工具路径保留协议原文，交由服务层升级为完整工具 Agent
       if (!request.tools?.length) {
         tracker?.complete(getMessageText(response));
-        // 兼容流式首包省略 assistant role 的模型，避免框架收到 generic ChatMessageChunk。
+        // 兼容流式首包省略 assistant role 的模型，避免框架收到 generic ChatMessageChunk
         return new AIMessage({
           content: response.content,
           additional_kwargs: response.additional_kwargs,
@@ -599,9 +626,10 @@ export function createReActPolicyMiddleware() {
       if (!normalized.tool_calls?.length) tracker?.complete(getMessageText(normalized));
       return normalized;
     },
-    // 在工具调用前后记录执行事实，并把可恢复错误作为 ToolMessage 交还框架。
+    // 在工具调用前后记录执行事实，并把可恢复错误作为 ToolMessage 交还框架
     wrapToolCall: async (request, handler) => {
       const traceContext = getAgentTraceContext(request.runtime?.context);
+      // 追踪工具执行并同步 ReAct 工具调用状态
       return withAgentSpan("execute_tool", traceContext, async (span) => {
         recordToolInput(span, request);
         const tracker = getActiveReActTracker();
@@ -644,7 +672,7 @@ export function createReActPolicyMiddleware() {
   });
 }
 
-// 创建或获取声明式 ReAct 工具 Agent。
+// 创建或获取声明式 ReAct 工具 Agent
 export async function createToolAgent(
   systemPromptOverride?: string,
 ): Promise<DeclarativeToolAgent> {
@@ -657,13 +685,14 @@ export async function createToolAgent(
   }
   const promise = buildToolAgent(prompt);
   agentCache.set(prompt, promise);
+  // 代理初始化失败时移除当前缓存项以允许重试
   void promise.catch(() => {
     if (agentCache.get(prompt) === promise) agentCache.delete(prompt);
   });
   return promise;
 }
 
-// 创建或获取不绑定工具的快速对话 Agent，用于明确不需要外部能力的消息。
+// 创建或获取不绑定工具的快速对话 Agent，用于明确不需要外部能力的消息
 export async function createDirectChatAgent(
   systemPromptOverride?: string,
 ): Promise<DeclarativeToolAgent> {
@@ -676,19 +705,20 @@ export async function createDirectChatAgent(
   }
   const promise = buildDirectChatAgent(prompt);
   directAgentCache.set(prompt, promise);
+  // 直答代理初始化失败时移除当前缓存项以允许重试
   void promise.catch(() => {
     if (directAgentCache.get(prompt) === promise) directAgentCache.delete(prompt);
   });
   return promise;
 }
 
-// 清空 ReAct Agent 缓存。
+// 清空 ReAct Agent 缓存
 export function invalidateToolAgentCache(): void {
   agentCache.clear();
   directAgentCache.clear();
 }
 
-// 构建不发送工具 schema 的声明式 Agent，缩短首 token 延迟并保留流式事件契约。
+// 构建不发送工具 schema 的声明式 Agent，缩短首 token 延迟并保留流式事件契约
 async function buildDirectChatAgent(systemPrompt: string): Promise<DeclarativeToolAgent> {
   const rawModel = createChatModel();
   return new DeclarativeToolAgent(createAgent({
@@ -698,9 +728,10 @@ async function buildDirectChatAgent(systemPrompt: string): Promise<DeclarativeTo
   }));
 }
 
-// 构建带 Runtime 工具管线的声明式 createAgent 实例。
+// 构建带 Runtime 工具管线的声明式 createAgent 实例
 async function buildToolAgent(systemPrompt: string): Promise<DeclarativeToolAgent> {
   const rawModel = createChatModel();
+  // 按描述符和输入 Schema 为工具装配运行时封装
   const wrappedTools = tools.map((tool) => {
     const descriptor = toolDescriptors[tool.name];
     const schema = toolSchemas[tool.name];

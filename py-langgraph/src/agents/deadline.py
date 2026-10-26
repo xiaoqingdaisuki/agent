@@ -1,4 +1,4 @@
-"""Request-scoped deadlines that expand only after the agent chooses a tool."""
+"""管理请求级截止时间，仅在 Agent 选择工具后扩展时间预算"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from src.config.settings import settings
 
 
 class AgentDeadline:
-    """Keep pure chat within its short budget while permitting tool work to finish."""
+    """限制纯对话的时间预算并允许工具任务在扩展预算内完成"""
 
     # 初始化当前对象
     def __init__(
@@ -59,19 +59,19 @@ class AgentDeadline:
             try:
                 self._loop.call_soon_threadsafe(self._reschedule_tool_timeout)
             except RuntimeError:
-                # 事件循环已关闭时，保持原有截止时间并让调用自然结束。
+                # 事件循环已关闭时，保持原有截止时间并让调用自然结束
                 return
             return
         self._reschedule_tool_timeout()
 
-    # 在创建 Timeout 的事件循环中安全调整工具阶段截止时间。
+    # 在创建 Timeout 的事件循环中安全调整工具阶段截止时间
     def _reschedule_tool_timeout(self) -> None:
         if self._timeout is None or self._loop is None or self._loop.is_closed():
             return
         try:
             self._timeout.reschedule(self._started_at + self._tool_timeout_seconds)
         except (RuntimeError, ValueError):
-            # 请求已退出或 Timeout 已失效时无需再次调整预算。
+            # 请求已退出或 Timeout 已失效时无需再次调整预算
             return
 
 

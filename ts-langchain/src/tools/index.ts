@@ -73,11 +73,11 @@ export {
   webExtractDescriptor,
 };
 
-// 所有可用工具的聚合列表，供 Agent 使用。
+// 所有可用工具的聚合列表，供 Agent 使用
 // MEMORY_ENABLED 仅影响存储后端（Cloudflare Gateway 持久化 vs 进程内易失），
-// 不改变 Agent 可见的工具与能力集合，因此记忆类读取工具始终注册。
+// 不改变 Agent 可见的工具与能力集合，因此记忆类读取工具始终注册
 // 注：memory_user_save / memory_user_delete 为 approval_policy=always 写工具，
-// 按设计规范不进入 Agent 默认可调用列表（仅在 /v1/capabilities 元数据可见）。
+// 按设计规范不进入 Agent 默认可调用列表（仅在 /v1/capabilities 元数据可见）
 const directTools = [
   weatherTool,
   webSearchTool,
@@ -98,7 +98,7 @@ export const tools = [
 ];
 
 /**
- * 工具名称 → ToolDescriptor 映射，用于 invokeTool 管线的权限/审计检查。
+ * 工具名称 → ToolDescriptor 映射，用于 invokeTool 管线的权限/审计检查
  */
 export const toolDescriptors: Record<
   string,
@@ -121,7 +121,7 @@ export const toolDescriptors: Record<
 };
 
 /**
- * 工具名称 → Zod schema 映射，用于 invokeTool 管线的参数校验。
+ * 工具名称 → Zod schema 映射，用于 invokeTool 管线的参数校验
  */
 export const toolSchemas: Record<
   string,

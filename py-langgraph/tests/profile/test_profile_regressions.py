@@ -1,3 +1,5 @@
+"""验证 test_profile_regressions 对应模块的行为与边界条件"""
+
 import pytest
 
 import src.profile.service as profile_module

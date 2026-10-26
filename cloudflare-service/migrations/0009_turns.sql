@@ -1,4 +1,4 @@
--- 可恢复的 Agent 单轮执行记录；业务消息仍是事实记录，Turn 保存运行生命周期与幂等键。
+-- 可恢复的 Agent 单轮执行记录；业务消息仍是事实记录，Turn 保存运行生命周期与幂等键
 CREATE TABLE turns (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL,

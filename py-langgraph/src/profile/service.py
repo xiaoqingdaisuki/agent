@@ -1,7 +1,7 @@
 """
 Profile Service — 用户画像 + 长期记忆 + 问答历史
 
-统一通过 Repository 层访问进程内或 Cloudflare 存储后端。
+统一通过 Repository 层访问进程内或 Cloudflare 存储后端
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from src.repositories import get_repositories
 _repositories = None
 
 
-# 延迟获取当前配置的仓储单例，避免模块导入阶段创建远端客户端。
+# 延迟获取当前配置的仓储单例，避免模块导入阶段创建远端客户端
 def _get_repositories():
     """获取当前配置对应的仓储实例"""
     global _repositories
@@ -119,9 +119,9 @@ class MemoryService:
         ]
 
     @staticmethod
-    # 异步读取用户的高优先级记忆，避免流式请求阻塞事件循环。
+    # 异步读取用户的高优先级记忆，避免流式请求阻塞事件循环
     async def get_relevant_async(user_id: str, max_items: int = 10) -> list[Memory]:
-        """异步获取用户的高优先级记忆。"""
+        """异步获取用户的高优先级记忆"""
         repos = _get_repositories()
         items = await repos.list_memories_async(user_id, limit=max_items)
         return [
@@ -182,7 +182,7 @@ class MemoryService:
         return "\n".join(lines)
 
     @staticmethod
-    # 异步构建记忆上下文，允许调用方在首 token 预算内真正取消 Gateway 请求。
+    # 异步构建记忆上下文，允许调用方在首 token 预算内真正取消 Gateway 请求
     async def build_memory_context_async(user_id: str) -> str:
         repos = _get_repositories()
         memories = await repos.list_memories_async(user_id, limit=10)
@@ -210,7 +210,7 @@ class MemoryService:
             except Exception:
                 pass
 
-        # 第二层：由调用方的后台线程等待 LLM 提取，确保 D1 写入完成。
+        # 第二层：由调用方的后台线程等待 LLM 提取，确保 D1 写入完成
         MemoryService._extract_with_llm(user_id, question, answer)
 
         return regex_memories
@@ -432,4 +432,5 @@ class HistoryService:
                 if not messages or offset >= total:
                     break
 
+        # 按时间倒序排列问答记录并限制返回数量
         return sorted(records, key=lambda item: item["timestamp"], reverse=True)[:limit]

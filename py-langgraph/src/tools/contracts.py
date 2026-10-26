@@ -2,7 +2,7 @@
 contracts/tools — 语言无关契约的 Python 类型定义
 
 所有工具实现必须引用此文件中的类型，
-确保与 JSON Schema 契约保持同步。
+确保与 JSON Schema 契约保持同步
 """
 
 from __future__ import annotations
@@ -12,34 +12,34 @@ from typing import Any, Generic, TypeVar
 
 # ============ 风险等级 ============
 
-RiskLevel = str  # R0 | R1 | R2 | R3
+RiskLevel = str  # 风险等级：R0、R1、R2 或 R3
 
 # ============ 能力类别 ============
 
-ToolCategory = str  # READ | SEARCH | ACTION | COMPUTE | MEMORY | CONTROL | GUARD
+ToolCategory = str  # 能力类别：READ、SEARCH、ACTION、COMPUTE、MEMORY、CONTROL 或 GUARD
 
 # ============ 副作用类型 ============
 
-SideEffect = str  # none | read | write | external
+SideEffect = str  # 副作用类别：none、read、write 或 external
 
 # ============ 审批策略 ============
 
-ApprovalPolicy = str  # never | conditional | always
+ApprovalPolicy = str  # 审批策略：never、conditional 或 always
 
 # ============ 调用者类型 ============
 
-ActorType = str  # user | agent | service
+ActorType = str  # 调用者类型：user、agent 或 service
 
 # ============ 数据分类 ============
 
-DataClassification = str  # public | internal | confidential | pii
+DataClassification = str  # 数据分类：public、internal、confidential 或 pii
 
 # ============ 错误码 ============
 
 ToolErrorCode = str
-# INVALID_ARGUMENT | UNAUTHENTICATED | PERMISSION_DENIED | POLICY_DENIED
-# APPROVAL_REQUIRED | NOT_FOUND | CONFLICT | RATE_LIMITED | TIMEOUT
-# DEPENDENCY_ERROR | RESULT_TOO_LARGE | INTERNAL_ERROR
+# 参数与权限错误码：INVALID_ARGUMENT、UNAUTHENTICATED、PERMISSION_DENIED、POLICY_DENIED
+# 审批与执行错误码：APPROVAL_REQUIRED、NOT_FOUND、CONFLICT、RATE_LIMITED、TIMEOUT
+# 依赖与结果错误码：DEPENDENCY_ERROR、RESULT_TOO_LARGE、INTERNAL_ERROR
 
 # ============ 工具描述符 ============
 
@@ -61,6 +61,7 @@ class ToolDescriptor:
     approval_policy: ApprovalPolicy = "never"
     input_schema: dict[str, Any] = field(default_factory=dict)
     output_schema: dict[str, Any] | None = None
+    # 为每个工具描述符创建独立的默认内部数据分类列表
     data_classification: list[DataClassification] = field(default_factory=lambda: ["internal"])
     owner: str = ""
     tags: list[str] = field(default_factory=list)
@@ -79,6 +80,7 @@ class ToolCallContext:
     tenant_id: str
     user_id: str
     actor_type: ActorType
+    # 为每个调用上下文创建独立的默认成员角色列表
     roles: list[str] = field(default_factory=lambda: ["member"])
     agent_id: str = ""
     locale: str = "zh-CN"

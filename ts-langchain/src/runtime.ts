@@ -1,6 +1,9 @@
+/** 隔离请求运行时的网关、生图绑定及后台任务生命周期 */
+
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export interface RequestRuntime {
+  // 将后台承诺注册到当前请求的生命周期
   waitUntil(task: Promise<unknown>): void;
   gatewayFetch?: typeof fetch;
   generateImage?: (model: string, input: FormData | Record<string, unknown>) => Promise<Response>;
@@ -8,27 +11,27 @@ export interface RequestRuntime {
 
 const runtime = new AsyncLocalStorage<RequestRuntime>();
 
-// 将 Worker 请求生命周期与网关绑定隔离到当前异步调用链。
+// 将 Worker 请求生命周期与网关绑定隔离到当前异步调用链
 export function runWithRequestRuntime<T>(context: RequestRuntime, callback: () => T): T {
   return runtime.run(context, callback);
 }
 
-// 把当前请求创建的后台任务注册到 Worker 生命周期。
+// 把当前请求创建的后台任务注册到 Worker 生命周期
 export function retainBackgroundTask(task: Promise<unknown>): void {
   runtime.getStore()?.waitUntil(task);
 }
 
-// 优先通过内部 Service Binding 请求存储网关，Node 环境沿用 HTTP。
+// 优先通过内部 Service Binding 请求存储网关，Node 环境沿用 HTTP
 export function fetchMemoryGateway(input: string, init: RequestInit): Promise<Response> {
   return (runtime.getStore()?.gatewayFetch ?? fetch)(input, init);
 }
 
-// 在 Worker 中通过 Workers AI 绑定生图，Node 环境沿用 HTTP 调用。
+// 在 Worker 中通过 Workers AI 绑定生图，Node 环境沿用 HTTP 调用
 export function hasBoundImageGenerator(): boolean {
   return Boolean(runtime.getStore()?.generateImage);
 }
 
-// 使用当前请求显式提供的图片 Adapter。
+// 使用当前请求显式提供的图片 Adapter
 export function generateBoundImage(model: string, input: FormData | Record<string, unknown>): Promise<Response> | undefined {
   return runtime.getStore()?.generateImage?.(model, input);
 }

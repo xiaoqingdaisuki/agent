@@ -1,3 +1,5 @@
+/** 验证 tools/test_v2_tool_contract 对应模块的行为与边界条件 */
+
 import { describe, expect, it } from "vitest";
 
 import { tools } from "../../src/tools/index.js";

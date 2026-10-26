@@ -1,4 +1,4 @@
-"""ReAct V1 的语言无关状态、Observation 和停止原因定义。"""
+"""ReAct V1 的语言无关状态、Observation 和停止原因定义"""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ DEFAULT_REACT_LIMITS = {
 
 @dataclass
 class ReActObservation:
-    """统一的工具 Observation 信封。"""
+    """统一的工具 Observation 信封"""
 
     tool_call_id: str
     tool: str
@@ -51,7 +51,7 @@ class ReActObservation:
 
 @dataclass
 class ReActRunSummary:
-    """一次 ReAct 请求的可观测摘要，不保存内部思维链。"""
+    """一次 ReAct 请求的可观测摘要，不保存内部思维链"""
 
     state: str
     stop_reason: str
@@ -65,9 +65,9 @@ class ReActRunSummary:
     total_latency_ms: int
 
 
-# 生成稳定的工具与参数签名，用于重复调用检测。
+# 生成稳定的工具与参数签名，用于重复调用检测
 def tool_call_signature(tool_name: str, args: Any) -> str:
-    """生成稳定签名，避免同一工具和参数在循环中无限重复。"""
+    """生成稳定签名，避免同一工具和参数在循环中无限重复"""
     try:
         normalized = json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)
     except Exception:
@@ -75,9 +75,9 @@ def tool_call_signature(tool_name: str, args: Any) -> str:
     return f"{tool_name}:{normalized}"
 
 
-# 判断一段模型文本是否是在向用户请求缺失参数。
+# 判断一段模型文本是否是在向用户请求缺失参数
 def is_clarification(text: str) -> bool:
-    """识别澄清问题，供最终 stop_reason 分类使用。"""
+    """识别澄清问题，供最终 stop_reason 分类使用"""
     return bool(
         text
         and text.strip().endswith(("？", "?"))
@@ -85,9 +85,9 @@ def is_clarification(text: str) -> bool:
     )
 
 
-# 将 LangChain ToolMessage 转换为统一 Observation。
+# 将 LangChain ToolMessage 转换为统一 Observation
 def observation_from_tool_message(message: Any) -> ReActObservation:
-    """解析工具消息，解析失败时保留原始返回文本。"""
+    """解析工具消息，解析失败时保留原始返回文本"""
     content = getattr(message, "content", "")
     parsed: Any = content
     if isinstance(content, str):
@@ -118,9 +118,9 @@ def observation_from_tool_message(message: Any) -> ReActObservation:
     )
 
 
-# 从 LangGraph 状态构造可序列化的 ReAct 摘要。
+# 从 LangGraph 状态构造可序列化的 ReAct 摘要
 def summarize_react_state(state: dict[str, Any]) -> dict[str, Any]:
-    """统一 API 和日志使用的 ReAct 摘要格式。"""
+    """统一 API 和日志使用的 ReAct 摘要格式"""
     summary = ReActRunSummary(
         state=str(state.get("react_state", "COMPLETED")),
         stop_reason=str(state.get("stop_reason", "ANSWER_COMPLETE")),

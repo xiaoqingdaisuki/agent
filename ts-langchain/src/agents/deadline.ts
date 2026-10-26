@@ -1,3 +1,5 @@
+/** 管理 Agent 请求截止时间、取消信号及工具阶段预算 */
+
 import { config } from "../config/index.js";
 
 export class AgentDeadlineError extends Error {
@@ -15,7 +17,7 @@ export class AgentDeadline {
   private readonly timeoutPromise: Promise<never>;
   private readonly startedAt = Date.now();
   private readonly parentSignal?: AbortSignal;
-  // 将父请求的取消原因转发给当前截止时间控制器。
+  // 将父请求的取消原因转发给当前截止时间控制器
   private readonly onParentAbort = () => {
     this.controller.abort(this.parentSignal?.reason);
   };
@@ -28,8 +30,9 @@ export class AgentDeadline {
   ) {
     this.parentSignal = parentSignal;
     this.signal = this.controller.signal;
+    // 将请求取消信号转换为可参与竞速的拒绝承诺
     this.timeoutPromise = new Promise((_, reject) => {
-      // 使用当前取消原因拒绝截止时间承诺。
+      // 使用当前取消原因拒绝截止时间承诺
       const rejectAbort = () =>
         reject(
           this.signal.reason instanceof Error
@@ -46,7 +49,7 @@ export class AgentDeadline {
         { once: true },
       );
     });
-    // 流式调用可能只传递 signal 而不调用 run，提前消费拒绝避免超时触发未处理异常。
+    // 流式调用可能只传递 signal 而不调用 run，提前消费拒绝避免超时触发未处理异常
     void this.timeoutPromise.catch(() => undefined);
     if (parentSignal) {
       if (parentSignal.aborted) {
@@ -87,6 +90,7 @@ export class AgentDeadline {
       0,
       this.timeoutMs - (Date.now() - this.startedAt),
     );
+    // 到达截止时间时取消请求并携带超时原因
     this.timeoutId = setTimeout(() => {
       const error = new AgentDeadlineError(this.timeoutMs);
       this.controller.abort(error);
@@ -108,12 +112,12 @@ export async function runWithAgentDeadline<T>(
   }
 }
 
-// 判断错误是否由 Agent 自身的总时限触发。
+// 判断错误是否由 Agent 自身的总时限触发
 export function isAgentDeadlineError(error: unknown): boolean {
   return error instanceof AgentDeadlineError;
 }
 
-// 判断错误链中是否包含模型客户端或上游网络超时。
+// 判断错误链中是否包含模型客户端或上游网络超时
 export function isModelTimeoutError(error: unknown): boolean {
   let current: unknown = error;
   const visited = new Set<unknown>();
@@ -131,7 +135,7 @@ export function isModelTimeoutError(error: unknown): boolean {
   return false;
 }
 
-// 判断错误是否由客户端主动断开请求引起。
+// 判断错误是否由客户端主动断开请求引起
 export function isClientAbortError(error: unknown): boolean {
   return (
     error instanceof Error &&

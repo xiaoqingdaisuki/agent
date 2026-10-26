@@ -1,4 +1,4 @@
-"""Tests for profile module"""
+"""验证用户画像模块"""
 
 import pytest
 from src.profile.models import UserProfile, Memory, QARecord
@@ -7,27 +7,27 @@ from src.profile.service import ProfileService, MemoryService, HistoryService
 
 class TestUserProfile:
     def test_create_profile(self):
-        """Should create a user profile"""
+        """验证创建用户画像"""
         profile = ProfileService.get_or_create("user_1", "Alice")
         assert profile.id == "user_1"
         assert profile.name == "Alice"
         assert profile.preferences == {}
 
     def test_get_existing_profile(self):
-        """Should return an existing profile without erasing or renaming it"""
+        """验证读取已有画像时保留原有内容和名称"""
         ProfileService.get_or_create("user_2", "Bob")
         profile = ProfileService.get_or_create("user_2", "Charlie")
         assert profile.name == "Bob"
 
     def test_update_profile(self):
-        """Should update profile fields"""
+        """验证更新用户画像字段"""
         ProfileService.get_or_create("user_3")
         updated = ProfileService.update("user_3", name="UpdatedName", preferences={"style": "concise"})
         assert updated.name == "UpdatedName"
         assert updated.preferences["style"] == "concise"
 
     def test_update_nonexistent_profile(self):
-        """Should return None when updating non-existent profile"""
+        """验证更新不存在的画像时返回 None"""
         # 新行为：update 会创建不存在的 profile（与 get_or_create 一致）
         result = ProfileService.update("nonexistent", name="Test")
         assert result is not None
@@ -36,7 +36,7 @@ class TestUserProfile:
 
 class TestMemoryService:
     def test_add_memory(self):
-        """Should add a memory"""
+        """验证新增长期记忆"""
         ProfileService.get_or_create("user_4")
         memory = MemoryService.add("user_4", "用户喜欢简洁的回答", "preference", 4)
         assert memory.content == "用户喜欢简洁的回答"
@@ -44,7 +44,7 @@ class TestMemoryService:
         assert memory.importance == 4
 
     def test_get_relevant_memories(self):
-        """Should return memories sorted by importance"""
+        """验证按重要性排序返回记忆"""
         ProfileService.get_or_create("user_5")
         MemoryService.add("user_5", "低优先级记忆", "fact", 1)
         MemoryService.add("user_5", "高优先级记忆", "fact", 5)
@@ -55,7 +55,7 @@ class TestMemoryService:
         assert memories[0].importance >= memories[1].importance
 
     def test_get_by_category(self):
-        """Should filter memories by category"""
+        """验证按类别筛选记忆"""
         ProfileService.get_or_create("user_6")
         MemoryService.add("user_6", "偏好A", "preference", 3)
         MemoryService.add("user_6", "事实B", "fact", 3)
@@ -65,7 +65,7 @@ class TestMemoryService:
         assert prefs[0].content == "偏好A"
 
     def test_delete_memory(self):
-        """Should delete a memory"""
+        """验证删除指定记忆"""
         ProfileService.get_or_create("user_7")
         memory = MemoryService.add("user_7", "要删除的记忆", "fact", 3)
         result = MemoryService.delete("user_7", memory.id)
@@ -73,19 +73,19 @@ class TestMemoryService:
         assert len(MemoryService.list_all("user_7")) == 0
 
     def test_delete_nonexistent_memory(self):
-        """Should return False when deleting non-existent memory"""
+        """验证删除不存在的记忆时返回 False"""
         ProfileService.get_or_create("user_8")
         result = MemoryService.delete("user_8", "nonexistent_id")
         assert result is False
 
     def test_build_memory_context_empty(self):
-        """Should return empty string when no memories"""
+        """验证无记忆时返回空字符串"""
         ProfileService.get_or_create("user_9")
         context = MemoryService.build_memory_context("user_9")
         assert context == ""
 
     def test_build_memory_context_with_memories(self):
-        """Should format memories into context string"""
+        """验证将记忆格式化为上下文字符串"""
         ProfileService.get_or_create("user_10")
         MemoryService.add("user_10", "用户在北京", "fact", 5)
         MemoryService.add("user_10", "用户喜欢简洁回答", "preference", 4)
@@ -98,7 +98,7 @@ class TestMemoryService:
 
 class TestMemoryExtraction:
     def test_extract_preference(self):
-        """Should extract preference from user message"""
+        """验证从用户消息中提取偏好"""
         ProfileService.get_or_create("user_11")
         memories = MemoryService.extract_memories_from_conversation(
             "user_11", "我喜欢简洁的回答。", ""
@@ -107,7 +107,7 @@ class TestMemoryExtraction:
         assert any("偏好" in m.content for m in memories)
 
     def test_extract_location(self):
-        """Should extract location info"""
+        """验证提取位置资料"""
         ProfileService.get_or_create("user_12")
         memories = MemoryService.extract_memories_from_conversation(
             "user_12", "我在北京。", ""
@@ -116,7 +116,7 @@ class TestMemoryExtraction:
         assert any("北京" in m.content for m in memories)
 
     def test_no_extraction_for_regular_message(self):
-        """Should not extract memories from regular messages"""
+        """验证普通消息不会触发记忆提取"""
         ProfileService.get_or_create("user_13")
         initial_count = len(MemoryService.list_all("user_13"))
         MemoryService.extract_memories_from_conversation(
@@ -127,7 +127,7 @@ class TestMemoryExtraction:
 
 class TestHistoryService:
     def test_record_qa(self):
-        """Should record a Q&A pair"""
+        """验证记录一组问答"""
         ProfileService.get_or_create("user_14")
         record = HistoryService.record("user_14", "conv_1", "你好", "你好呀！")
         assert record["question"] == "你好"
@@ -135,7 +135,7 @@ class TestHistoryService:
         assert record["conversation_id"] == "conv_1"
 
     def test_get_history(self):
-        """Should retrieve Q&A history"""
+        """验证读取问答历史"""
         ProfileService.get_or_create("user_15")
         HistoryService.record("user_15", "conv_1", "Q1", "A1")
         HistoryService.record("user_15", "conv_1", "Q2", "A2")

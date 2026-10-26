@@ -2,7 +2,7 @@
  * Gateway 错误码常量
  *
  * 替代 contracts/memory/error-codes.json
- * 所有 Gateway 错误码集中在此定义，SDK 和 Gateway 共享引用。
+ * 所有 Gateway 错误码集中在此定义，SDK 和 Gateway 共享引用
  */
 
 /** Gateway 层错误码（范围: 7000-7999） */

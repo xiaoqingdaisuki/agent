@@ -89,7 +89,7 @@ class SearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
 
 
-# 将统一文档解析异常转换为 FastAPI 错误响应。
+# 将统一文档解析异常转换为 FastAPI 错误响应
 def document_parse_http_error(error: DocumentParseError) -> HTTPException:
     return HTTPException(
         status_code=error.status_code,
@@ -97,7 +97,7 @@ def document_parse_http_error(error: DocumentParseError) -> HTTPException:
     )
 
 
-# 规范化前端暂存的文档引用，禁止把路径或任意对象带入模型上下文。
+# 规范化前端暂存的文档引用，禁止把路径或任意对象带入模型上下文
 def normalize_session_documents(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -162,7 +162,7 @@ def normalize_session_documents(value: Any) -> list[dict[str, Any]]:
     return normalized
 
 
-# 读取 JSON 或 multipart 消息，并将图片编码为仅当前请求使用的数据块。
+# 读取 JSON 或 multipart 消息，并将图片编码为仅当前请求使用的数据块
 async def read_send_message_payload(request: Request) -> tuple[SendMessageRequest, dict[str, Any]]:
     content_type = request.headers.get("content-type", "").lower()
     if "multipart/form-data" not in content_type:
@@ -302,7 +302,7 @@ async def read_send_message_payload(request: Request) -> tuple[SendMessageReques
     }
 
 
-# 持久化模式将本轮文档写入知识库，关闭记忆模式只返回临时上下文。
+# 持久化模式将本轮文档写入知识库，关闭记忆模式只返回临时上下文
 async def prepare_attachment_context(attachments: dict[str, Any], user_id: str) -> dict[str, Any]:
     if not settings.memory_enabled or not attachments.get("session_documents"):
         return attachments
@@ -320,7 +320,7 @@ async def prepare_attachment_context(attachments: dict[str, Any], user_id: str) 
     return {**attachments, "document_ids": document_ids}
 
 
-# 要求持久化知识库模式，避免关闭记忆时误写长期文档数据。
+# 要求持久化知识库模式，避免关闭记忆时误写长期文档数据
 def require_persistent_knowledge() -> None:
     if not settings.memory_enabled:
         raise HTTPException(
@@ -346,13 +346,13 @@ async def health():
 
 
 @router.get("/health/live")
-# 报告进程存活，不依赖外部服务。
+# 报告进程存活，不依赖外部服务
 async def live_health():
     return {"status": "ok", "live": True, "version": "0.2.0"}
 
 
 @router.get("/health/ready")
-# 报告关键依赖配置是否满足接流条件。
+# 报告关键依赖配置是否满足接流条件
 async def ready_health():
     from fastapi.responses import JSONResponse
     from src.api.health import get_readiness
@@ -458,7 +458,7 @@ async def send_message(conv_id: str, request: Request):
     turn_content = content or "请分析我上传的附件"
     active_turn_id = None
     try:
-        # 确保会话存在于当前仓储并校验用户归属。
+        # 确保会话存在于当前仓储并校验用户归属
         await asyncio.to_thread(ConversationService.ensure, conv_id, trusted_user_id)
 
         conv = await asyncio.to_thread(ConversationService.get, conv_id)
@@ -468,7 +468,7 @@ async def send_message(conv_id: str, request: Request):
                 detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
             )
 
-        # 启用记忆网关时尝试恢复 checkpoint；本地模式会安全跳过。
+        # 启用记忆网关时尝试恢复 checkpoint；本地模式会安全跳过
         try:
             from src.memory import get_default_checkpointer
 
@@ -549,7 +549,7 @@ async def stream_message(conv_id: str, request: Request):
             },
         )
     turn_content = content or "请分析我上传的附件"
-    # 确保会话存在于当前仓储并校验已有 thread_id 的用户归属。
+    # 确保会话存在于当前仓储并校验已有 thread_id 的用户归属
     await asyncio.to_thread(ConversationService.ensure, conv_id, trusted_user_id)
 
     conversation = await asyncio.to_thread(ConversationService.get, conv_id)
@@ -559,7 +559,7 @@ async def stream_message(conv_id: str, request: Request):
             detail={"code": BusinessErrorCode.NOT_FOUND.value, "message": "会话不存在"},
         )
 
-    # 启用记忆网关时尝试恢复 checkpoint；本地模式会安全跳过。
+    # 启用记忆网关时尝试恢复 checkpoint；本地模式会安全跳过
     try:
         from src.memory import get_default_checkpointer
 
@@ -600,7 +600,7 @@ async def stream_message(conv_id: str, request: Request):
             detail={"code": BusinessErrorCode.INTERNAL_ERROR.value, "message": "附件处理失败"},
         ) from error
 
-    # 延迟创建 Agent 迭代器，统一通过流协调器维护协议和轮次状态。
+    # 延迟创建 Agent 迭代器，统一通过流协调器维护协议和轮次状态
     def events():
         return AgentService.chat_stream(
             conv_id,
@@ -635,7 +635,7 @@ async def clear_messages(conv_id: str, request: Request):
 
 
 @router.post("/conversations/{conv_id}/session-documents/parse")
-# 解析关闭记忆模式下的临时文档，返回与 TS 版本一致的会话文档结构。
+# 解析关闭记忆模式下的临时文档，返回与 TS 版本一致的会话文档结构
 async def parse_session_document_route(conv_id: str, request: Request):
     if settings.memory_enabled:
         raise HTTPException(

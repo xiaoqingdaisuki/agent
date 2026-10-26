@@ -1,7 +1,7 @@
 /**
  * Document 数据模型 Zod Schemas
  *
- * 定义文档管理 API 的请求/响应数据结构。
+ * 定义文档管理 API 的请求/响应数据结构
  */
 
 import { z } from "zod";

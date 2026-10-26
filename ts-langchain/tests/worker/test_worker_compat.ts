@@ -1,3 +1,5 @@
+/** 验证 worker/test_worker_compat 对应模块的行为与边界条件 */
+
 import { describe, expect, it, vi } from "vitest";
 import { AIMessage, ChatMessageChunk } from "@langchain/core/messages";
 import { installWorkerRouterCompatibility } from "../../src/worker-router.js";

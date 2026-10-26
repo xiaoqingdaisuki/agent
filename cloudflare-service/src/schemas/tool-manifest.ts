@@ -2,7 +2,7 @@
  * 工具描述符 Zod Schemas
  *
  * 替代 contracts/tools/manifest.schema.json
- * 定义 ToolDescriptor 的结构，供工具注册和运行时使用。
+ * 定义 ToolDescriptor 的结构，供工具注册和运行时使用
  */
 
 import { z } from "zod";

@@ -1,7 +1,7 @@
 /**
  * Vitest Global Setup — 自动 mock CloudflareMemoryClient
  *
- * 所有测试自动使用 FakeRepositories，避免真实 HTTP 请求。
+ * 所有测试自动使用 FakeRepositories，避免真实 HTTP 请求
  */
 
 import { beforeEach, vi } from "vitest";
@@ -29,10 +29,10 @@ export function resetMocks() {
   mockSavedContents.clear();
 }
 
-// ============ Mock CloudflareMemoryClient ============
+// ============ 模拟 CloudflareMemoryClient 客户端 ============
 
 export const mockCloudflareClient = {
-  // Profile
+  // 用户画像
   putProfile: vi.fn(async (userId: string, name: string = "", preferences?: any) => {
     const existing = mockProfiles.get(userId);
     const now = new Date(Math.max(Date.now(), existing ? Date.parse(existing.updated_at) + 1 : 0)).toISOString();
@@ -58,7 +58,7 @@ export const mockCloudflareClient = {
     return profile ? { ...profile } : null;
   }),
 
-  // Conversation
+  // 会话
   createConversation: vi.fn(async (
     userId: string,
     title: string,
@@ -91,7 +91,7 @@ export const mockCloudflareClient = {
     return true;
   }),
 
-  // Message
+  // 消息
   createMessagesBatch: vi.fn(async (convId: string, userId: string, messages: any[]) => {
     const existing = mockMessages.get(convId) || [];
     const keys = new Set(existing.map((m: any) => m.sequence_no));
@@ -196,14 +196,14 @@ export const mockCloudflareClient = {
     return { ...turn };
   }),
 
-  // Memory
+  // 长期记忆
   saveMemory: vi.fn(async (userId: string, memoryId: string, content: string, category: string = "fact",
     importance: number = 3, source: string = "user_explicit",
     sourceConversationId?: string, idempotencyKey?: string) => {
     const normalized = content.trim().toLowerCase();
     const saved = mockSavedContents.get(userId) || new Set<string>();
 
-    // Deduplicate
+    // 按内容去重
     if (saved.has(normalized)) {
       const existing = mockMemories.get(userId) || [];
       const found = existing.find((m: any) => m.status !== "deleted" && m.normalized_content === normalized);
@@ -351,7 +351,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// Mock the module
+// 替换模块为模拟实现
 vi.mock("../src/clients/memory_gateway.js", () => ({
   CloudflareMemoryClient: vi.fn(() => mockCloudflareClient),
   MemoryGatewayError: class extends Error {

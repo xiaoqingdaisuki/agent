@@ -78,6 +78,7 @@ class ToolRegistry {
 
   // 获取 getDescriptors 对应的数据
   getDescriptors(): ToolDescriptor[] {
+    // 从工具注册项中提取描述符
     return Array.from(this.tools.values()).map((e) => e.descriptor);
   }
 
@@ -88,6 +89,7 @@ class ToolRegistry {
 
   // 获取 getAllTools 对应的数据
   getAllTools(): DynamicStructuredTool[] {
+    // 从工具注册项中提取可执行工具
     return Array.from(this.tools.values()).map((e) => e.tool);
   }
 
@@ -110,6 +112,7 @@ class ToolRegistry {
         continue;
       }
 
+      // 检查用户是否具备工具所需权限
       if (userPermissions.includes("*") || required.every((p) => userPermissions.includes(p))) {
         visible.push(entry.tool);
       }
@@ -131,6 +134,7 @@ class ToolRegistry {
         d.approval_policy !== "always" && (
           d.risk_level === "R0" ||
           required.length === 0 ||
+          // 检查用户是否具备候选工具所需权限
           userPermissions.includes("*") || required.every((p) => userPermissions.includes(p))
         );
 

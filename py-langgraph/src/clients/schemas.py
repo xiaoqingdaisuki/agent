@@ -1,8 +1,8 @@
 """
 Gateway 响应数据模型 Pydantic Schemas
 
-与 cloudflare-service 的 src/schemas/memory-models.ts 保持一致。
-用于运行时校验 Gateway 响应，确保数据不偏离契约。
+与 cloudflare-service 的 src/schemas/memory-models.ts 保持一致
+用于运行时校验 Gateway 响应，确保数据不偏离契约
 """
 
 from enum import Enum
@@ -170,7 +170,7 @@ class DocumentData(BaseModel):
     file_type: Optional[str] = None
     size: int = 0
     category: str = "general"
-    status: str  # indexed | failed
+    status: str  # 索引状态：indexed 或 failed
     chunk_count: int = 0
     content_text: str = ""
     created_at: str

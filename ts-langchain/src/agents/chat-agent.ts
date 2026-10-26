@@ -1,3 +1,5 @@
+/** 创建并缓存用于普通对话的 LangChain Agent */
+
 import { createChatModel } from "../config/model.js";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages";

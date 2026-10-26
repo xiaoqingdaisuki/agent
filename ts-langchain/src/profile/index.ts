@@ -1,6 +1,8 @@
+/** 定义用户画像结构及创建、更新和偏好设置辅助函数 */
+
 import { randomUUID } from "crypto";
 
-// ============ User Profile ==========
+// ============ 用户画像 ==========
 
 export interface UserProfile {
   id: string;
@@ -16,7 +18,7 @@ export function createUserProfile(id: string, name: string = ""): UserProfile {
   return { id, name, preferences: {}, created_at: now, last_active_at: now };
 }
 
-// ============ Memory ==========
+// ============ 长期记忆 ==========
 
 export interface Memory {
   id: string;
@@ -47,7 +49,7 @@ export function createMemory(
   };
 }
 
-// ============ Q&A History ==========
+// ============ 问答历史 ==========
 
 export interface QARecord {
   id: string;
@@ -75,5 +77,5 @@ export function createQARecord(
   };
 }
 
-// 数据模型已迁移到 Cloudflare Service，本文件仅保留类型定义与工厂函数。
-// ProfileStore 内存存储已移除。
+// 数据模型已迁移到 Cloudflare Service，本文件仅保留类型定义与工厂函数
+// ProfileStore 内存存储已移除

@@ -1,4 +1,4 @@
-"""Deterministic tests for the Tavily web-search reliability layer."""
+"""对 Tavily 网页搜索可靠性层执行确定性测试"""
 
 import pytest
 

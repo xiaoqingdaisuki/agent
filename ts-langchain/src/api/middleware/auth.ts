@@ -1,3 +1,5 @@
+/** 校验请求认证信息并解析可信用户身份和工具权限 */
+
 import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
@@ -52,7 +54,7 @@ function getBearerSecret(request: FastifyRequest): string {
     : "";
 }
 
-// 对可信身份执行进程内固定窗口限流，并返回需要等待的秒数。
+// 对可信身份执行进程内固定窗口限流，并返回需要等待的秒数
 function consumeRateLimit(key: string, limit: number, now = Date.now()): number {
   let bucket = rateBuckets.get(key);
   if (!bucket || bucket.resetAt <= now) {
@@ -72,6 +74,7 @@ function consumeRateLimit(key: string, limit: number, now = Date.now()): number 
 
 // 注册外部 Agent API 的服务认证中间件
 export function registerAgentAuthMiddleware(app: FastifyInstance): void {
+  // 校验非公开请求的认证信息并注入可信用户身份
   app.addHook("preHandler", async (request, reply) => {
     const pathname = request.url.split("?", 1)[0];
     if (PUBLIC_PATHS.has(pathname)) return;
@@ -115,8 +118,10 @@ export function registerAgentAuthMiddleware(app: FastifyInstance): void {
 
     const rawRoles = request.headers["x-agent-roles"];
     const roles = typeof rawRoles === "string" && rawRoles.trim()
+      // 移除角色名称两端的空白字符
       ? [...new Set(rawRoles.split(",").map((role) => role.trim()).filter(Boolean))]
       : ["member"];
+    // 检测不在允许列表中的角色
     if (typeof rawRoles !== "undefined" && (typeof rawRoles !== "string" || roles.some((role) => !ALLOWED_ROLES.has(role)))) {
       return reply.status(400).send({
         error: { code: BusinessErrorCode.INVALID_REQUEST, message: "角色标识格式不正确" },
@@ -139,7 +144,7 @@ export function registerAgentAuthMiddleware(app: FastifyInstance): void {
   });
 }
 
-// 返回仅由已认证服务注入的完整工具身份。
+// 返回仅由已认证服务注入的完整工具身份
 export function getAgentToolIdentity(
   request: FastifyRequest,
   submittedUserId?: string,

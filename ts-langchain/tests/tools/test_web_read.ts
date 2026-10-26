@@ -1,3 +1,5 @@
+/** 验证 tools/test_web_read 对应模块的行为与边界条件 */
+
 import { describe, expect, it } from "vitest";
 
 import { isSafeUrl } from "../../src/tools/web-read.js";

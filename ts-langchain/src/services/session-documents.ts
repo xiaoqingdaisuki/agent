@@ -1,3 +1,5 @@
+/** 解析临时附件并构建带文件位置的会话文档上下文 */
+
 import path from "node:path";
 import mammoth from "mammoth";
 import { getDocumentProxy } from "unpdf";
@@ -30,7 +32,7 @@ const SESSION_DOCUMENT_EXTENSIONS = new Set([
   ".docx",
 ]);
 
-// 将解析后的正文切分为有界的临时上下文段落。
+// 将解析后的正文切分为有界的临时上下文段落
 function buildSessionDocumentParts(
   content: string,
   page?: number,
@@ -39,9 +41,12 @@ function buildSessionDocumentParts(
   if (!normalized) return [];
   return normalized
     .split(/\n{2,}/)
+    // 移除文档段落两端的空白字符
     .map((part) => part.trim())
     .filter(Boolean)
+    // 将超长段落继续拆分为有长度上限的片段
     .flatMap((part) => part.match(/[\s\S]{1,20000}/gu) ?? [])
+    // 为文档片段附加段落序号和页码
     .map((part, index) => ({
       partIndex: index,
       page,
@@ -49,7 +54,7 @@ function buildSessionDocumentParts(
     }));
 }
 
-// 解析 PDF 页面文本，保留页码供模型定位来源。
+// 解析 PDF 页面文本，保留页码供模型定位来源
 async function parsePdfDocument(buffer: Buffer): Promise<SessionDocumentPart[]> {
   const parser = await getDocumentProxy(new Uint8Array(buffer));
   try {
@@ -60,9 +65,11 @@ async function parsePdfDocument(buffer: Buffer): Promise<SessionDocumentPart[]> 
     for (let pageNumber = 1; pageNumber <= parser.numPages; pageNumber += 1) {
       const page = await parser.getPage(pageNumber);
       const content = await page.getTextContent();
+      // 提取 PDF 文本项并保留行结束信息
       const text = content.items.map((item) => "str" in item ? `${item.str}${item.hasEOL ? "\n" : ""}` : "").join("");
       textBytes += Buffer.byteLength(text, "utf8");
       if (textBytes > SESSION_DOCUMENT_MAX_TEXT_BYTES) throw new Error("SESSION_DOCUMENT_TEXT_TOO_LARGE");
+      // 为各页解析结果分配连续片段序号
       const pageParts = buildSessionDocumentParts(text, pageNumber).map((part) => ({
         ...part,
         partIndex: partIndex++,
@@ -76,13 +83,13 @@ async function parsePdfDocument(buffer: Buffer): Promise<SessionDocumentPart[]> 
   }
 }
 
-// 解析 DOCX 正文，去除格式后保留段落内容供模型使用。
+// 解析 DOCX 正文，去除格式后保留段落内容供模型使用
 async function parseDocxDocument(buffer: Buffer): Promise<SessionDocumentPart[]> {
   const result = await mammoth.extractRawText({ buffer, arrayBuffer: new Uint8Array(buffer).buffer });
   return buildSessionDocumentParts(result.value);
 }
 
-// 解析关闭记忆模式下的临时文档，只返回当前请求所需的文本上下文。
+// 解析关闭记忆模式下的临时文档，只返回当前请求所需的文本上下文
 export async function parseSessionDocument(
   buffer: Buffer,
   filename: string,
@@ -125,6 +132,7 @@ export async function parseSessionDocument(
     parts = buildSessionDocumentParts(content, 1);
   }
 
+  // 提取解析片段正文以重建文档内容
   const extractedTextBytes = Buffer.byteLength(parts.map((part) => part.content).join("\n\n"), "utf8");
   if (extractedTextBytes > SESSION_DOCUMENT_MAX_TEXT_BYTES) {
     throw new Error("SESSION_DOCUMENT_TEXT_TOO_LARGE");
@@ -141,11 +149,13 @@ export async function parseSessionDocument(
   };
 }
 
-// 将临时文档段落包装为不可信参考文本，防止文档内容覆盖系统指令。
+// 将临时文档段落包装为不可信参考文本，防止文档内容覆盖系统指令
 export function formatSessionDocumentContext(documents: SessionDocument[]): string {
   return documents
+    // 按文档整理带名称及位置的临时片段上下文
     .flatMap((document) =>
       document.parts.map(
+        // 为每个临时片段附加文件名称及页码或段落序号
         (part) =>
           `[临时文档：${document.filename}，第 ${part.page ?? part.partIndex + 1} 段]\n${part.content}`,
       ),

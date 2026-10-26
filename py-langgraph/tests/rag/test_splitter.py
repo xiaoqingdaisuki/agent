@@ -1,3 +1,5 @@
+"""验证 test_splitter 对应模块的行为与边界条件"""
+
 import pytest
 
 from src.rag.splitter import TextSplitter

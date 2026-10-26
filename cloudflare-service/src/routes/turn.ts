@@ -1,4 +1,4 @@
-/** Turn Routes — Agent 单轮执行的幂等与状态恢复接口。 */
+/** Turn Routes — Agent 单轮执行的幂等与状态恢复接口 */
 
 import { z } from "zod";
 import { getConversation } from "../repositories/conversation.js";
@@ -36,10 +36,10 @@ const CompleteTurnSchema = z.object({
   created_at: z.string().optional(),
 });
 
-// 注册 Turn 的创建、查询和状态更新路由。
+// 注册 Turn 的创建、查询和状态更新路由
 export function registerTurnRoutes(app: any) {
   app.post("/v1/internal/conversations/:conversation_id/turns:begin",
-  // 处理原子开始 Turn 并写入用户消息的请求。
+  // 处理原子开始 Turn 并写入用户消息的请求
   async (c: any) => {
     const conversationId = c.req.param("conversation_id");
     const body = BeginTurnSchema.parse(await c.req.json());
@@ -68,7 +68,7 @@ export function registerTurnRoutes(app: any) {
   });
 
   app.post("/v1/internal/turns/:turn_id/complete",
-  // 处理原子完成 Turn 并写入助手消息的请求。
+  // 处理原子完成 Turn 并写入助手消息的请求
   async (c: any) => {
     const turnId = c.req.param("turn_id");
     const body = CompleteTurnSchema.parse(await c.req.json());
@@ -94,7 +94,7 @@ export function registerTurnRoutes(app: any) {
   });
 
   app.post("/v1/internal/conversations/:conversation_id/turns",
-  // 处理兼容的 Turn 创建或复用请求。
+  // 处理兼容的 Turn 创建或复用请求
   async (c: any) => {
     const conversationId = c.req.param("conversation_id");
     const body = CreateTurnSchema.parse(await c.req.json());
@@ -119,7 +119,7 @@ export function registerTurnRoutes(app: any) {
   });
 
   app.get("/v1/internal/turns/:turn_id",
-  // 按可信用户读取指定 Turn。
+  // 按可信用户读取指定 Turn
   async (c: any) => {
     const query = GetTurnQuerySchema.parse(c.req.query());
     const turn = await getTurn(c.env.DB, c.req.param("turn_id"));
@@ -129,7 +129,7 @@ export function registerTurnRoutes(app: any) {
   });
 
   app.patch("/v1/internal/turns/:turn_id",
-  // 按不可逆状态机更新指定 Turn。
+  // 按不可逆状态机更新指定 Turn
   async (c: any) => {
     const turnId = c.req.param("turn_id");
     const body = UpdateTurnSchema.parse(await c.req.json());

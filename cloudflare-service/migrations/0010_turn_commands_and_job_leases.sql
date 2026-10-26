@@ -1,4 +1,4 @@
--- 为原子 Turn 命令增加 O(1) 消息序号，并为索引任务增加消费租约。
+-- 为原子 Turn 命令增加 O(1) 消息序号，并为索引任务增加消费租约
 ALTER TABLE conversations ADD COLUMN next_sequence_no INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE conversations ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE conversations ADD COLUMN version INTEGER NOT NULL DEFAULT 0;

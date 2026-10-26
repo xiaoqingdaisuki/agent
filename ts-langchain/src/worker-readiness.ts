@@ -1,8 +1,10 @@
+/** 在应用初始化前响应 Worker 健康探针并校验必需配置 */
+
 export interface WorkerConfiguration {
   [key: string]: unknown;
 }
 
-// 在应用启动前检查 Worker 必需依赖，避免配置缺失使公开探针失效。
+// 在应用启动前检查 Worker 必需依赖，避免配置缺失使公开探针失效
 export function getWorkerReadiness(env: WorkerConfiguration) {
   const components = {
     model: Boolean(env.OPENAI_API_KEY && env.CLOUDFLARE_AI_GATEWAY_URL),
@@ -12,12 +14,13 @@ export function getWorkerReadiness(env: WorkerConfiguration) {
   const ready = Object.values(components).every(Boolean);
   return {
     status: ready ? "ok" : "degraded", ready, version: "0.2.0",
+    // 将依赖布尔状态转换为公开探针使用的配置状态
     components: Object.fromEntries(Object.entries(components).map(([key, value]) =>
       [key, value ? "configured" : "missing_configuration"])),
   };
 }
 
-// 公开存活探针始终可用；未就绪时阻止业务请求进入不完整的 Worker。
+// 公开存活探针始终可用；未就绪时阻止业务请求进入不完整的 Worker
 export function workerConfigurationResponse(request: Request, env: WorkerConfiguration): Response | undefined {
   const pathname = new URL(request.url).pathname;
   const healthPath = pathname.startsWith("/v1/")

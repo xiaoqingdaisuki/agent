@@ -1,3 +1,5 @@
+/** 验证 rag/test_rag_index 对应模块的行为与边界条件 */
+
 import { describe, expect, it } from "vitest";
 
 import { config } from "../../src/config/index.js";

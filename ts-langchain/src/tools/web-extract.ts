@@ -1,7 +1,7 @@
 /**
  * web.extract — 网页结构化信息提取
  *
- * 在 web.read 的 SSRF 防护基础上抓取网页，并从重复卡片、表格和字段标签中提取结构化数据。
+ * 在 web.read 的 SSRF 防护基础上抓取网页，并从重复卡片、表格和字段标签中提取结构化数据
  */
 
 import { DynamicStructuredTool } from "@langchain/core/tools";
@@ -33,7 +33,7 @@ export const webExtractDescriptor: ToolDescriptor = {
   input_schema: webExtractInputSchema,
 };
 
-// 解码网页中常见的 HTML 实体。
+// 解码网页中常见的 HTML 实体
 function decodeHtml(text: string): string {
   return text
     .replace(/&nbsp;/gi, " ")
@@ -42,10 +42,11 @@ function decodeHtml(text: string): string {
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
+    // 将数字 HTML 实体转换为对应字符
     .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)));
 }
 
-// 清理 HTML 标签、脚本和样式，保留可供字段匹配的文本。
+// 清理 HTML 标签、脚本和样式，保留可供字段匹配的文本
 function cleanHtml(html: string): string {
   return decodeHtml(
     html
@@ -57,7 +58,7 @@ function cleanHtml(html: string): string {
   );
 }
 
-// 生成字段的宽松匹配键，兼容 class、id 和 data-field 命名。
+// 生成字段的宽松匹配键，兼容 class、id 和 data-field 命名
 function fieldKeys(field: string): string[] {
   const normalized = field.trim().toLowerCase().replace(/[_-]+/g, " ");
   const aliases: Record<string, string[]> = {
@@ -69,8 +70,9 @@ function fieldKeys(field: string): string[] {
   return [normalized, ...(aliases[normalized] ?? [])];
 }
 
-// 从一个 HTML 片段中按字段名提取值。
+// 从一个 HTML 片段中按字段名提取值
 function extractField(fragment: string, field: string): string {
+  // 转义字段别名中的正则特殊字符
   const keys = fieldKeys(field).map((key) => key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const keyPattern = keys.join("|");
   const elementPattern = new RegExp(
@@ -85,19 +87,23 @@ function extractField(fragment: string, field: string): string {
   return labelMatch?.[1]?.trim().slice(0, 500) ?? "";
 }
 
-// 提取表格中的行，并以表头作为字段名。
+// 提取表格中的行，并以表头作为字段名
 function extractTableItems(html: string, fields: string[]): Array<Record<string, string>> {
   const tables: Array<Record<string, string>> = [];
   const tableMatches = html.matchAll(/<table[^>]*>([\s\S]*?)<\/table>/gi);
   for (const tableMatch of tableMatches) {
+    // 逐行提取 HTML 表格单元格并清理标签
     const rows = [...tableMatch[1].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((row) =>
+      // 清理表格单元格中的 HTML 标记
       [...row[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((cell) => cleanHtml(cell[1])),
     );
     if (rows.length < 2) continue;
+    // 将表头转换为小写以支持忽略大小写匹配
     const headers = rows[0].map((header) => header.toLowerCase());
     for (const row of rows.slice(1)) {
       const item: Record<string, string> = {};
       for (const field of fields) {
+        // 根据字段别名查找包含对应关键词的表头
         const index = headers.findIndex((header) => fieldKeys(field).some((key) => header.includes(key)));
         if (index >= 0 && row[index]) item[field] = row[index].slice(0, 500);
       }
@@ -107,7 +113,7 @@ function extractTableItems(html: string, fields: string[]): Array<Record<string,
   return tables;
 }
 
-// 提取产品卡片、列表项或语义化 article 中的字段。
+// 提取产品卡片、列表项或语义化 article 中的字段
 function extractBlockItems(html: string, fields: string[]): Array<Record<string, string>> {
   const items: Array<Record<string, string>> = [];
   const blockPattern = /<(article|li|div|section)[^>]*(?:class|id|itemtype)=["'][^"']*(?:product|item|card|listing|offer)[^"']*["'][^>]*>([\s\S]*?)<\/\1>/gi;
@@ -122,7 +128,7 @@ function extractBlockItems(html: string, fields: string[]): Array<Record<string,
   return items;
 }
 
-// 从网页 HTML 中提取请求字段并生成结构化结果。
+// 从网页 HTML 中提取请求字段并生成结构化结果
 export function extractStructuredItems(html: string, fields: string[]): Array<Record<string, string>> {
   const tableItems = extractTableItems(html, fields);
   if (tableItems.length > 0) return tableItems;
@@ -137,7 +143,7 @@ export function extractStructuredItems(html: string, fields: string[]): Array<Re
   return Object.keys(fallback).length > 0 ? [fallback] : [];
 }
 
-// 在每次重定向前执行 SSRF 安全检查并读取网页正文。
+// 在每次重定向前执行 SSRF 安全检查并读取网页正文
 async function fetchSafeHtml(url: string): Promise<string> {
   const initialCheck = await validateNetworkUrl(url);
   if (!initialCheck.safe) throw new Error(`URL 安全拒绝：${initialCheck.reason}`);
@@ -172,6 +178,7 @@ export const webExtractTool: DynamicStructuredTool = new DynamicStructuredTool({
   name: "web_extract",
   description: "从网页列表或表格中提取结构化字段，例如产品名称、价格和评分。",
   schema: webExtractInputSchema,
+  // 校验 URL 安全性并提取网页中的指定字段
   func: async ({ url, fields }) => {
     if (!isSafeUrl(url).safe) {
       return JSON.stringify({ items: [], error: "URL 安全拒绝" });

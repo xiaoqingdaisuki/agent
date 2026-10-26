@@ -10,7 +10,7 @@ LangGraph 的 checkpointer 机制：
 
 from src.memory.d1_checkpointer import D1Checkpointer
 
-# 按配置复用 D1Checkpointer 或纯内存 MemorySaver。
+# 按配置复用 D1Checkpointer 或纯内存 MemorySaver
 _checkpointer: D1Checkpointer | None = None
 _memory_saver = None
 

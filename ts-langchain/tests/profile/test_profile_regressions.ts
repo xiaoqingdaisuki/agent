@@ -1,3 +1,5 @@
+/** 验证 profile/test_profile_regressions 对应模块的行为与边界条件 */
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { config } from "../../src/config/index.js";
 import { inMemoryRepositories } from "../../src/repositories/index.js";

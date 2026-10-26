@@ -5,8 +5,8 @@
  * 1. Tool 调用指标收集（调用量、成功率、延迟）
  * 2. 结构化事件日志
  *
- * 不依赖外部 APM 系统，适合中小规模部署。
- * 生产环境可替换为 OpenTelemetry + Prometheus。
+ * 不依赖外部 APM 系统，适合中小规模部署
+ * 生产环境可替换为 OpenTelemetry + Prometheus
  */
 
 import { CloudflareMemoryClient } from "../clients/memory_gateway.js";
@@ -97,12 +97,12 @@ class MetricsCollector {
     return this.metrics.slice(-limit);
   }
 
-  // 原子取出最早一批待上传指标。
+  // 原子取出最早一批待上传指标
   drain(limit = 100): ToolCallMetric[] {
     return this.metrics.splice(0, limit);
   }
 
-  // 上传失败时把指标恢复到队首并维持容量上限。
+  // 上传失败时把指标恢复到队首并维持容量上限
   restore(events: ToolCallMetric[]): void {
     this.metrics = [...events, ...this.metrics].slice(0, this.maxEvents);
   }
@@ -135,12 +135,14 @@ export async function flushToolMetrics(): Promise<void> {
   if (!config.MEMORY_ENABLED) return;
   if (metricsFlush) return metricsFlush;
   if (metricsCollector.getEvents(1).length === 0) return;
+  // 分批排空工具指标并在网关写入失败时恢复待上报数据
   metricsFlush = (async () => {
     while (true) {
       const toFlush = metricsCollector.drain(500);
       if (toFlush.length === 0) break;
       try {
         await getGatewayClient().writeToolMetrics(
+          // 将采集指标转换为网关批量写入结构
           toFlush.map((m) => ({
             tool_name: m.tool_name, tool_version: m.tool_version, ok: m.ok,
             error_code: m.error_code, duration_ms: m.duration_ms,

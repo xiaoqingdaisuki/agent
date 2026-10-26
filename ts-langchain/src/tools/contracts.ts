@@ -2,11 +2,11 @@
  * contracts/tools — 语言无关契约的 TS 类型定义
  *
  * 所有工具实现必须引用此文件中的类型，
- * 确保与 JSON Schema 契约保持同步。
+ * 确保与 JSON Schema 契约保持同步
  *
  * Phase 4 迁移：input_schema 已从 Record<string, unknown> (JSON Schema 对象)
  * 改为 z.ZodTypeAny，消除双重定义。每个工具文件只需定义一个 Zod schema，
- * 同时用于 ToolDescriptor.input_schema 和 DynamicStructuredTool.schema。
+ * 同时用于 ToolDescriptor.input_schema 和 DynamicStructuredTool.schema
  */
 
 import { z } from "zod";
@@ -83,7 +83,7 @@ export interface ToolCallContext {
   tenant_id: string;
   user_id: string;
   actor_type: ActorType;
-  /** 仅由受信网关注入的角色，模型和请求体不能覆盖。 */
+  /** 仅由受信网关注入的角色，模型和请求体不能覆盖 */
   roles?: string[];
   agent_id?: string;
   locale?: string;
@@ -128,6 +128,7 @@ export interface ToolResultEnvelope<T = unknown> {
 
 export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   descriptor: ToolDescriptor;
+  // 在可信调用上下文中执行类型化工具输入
   execute(input: TInput, context: ToolCallContext): Promise<TOutput>;
 }
 

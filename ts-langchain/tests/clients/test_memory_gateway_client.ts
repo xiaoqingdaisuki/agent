@@ -1,8 +1,8 @@
 /**
- * Memory Gateway Client Unit Tests
+ * 记忆网关客户端单元测试
  *
- * 使用 fetch mock 测试 CloudflareMemoryClient 的 HTTP 请求行为。
- * 验证：请求头、URL 构建、错误处理、超时处理。
+ * 使用 fetch mock 测试 CloudflareMemoryClient 的 HTTP 请求行为
+ * 验证：请求头、URL 构建、错误处理、超时处理
  */
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
@@ -11,7 +11,7 @@ vi.unmock("../../src/clients/memory_gateway.js");
 
 import { CloudflareMemoryClient, MemoryGatewayError } from "../../src/clients/memory_gateway.js";
 
-// ============ Mock fetch ============
+// ============ 模拟 fetch 请求 ============
 
 function createMockFetch() {
   const mockResponses = new Map<string, { status: number; body: unknown }>();
@@ -50,7 +50,7 @@ function createMockFetch() {
   return { mockFetch: mockFn, setMockResponse };
 }
 
-// ============ Mock Data Helpers ============
+// ============ 模拟数据辅助函数 ============
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
@@ -114,7 +114,7 @@ function validMemory(overrides = {}): Record<string, unknown> {
   };
 }
 
-// ============ Tests ============
+// ============ 测试用例 ============
 
 describe("CloudflareMemoryClient", () => {
   let mockSetup: ReturnType<typeof createMockFetch>;
@@ -135,7 +135,7 @@ describe("CloudflareMemoryClient", () => {
     vi.unstubAllGlobals();
   });
 
-  // ============ Profile API ============
+  // ============ 用户画像接口 ============
 
   it("accepts an explicit transport without changing global fetch", async () => {
     const transport = vi.fn(async () => Response.json({
@@ -180,7 +180,7 @@ describe("CloudflareMemoryClient", () => {
     });
   });
 
-  // ============ Conversation API ============
+  // ============ 会话接口 ============
 
   describe("Conversation API", () => {
     it("createConversation sends POST with user_id, title, mode", async () => {
@@ -205,7 +205,7 @@ describe("CloudflareMemoryClient", () => {
       mockSetup.setMockResponse("/v1/internal/users/usr_001/conversations", 200, []);
 
       await client.listConversations("usr_001", 50, 10);
-      // Verify fetch was called with correct URL containing pagination params
+      // 校验 fetch 请求地址包含正确的分页参数
       const [url] = mockSetup.mockFetch.mock.calls[0];
       expect(url).toContain("limit=50");
       expect(url).toContain("offset=10");
@@ -228,7 +228,7 @@ describe("CloudflareMemoryClient", () => {
     });
   });
 
-  // ============ Message API ============
+  // ============ 消息接口 ============
 
   describe("Message API", () => {
     it("createMessagesBatch sends batch of messages", async () => {
@@ -265,7 +265,7 @@ describe("CloudflareMemoryClient", () => {
     });
   });
 
-  // ============ Memory API ============
+  // ============ 长期记忆接口 ============
 
   describe("Memory API", () => {
     it("saveMemory sends PUT with memory data", async () => {
@@ -387,7 +387,7 @@ describe("CloudflareMemoryClient", () => {
     });
   });
 
-  // ============ Error Handling ============
+  // ============ 异常处理 ============
 
   describe("Error Handling", () => {
     it.each([400, 500, 503])("preserves the Gateway error code for HTTP %i", async (status) => {
@@ -430,7 +430,7 @@ describe("CloudflareMemoryClient", () => {
     });
 
     it("throws MemoryGatewayError with MEMORY_TIMEOUT on abort", async () => {
-      // Simulate abort by making the fetch never resolve
+      // 通过永不完成的 fetch 请求模拟取消操作
       mockSetup.mockFetch.mockImplementationOnce(
         () => new Promise((_, reject) => {
           const controller = new AbortController();
@@ -449,7 +449,7 @@ describe("CloudflareMemoryClient", () => {
     });
   });
 
-  // ============ URL Encoding ============
+  // ============ URL 编码 ============
 
   describe("URL Construction", () => {
     it("encodes special characters in user_id", async () => {

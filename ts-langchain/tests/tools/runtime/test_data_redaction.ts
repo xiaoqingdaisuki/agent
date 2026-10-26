@@ -1,3 +1,5 @@
+/** 验证 tools/runtime/test_data_redaction 对应模块的行为与边界条件 */
+
 import { describe, expect, it } from "vitest";
 import { sanitizeResult } from "../../../src/tools/runtime/executor.js";
 import { redactTextContent } from "../../../src/tools/runtime/data-redaction.js";

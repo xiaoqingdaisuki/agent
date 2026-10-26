@@ -119,7 +119,7 @@ class ToolRegistry:
     # 根据用户权限返回可见工具列表，R0 工具始终可见
     def get_visible_tools(self, user_permissions: list[str]) -> list[Any]:
         """
-        根据用户权限返回可见工具列表。
+        根据用户权限返回可见工具列表
 
         规则:
         - R0 工具（如 calculator）始终可见

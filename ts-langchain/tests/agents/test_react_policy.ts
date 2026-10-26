@@ -1,3 +1,5 @@
+/** 验证 agents/test_react_policy 对应模块的行为与边界条件 */
+
 import { describe, expect, it } from "vitest";
 import { createDefaultReActLimits, ReActRunTracker } from "../../src/agents/react-policy.js";
 

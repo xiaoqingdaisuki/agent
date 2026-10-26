@@ -1,3 +1,5 @@
+"""验证 test_settings 对应模块的行为与边界条件"""
+
 from src.config.settings import Settings
 
 
@@ -32,14 +34,14 @@ def test_memory_enabled_false_selects_llm_direct_mode(monkeypatch):
 
 
 def test_openai_gateway_root_is_normalized_to_v1():
-    """OpenAI 兼容网关根地址应自动补齐 v1，和 TS 客户端保持一致。"""
+    """OpenAI 兼容网关根地址应自动补齐 v1，和 TS 客户端保持一致"""
     settings = Settings(_env_file=None, openai_base_url="https://llm.example.com")
 
     assert settings.openai_base_url == "https://llm.example.com/v1"
 
 
 def test_background_task_limits_have_safe_defaults():
-    """后台任务并发和队列必须有明确上限，避免高并发耗尽线程池。"""
+    """后台任务并发和队列必须有明确上限，避免高并发耗尽线程池"""
     settings = Settings(_env_file=None)
 
     assert settings.background_task_concurrency == 4
@@ -47,7 +49,7 @@ def test_background_task_limits_have_safe_defaults():
 
 
 def test_model_token_budgets_use_requested_defaults():
-    """Agent 上下文、输入和输出预算应采用统一约定。"""
+    """Agent 上下文、输入和输出预算应采用统一约定"""
     settings = Settings(_env_file=None)
 
     assert settings.llm_max_context_tokens == 128000
@@ -57,7 +59,7 @@ def test_model_token_budgets_use_requested_defaults():
 
 
 def test_model_output_allows_requested_limit(monkeypatch):
-    """模型输出允许配置到约定的 16000 token 上限。"""
+    """模型输出允许配置到约定的 16000 token 上限"""
     monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "16000")
 
     settings = Settings(_env_file=None)

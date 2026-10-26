@@ -1,3 +1,5 @@
+/** 管理用户画像、偏好、长期记忆及相关会话上下文 */
+
 import { createChatModel } from "../config/model.js";
 /**
  * Profile Service — 用户画像 + 长期记忆 + 问答历史
@@ -9,7 +11,7 @@ import { createChatModel } from "../config/model.js";
  * 4. recordQA: 记录问答
  * 5. buildMemoryContext: 将记忆注入 System Prompt
  *
- * 统一通过 Repository 层访问进程内或 Cloudflare 存储后端。
+ * 统一通过 Repository 层访问进程内或 Cloudflare 存储后端
  */
 
 import {
@@ -86,6 +88,7 @@ function mapSearchResults(
   items: MemorySearchResultData[],
   userId: string,
 ): Memory[] {
+  // 将检索结果补充用户标识并转换为画像记忆
   return items.map((item) =>
     mapMemory({
       id: item.id,
@@ -99,32 +102,24 @@ function mapSearchResults(
   );
 }
 
-// ============ Profile Service ==========
+// ============ 用户画像服务 ==========
 
 export class ProfileService {
-  /**
-   * 懒加载用户画像（不存在时创建）
-   */
-  // 获取 getOrCreate 对应的数据
+  // 懒加载用户画像（不存在时创建）
   static async getOrCreate(userId: string, name: string = ""): Promise<UserProfile> {
     const repos = getRepos();
     const data = await repos.profile.getOrCreate(userId, name);
     return mapProfile(data);
   }
 
-  /**
-   * 根据用户 ID 获取已有画像，不存在时返回 undefined
-   */
-  // 获取 get 对应的数据
+  // 根据用户 ID 获取已有画像，不存在时返回 undefined
   static async get(userId: string): Promise<UserProfile | undefined> {
     const repos = getRepos();
     const data = await repos.profile.get(userId);
     return data ? mapProfile(data) : undefined;
   }
 
-  /**
-   * 更新用户画像，支持部分字段更新
-   */
+  // 更新用户画像，支持部分字段更新
   // 更新或保存 update 对应的数据
   static async update(
     userId: string,
@@ -137,13 +132,10 @@ export class ProfileService {
   }
 }
 
-// ============ Memory Service ==========
+// ============ 长期记忆服务 ==========
 
 export class MemoryService {
-  /**
-   * 存储一条新的用户记忆
-   */
-  // 创建或注册 add 所需的数据
+  // 存储一条新的用户记忆
   static async add(
     userId: string,
     content: string,
@@ -165,49 +157,34 @@ export class MemoryService {
     return mapMemory(data);
   }
 
-  /**
-   * 获取用户的高优先级记忆列表，按重要性排序
-   */
-  // 获取 getRelevant 对应的数据
+  // 获取用户的高优先级记忆列表，按重要性排序
   static async getRelevant(userId: string, maxItems: number = 10): Promise<Memory[]> {
     const repos = getRepos();
     const items = await repos.memory.list(userId, { limit: maxItems });
     return items.map(mapMemory).slice(0, maxItems);
   }
 
-  /**
-   * 按类别获取用户记忆
-   */
-  // 获取 getByCategory 对应的数据
+  // 按类别获取用户记忆
   static async getByCategory(userId: string, category: string): Promise<Memory[]> {
     const repos = getRepos();
     const items = await repos.memory.list(userId, { category, limit: 50 });
     return items.map(mapMemory);
   }
 
-  /**
-   * 删除指定记忆，返回是否删除成功
-   */
-  // 删除或清理 delete 对应的数据
+  // 删除指定记忆，返回是否删除成功
   static async delete(userId: string, memoryId: string): Promise<boolean> {
     const repos = getRepos();
     return repos.memory.delete(userId, memoryId);
   }
 
-  /**
-   * 获取用户的所有记忆列表
-   */
-  // 获取 listAll 对应的数据
+  // 获取用户的所有记忆列表
   static async listAll(userId: string): Promise<Memory[]> {
     const repos = getRepos();
     const items = await repos.memory.list(userId, { limit: 50 });
     return items.map(mapMemory);
   }
 
-  /**
-   * 将记忆组装成 prompt 片段，注入 System Prompt
-   */
-  // 创建或注册 buildMemoryContext 所需的数据
+  // 将记忆组装成 prompt 片段，注入 System Prompt
   static async buildMemoryContext(userId: string): Promise<string> {
     const memories = await this.getRelevant(userId, 10);
     if (memories.length === 0) return "";
@@ -220,10 +197,7 @@ export class MemoryService {
     return lines.join("\n");
   }
 
-  /**
-   * 从对话中提取值得记忆的事实（正则 + LLM 双层提取）
-   */
-  // 执行 extractMemoriesFromConversation 对应的业务逻辑
+  // 从对话中提取值得记忆的事实（正则 + LLM 双层提取）
   static async extractMemoriesFromConversation(
     userId: string,
     question: string,
@@ -247,17 +221,14 @@ export class MemoryService {
       }
     }
 
-    // 第二层：注册到 Worker 生命周期，确保后台 LLM 提取完成后再结束 D1 写入。
+    // 第二层：注册到 Worker 生命周期，确保后台 LLM 提取完成后再结束 D1 写入
     const extraction = MemoryService._extractWithLLM(userId, question, answer).catch(() => {
       // LLM 提取失败静默降级
     });
     retainBackgroundTask(extraction);
   }
 
-  /**
-   * 正则规则提取 — 匹配明显的偏好/个人信息句式
-   */
-  // 执行 extractWithRegex 对应的业务逻辑
+  // 正则规则提取 — 匹配明显的偏好/个人信息句式
   private static _extractWithRegex(userId: string, question: string): Memory[] {
     const newMemories: Memory[] = [];
     const q = question.toLowerCase();
@@ -304,13 +275,7 @@ export class MemoryService {
     return newMemories;
   }
 
-  /**
-   * LLM-based 记忆提取 — 处理正则覆盖不到的复杂表达
-   *
-   * 通过 LLM 分析用户问题，提取值得长期记忆的事实。
-   * 只提取有明确长期价值的信息（偏好、个人信息、决定），不提取临时性内容。
-   */
-  // 执行 extractWithLLM 对应的业务逻辑
+  // LLM-based 记忆提取 — 处理正则覆盖不到的复杂表达；通过 LLM 分析用户问题，提取值得长期记忆的事实；只提取有明确长期价值的信息（偏好、个人信息、决定），不提取临时性内容
   private static async _extractWithLLM(
     userId: string,
     question: string,
@@ -373,12 +338,10 @@ JSON 输出（无其他内容）：`;
   }
 }
 
-// ============ History Service ==========
+// ============ 历史记录服务 ==========
 
 export class HistoryService {
-  /**
-   * 记录一条问答历史记录
-   */
+  // 记录一条问答历史记录
   // 更新或保存 record 对应的数据
   static async record(
     userId: string,
@@ -447,10 +410,7 @@ export class HistoryService {
     };
   }
 
-  /**
-   * 获取用户问答历史，支持按会话过滤
-   */
-  // 获取 getHistory 对应的数据
+  // 获取用户问答历史，支持按会话过滤
   static async getHistory(
     userId: string,
     conversationId?: string,
@@ -460,6 +420,7 @@ export class HistoryService {
     const repos = getRepos();
     const conversations = conversationId
       ? [await repos.conversation.get(conversationId)].filter(
+          // 仅保留存在且属于当前用户的会话
           (conversation): conversation is NonNullable<typeof conversation> =>
             conversation !== null && conversation.user_id === userId,
         )
@@ -495,6 +456,7 @@ export class HistoryService {
     }
 
     return records
+      // 按时间倒序排列画像相关记录
       .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
       .slice(0, limit);
   }

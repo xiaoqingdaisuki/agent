@@ -1,3 +1,5 @@
+/** 验证 tools/test_web_search 对应模块的行为与边界条件 */
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { multiSourceSearch, resetSearchStateForTests, searchResultsToText } from "../../src/tools/web-search.js";

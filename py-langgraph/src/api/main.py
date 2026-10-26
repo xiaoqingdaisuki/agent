@@ -1,3 +1,5 @@
+"""创建 FastAPI 应用并管理路由注册与服务生命周期"""
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -19,12 +21,12 @@ from .routes.v1 import router as v1_router
 
 logger = logging.getLogger(__name__)
 
-# 外层服务超时长于 Agent deadline，确保业务层先返回明确的 504。
+# 外层服务超时长于 Agent deadline，确保业务层先返回明确的 504
 DEFAULT_REQUEST_TIMEOUT = settings.server_request_timeout_ms / 1000
 
 
 @asynccontextmanager
-# 在应用关闭时收敛后台持久化任务并释放共享网关连接。
+# 在应用关闭时收敛后台持久化任务并释放共享网关连接
 async def _lifespan(_app: FastAPI):
     yield
     from src.repositories import close_repositories
@@ -41,7 +43,7 @@ async def _lifespan(_app: FastAPI):
 
 # 请求级超时中间件：非流式路由默认超时返回 504
 async def _timeout_middleware(request: Request, call_next):
-    """请求级超时中间件：非流式路由使用服务端配置的外层超时。"""
+    """请求级超时中间件：非流式路由使用服务端配置的外层超时"""
     path = request.url.path
     is_stream = path.endswith("/messages/stream")
 
@@ -75,7 +77,7 @@ def create_app() -> FastAPI:
     # 请求级超时中间件
     app.middleware("http")(_timeout_middleware)
     app.middleware("http")(agent_auth_middleware)
-    # 将跨域处理放在鉴权外层，让浏览器无需凭证即可完成合法预检。
+    # 将跨域处理放在鉴权外层，让浏览器无需凭证即可完成合法预检
     if allowed_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -164,7 +166,7 @@ app = create_app()
 
 # 启动开发 API 服务器
 def run() -> None:
-    """Start the development API server through the ``agent`` console command."""
+    """通过 agent 控制台命令启动开发 API 服务"""
     import uvicorn
 
     uvicorn.run(

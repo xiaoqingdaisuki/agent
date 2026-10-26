@@ -2,7 +2,7 @@
  * Repository Types — 数据仓储层共享类型定义
  *
  * 定义 Profile、Conversation、Message、Memory 的接口契约，
- * 以及 Repository 的统一接口。InMemory 和 Cloudflare 实现共享这些类型。
+ * 以及 Repository 的统一接口。InMemory 和 Cloudflare 实现共享这些类型
  */
 
 // ============ 基础类型 ============
@@ -107,13 +107,13 @@ export interface SearchResponse {
  * Profile 仓储接口
  */
 export interface ProfileRepository {
-  /** 创建或获取用户画像 */
+  // 创建或获取用户画像
   getOrCreate(userId: string, name?: string): Promise<UserProfileData>;
 
-  /** 获取用户画像，不存在返回 null */
+  // 获取用户画像，不存在返回 null
   get(userId: string): Promise<UserProfileData | null>;
 
-  /** 更新用户画像 */
+  // 更新用户画像
   update(
     userId: string,
     name?: string,
@@ -125,7 +125,7 @@ export interface ProfileRepository {
  * Conversation 仓储接口
  */
 export interface ConversationRepository {
-  /** 创建会话 */
+  // 创建会话
   create(
     userId: string,
     title: string,
@@ -133,13 +133,13 @@ export interface ConversationRepository {
     conversationId?: string,
   ): Promise<ConversationData>;
 
-  /** 获取会话详情 */
+  // 获取会话详情
   get(conversationId: string): Promise<ConversationData | null>;
 
-  /** 列出用户会话（分页） */
+  // 列出用户会话（分页）
   list(userId: string, limit?: number, offset?: number): Promise<ConversationData[]>;
 
-  /** 删除会话（软删除） */
+  // 删除会话（软删除）
   delete(conversationId: string): Promise<boolean>;
 }
 
@@ -147,14 +147,14 @@ export interface ConversationRepository {
  * Message 仓储接口
  */
 export interface MessageRepository {
-  /** 批量写入消息 */
+  // 批量写入消息
   createBatch(
     conversationId: string,
     userId: string,
     messages: MessageWriteData[],
   ): Promise<void>;
 
-  /** 获取会话消息列表 */
+  // 获取会话消息列表
   getMessages(
     conversationId: string,
     limit?: number,
@@ -162,13 +162,13 @@ export interface MessageRepository {
     direction?: "asc" | "desc",
   ): Promise<{ messages: MessageData[]; total: number }>;
 
-  /** 清空会话消息 */
+  // 清空会话消息
   clear(conversationId: string): Promise<void>;
 }
 
 /** Turn 仓储接口 */
 export interface TurnRepository {
-  /** 原子创建 Turn 并保存用户消息 */
+  // 原子创建 Turn 并保存用户消息
   begin(
     conversationId: string,
     userId: string,
@@ -178,10 +178,10 @@ export interface TurnRepository {
     userMessageId?: string,
   ): Promise<{ turn: TurnData; userMessage: MessageData; created: boolean }>;
 
-  /** 原子保存助手消息并完成 Turn */
+  // 原子保存助手消息并完成 Turn
   complete(turnId: string, userId: string, message: MessageData): Promise<TurnData>;
 
-  /** 原子创建或复用客户端消息对应的 Turn */
+  // 原子创建或复用客户端消息对应的 Turn
   createOrGet(
     conversationId: string,
     userId: string,
@@ -189,10 +189,10 @@ export interface TurnRepository {
     turnId?: string,
   ): Promise<{ turn: TurnData; created: boolean }>;
 
-  /** 按用户读取 Turn */
+  // 按用户读取 Turn
   get(turnId: string, userId: string): Promise<TurnData | null>;
 
-  /** 按合法状态机更新 Turn */
+  // 按合法状态机更新 Turn
   update(
     turnId: string,
     userId: string,
@@ -204,7 +204,7 @@ export interface TurnRepository {
  * Memory 仓储接口
  */
 export interface MemoryRepository {
-  /** 保存记忆（幂等） */
+  // 保存记忆（幂等）
   save(
     userId: string,
     memoryId: string,
@@ -216,30 +216,30 @@ export interface MemoryRepository {
     idempotencyKey?: string,
   ): Promise<MemoryData>;
 
-  /** 语义搜索记忆 */
+  // 语义搜索记忆
   search(
     userId: string,
     query: string,
     options?: { category?: string; limit?: number; minScore?: number },
   ): Promise<SearchResponse>;
 
-  /** 列出用户记忆 */
+  // 列出用户记忆
   list(
     userId: string,
     options?: { category?: string; limit?: number },
   ): Promise<MemoryData[]>;
 
-  /** 更新记忆 */
+  // 更新记忆
   update(
     userId: string,
     memoryId: string,
     changes: { content?: string; category?: string; importance?: number },
   ): Promise<MemoryData | null>;
 
-  /** 删除记忆 */
+  // 删除记忆
   delete(userId: string, memoryId: string): Promise<boolean>;
 
-  /** 清空用户所有记忆 */
+  // 清空用户所有记忆
   clearUser(userId: string): Promise<number>;
 }
 

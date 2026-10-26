@@ -9,7 +9,7 @@ User Profile + Memory + History 数据模型
 from dataclasses import dataclass, field
 from datetime import datetime
 
-# ============ User Profile ============
+# ============ 用户画像 ============
 
 
 @dataclass
@@ -19,7 +19,9 @@ class UserProfile:
     id: str
     name: str = ""
     preferences: dict = field(default_factory=dict)
+    # 创建画像实例时记录当前创建时间
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    # 创建画像实例时记录最近活跃时间
     last_active_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
     # 将用户画像序列化为字典
@@ -33,7 +35,7 @@ class UserProfile:
         }
 
 
-# ============ Memory ============
+# ============ 长期记忆 ============
 
 
 @dataclass
@@ -43,9 +45,11 @@ class Memory:
     id: str
     user_id: str
     content: str
-    category: str = "fact"  # preference | fact | decision | context
+    category: str = "fact"  # 记忆类别：preference、fact、decision 或 context
     importance: int = 3  # 1-5, 越高越重要
+    # 创建记忆实例时记录当前创建时间
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    # 创建记忆实例时记录当前更新时间
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
     # 将记忆记录序列化为字典
@@ -61,7 +65,7 @@ class Memory:
         }
 
 
-# ============ Q&A History ============
+# ============ 问答历史 ============
 
 
 @dataclass
@@ -73,6 +77,7 @@ class QARecord:
     conversation_id: str
     question: str
     answer: str
+    # 创建问答记录时生成当前时间戳
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
     # 将问答记录序列化为字典
@@ -87,5 +92,5 @@ class QARecord:
         }
 
 
-# 数据模型已迁移到 Cloudflare Service，本文件仅保留类型定义（UserProfile, Memory, QARecord）。
-# ProfileStore 内存存储已移除。
+# 数据模型已迁移到 Cloudflare Service，本文件仅保留类型定义（UserProfile, Memory, QARecord）
+# ProfileStore 内存存储已移除

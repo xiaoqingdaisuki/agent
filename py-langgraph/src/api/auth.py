@@ -1,4 +1,4 @@
-"""Agent 外部 API 的服务认证与可信用户身份绑定。"""
+"""Agent 外部 API 的服务认证与可信用户身份绑定"""
 
 import hmac
 import re
@@ -23,7 +23,7 @@ MAX_RATE_BUCKETS = 20000
 _rate_buckets: dict[str, tuple[int, float]] = {}
 
 
-# 对可信身份执行进程内固定窗口限流，并返回需要等待的秒数。
+# 对可信身份执行进程内固定窗口限流，并返回需要等待的秒数
 def _consume_rate_limit(key: str, limit: int, now: float | None = None) -> int:
     current_time = time.monotonic() if now is None else now
     count, reset_at = _rate_buckets.get(key, (0, current_time + RATE_WINDOW_SECONDS))
@@ -139,7 +139,7 @@ def require_agent_user_id(request: Request, submitted_user_id: str | None = None
     return trusted_user_id
 
 
-# 返回仅由已认证服务注入的完整工具身份。
+# 返回仅由已认证服务注入的完整工具身份
 def get_agent_tool_identity(request: Request, submitted_user_id: str | None = None) -> dict[str, str | list[str]]:
     user_id = require_agent_user_id(request, submitted_user_id)
     return {

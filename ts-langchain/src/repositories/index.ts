@@ -1,8 +1,8 @@
 /**
  * Repositories — 数据仓储层
  *
- * 根据 MEMORY_ENABLED 选择进程内仓储或 Cloudflare Service。
- * 所有业务层（Service、Tool、API Route）只能通过 Repository 访问数据。
+ * 根据 MEMORY_ENABLED 选择进程内仓储或 Cloudflare Service
+ * 所有业务层（Service、Tool、API Route）只能通过 Repository 访问数据
  */
 
 import {
@@ -29,10 +29,8 @@ import { config } from "../config/index.js";
 
 let cachedCloudflareRepositories: { key: string; value: Repositories } | undefined;
 
-/**
- * 根据配置创建进程内或 Cloudflare 仓储实例
- */
-// 返回当前配置对应的仓储集合，关闭记忆网关时不创建远端客户端。
+// 根据配置创建进程内或 Cloudflare 仓储实例
+// 返回当前配置对应的仓储集合，关闭记忆网关时不创建远端客户端
 export function getRepositories(): Repositories {
   if (!config.MEMORY_ENABLED) return inMemoryRepositories;
   const key = `${config.CLOUDFLARE_MEMORY_BASE_URL}\u0000${config.CLOUDFLARE_MEMORY_SECRET}\u0000${config.MEMORY_REQUEST_TIMEOUT_MS}`;
@@ -54,21 +52,22 @@ const inMemoryTurns = new Map<string, TurnData>();
 const inMemoryTurnKeys = new Map<string, string>();
 const inMemoryMemories = new Map<string, MemoryData[]>();
 
-// 生成单调递增的 ISO 时间戳，避免同一毫秒内更新被误判为未变化。
+// 生成单调递增的 ISO 时间戳，避免同一毫秒内更新被误判为未变化
 function nextIsoTimestamp(previous?: string): string {
   const previousMs = previous ? Date.parse(previous) : 0;
   return new Date(Math.max(Date.now(), previousMs + 1)).toISOString();
 }
 
-// 读取进程内消息的最大序号并返回下一可用值，兼容显式序号留下的空洞。
+// 读取进程内消息的最大序号并返回下一可用值，兼容显式序号留下的空洞
 function nextInMemorySequence(messages: readonly MessageData[]): number {
+  // 从消息序号中计算下一条可用序号
   return messages.reduce((max, message) => Math.max(max, message.sequence_no + 1), 0);
 }
 
-// 构建进程内仓储，供关闭 Cloudflare 记忆模式时使用。
+// 构建进程内仓储，供关闭 Cloudflare 记忆模式时使用
 export const inMemoryRepositories: Repositories = {
   profile: {
-    // 获取或创建进程内用户画像。
+    // 获取或创建进程内用户画像
     async getOrCreate(userId, name = "") {
       const existing = inMemoryProfiles.get(userId);
       if (existing) return existing;
@@ -77,11 +76,11 @@ export const inMemoryRepositories: Repositories = {
       inMemoryProfiles.set(userId, profile);
       return profile;
     },
-    // 获取进程内用户画像。
+    // 获取进程内用户画像
     async get(userId) {
       return inMemoryProfiles.get(userId) ?? null;
     },
-    // 更新进程内用户画像。
+    // 更新进程内用户画像
     async update(userId, name, preferences) {
       const profile = await this.getOrCreate(userId, name ?? "");
       const updated = {
@@ -95,7 +94,7 @@ export const inMemoryRepositories: Repositories = {
     },
   },
   conversation: {
-    // 创建进程内会话。
+    // 创建进程内会话
     async create(userId, title, mode = "chat", conversationId = crypto.randomUUID()) {
       const now = new Date().toISOString();
       const conversation: ConversationData = {
@@ -112,22 +111,25 @@ export const inMemoryRepositories: Repositories = {
       inMemoryMessages.set(conversationId, inMemoryMessages.get(conversationId) ?? []);
       return conversation;
     },
-    // 获取未被删除的进程内会话。
+    // 获取未被删除的进程内会话
     async get(conversationId) {
       const conversation = inMemoryConversations.get(conversationId);
       return !conversation || conversation.deleted_at
         ? null
         : { ...conversation, message_count: inMemoryMessages.get(conversationId)?.length ?? 0 };
     },
-    // 按用户列出未被删除的进程内会话。
+    // 按用户列出未被删除的进程内会话
     async list(userId, limit = 20, offset = 0) {
       return Array.from(inMemoryConversations.values())
+        // 筛选当前用户尚未删除的会话
         .filter((conversation) => conversation.user_id === userId && !conversation.deleted_at)
+        // 为会话附加内存消息计数
         .map((conversation) => ({ ...conversation, message_count: inMemoryMessages.get(conversation.id)?.length ?? 0 }))
+        // 按创建时间倒序排列会话
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .slice(offset, offset + limit);
     },
-    // 软删除进程内会话并清理其消息。
+    // 软删除进程内会话并清理其消息
     async delete(conversationId) {
       const conversation = inMemoryConversations.get(conversationId);
       if (!conversation || conversation.deleted_at) return false;
@@ -137,30 +139,32 @@ export const inMemoryRepositories: Repositories = {
     },
   },
   message: {
-    // 幂等地批量写入进程内会话消息。
+    // 幂等地批量写入进程内会话消息
     async createBatch(conversationId, _userId, messages) {
       const existing = inMemoryMessages.get(conversationId) ?? [];
+      // 按消息标识建立去重映射
       const byId = new Map(existing.map((message) => [message.id, message]));
       let nextSequence = nextInMemorySequence(existing);
       for (const message of messages) {
         const stored: MessageData = { ...message, sequence_no: message.sequence_no ?? nextSequence++ };
         byId.set(message.id, stored);
       }
+      // 按序号升序排列会话消息
       inMemoryMessages.set(conversationId, Array.from(byId.values()).sort((a, b) => a.sequence_no - b.sequence_no));
     },
-    // 分页获取进程内会话消息。
+    // 分页获取进程内会话消息
     async getMessages(conversationId, limit = 50, offset = 0, direction = "asc") {
       const all = inMemoryMessages.get(conversationId) ?? [];
       const ordered = direction === "desc" ? [...all].reverse() : all;
       return { messages: ordered.slice(offset, offset + limit), total: all.length };
     },
-    // 清空进程内会话消息。
+    // 清空进程内会话消息
     async clear(conversationId) {
       inMemoryMessages.set(conversationId, []);
     },
   },
   turn: {
-    // 原子创建进程内 Turn 并追加用户消息。
+    // 原子创建进程内 Turn 并追加用户消息
     async begin(conversationId, userId, clientMessageId, content, turnId = crypto.randomUUID(), userMessageId = crypto.randomUUID()) {
       for (const active of inMemoryTurns.values()) {
         if (active.conversation_id === conversationId && (active.status === "pending" || active.status === "streaming") && Date.now() - Date.parse(active.updated_at) > 330_000) {
@@ -172,10 +176,12 @@ export const inMemoryRepositories: Repositories = {
       const existingId = inMemoryTurnKeys.get(key);
       if (existingId) {
         const turn = inMemoryTurns.get(existingId)!;
+        // 查找单轮执行对应的用户消息
         const userMessage = (inMemoryMessages.get(conversationId) ?? []).find((message) => message.id === turn.user_message_id);
         if (!userMessage) throw new MemoryGatewayError("MEMORY_TURN_INCONSISTENT", "Turn 缺少用户消息", 500);
         return { turn: { ...turn }, userMessage: { ...userMessage }, created: false };
       }
+      // 检测同一会话是否已有待执行或执行中的轮次
       if (Array.from(inMemoryTurns.values()).some((turn) => turn.conversation_id === conversationId && (turn.status === "pending" || turn.status === "streaming"))) {
         throw new MemoryGatewayError("MEMORY_CONVERSATION_BUSY", "会话中已有请求正在处理", 409);
       }
@@ -199,13 +205,14 @@ export const inMemoryRepositories: Repositories = {
       inMemoryTurns.set(turnId, turn);
       return { turn: { ...turn }, userMessage: { ...userMessage }, created: true };
     },
-    // 原子追加进程内助手消息并完成 Turn。
+    // 原子追加进程内助手消息并完成 Turn
     async complete(turnId, userId, message) {
       const turn = inMemoryTurns.get(turnId);
       if (!turn || turn.user_id !== userId) throw new MemoryGatewayError("MEMORY_TURN_NOT_FOUND", "Turn 不存在或无权访问", 404);
       if (turn.status === "completed") return { ...turn };
       if (turn.status !== "streaming") throw new MemoryGatewayError("MEMORY_TURN_STATE_CONFLICT", `Cannot transition Turn from ${turn.status} to completed`, 409);
       const messages = inMemoryMessages.get(turn.conversation_id) ?? [];
+      // 定位待持久化消息以支持幂等更新
       if (!messages.some((item) => item.id === message.id)) {
         messages.push({ ...message, sequence_no: nextInMemorySequence(messages) });
       }
@@ -224,12 +231,13 @@ export const inMemoryRepositories: Repositories = {
       inMemoryTurns.set(turnId, updated);
       return { ...updated };
     },
-    // 原子创建或复用进程内 Turn。
+    // 原子创建或复用进程内 Turn
     async createOrGet(conversationId, userId, clientMessageId, turnId = crypto.randomUUID()) {
       const key = `${conversationId}\u0000${clientMessageId}`;
       const existingId = inMemoryTurnKeys.get(key);
       const existing = existingId ? inMemoryTurns.get(existingId) : undefined;
       if (existing) return { turn: { ...existing }, created: false };
+      // 检测同一会话是否存在活动轮次
       if (Array.from(inMemoryTurns.values()).some((turn) => turn.conversation_id === conversationId && (turn.status === "pending" || turn.status === "streaming"))) {
         throw new MemoryGatewayError("MEMORY_CONVERSATION_BUSY", "会话中已有请求正在处理", 409);
       }
@@ -245,12 +253,12 @@ export const inMemoryRepositories: Repositories = {
       inMemoryTurns.set(turnId, turn);
       return { turn: { ...turn }, created: true };
     },
-    // 按用户读取进程内 Turn。
+    // 按用户读取进程内 Turn
     async get(turnId, userId) {
       const turn = inMemoryTurns.get(turnId);
       return turn?.user_id === userId ? { ...turn } : null;
     },
-    // 按不可逆状态机更新进程内 Turn。
+    // 按不可逆状态机更新进程内 Turn
     async update(turnId, userId, changes) {
       const turn = inMemoryTurns.get(turnId);
       if (!turn || turn.user_id !== userId) throw new MemoryGatewayError("MEMORY_TURN_NOT_FOUND", "Turn 不存在或无权访问", 404);
@@ -265,6 +273,7 @@ export const inMemoryRepositories: Repositories = {
       const terminal = ["completed", "failed", "cancelled"].includes(changes.status);
       const updated: TurnData = {
         ...turn,
+        // 过滤未定义字段以保留已有画像值
         ...Object.fromEntries(Object.entries(changes).filter(([, value]) => value !== undefined)),
         updated_at: nextIsoTimestamp(turn.updated_at),
         completed_at: terminal ? nextIsoTimestamp(turn.updated_at) : turn.completed_at,
@@ -274,10 +283,11 @@ export const inMemoryRepositories: Repositories = {
     },
   },
   memory: {
-    // 保存或复用去重后的进程内长期记忆。
+    // 保存或复用去重后的进程内长期记忆
     async save(userId, memoryId, content, category = "fact", importance = 3, source = "user_explicit", sourceConversationId) {
       const memories = inMemoryMemories.get(userId) ?? [];
       const normalized = content.trim().toLowerCase();
+      // 查找内容相同且仍有效的记忆以执行去重
       const existing = memories.find((memory) => memory.normalized_content === normalized && memory.status === "active");
       if (existing) return existing;
       const now = new Date().toISOString();
@@ -304,19 +314,25 @@ export const inMemoryRepositories: Repositories = {
       inMemoryMemories.set(userId, memories);
       return memory;
     },
-    // 按关键词和条件检索进程内长期记忆。
+    // 按关键词和条件检索进程内长期记忆
     async search(userId, query, options = {}) {
       const words = query.toLowerCase().split(/\s+/).filter(Boolean);
       const items = (inMemoryMemories.get(userId) ?? [])
+        // 按有效状态和可选类别筛选记忆
         .filter((memory) => memory.status === "active" && (!options.category || memory.category === options.category))
+        // 按查询词命中比例计算记忆检索得分
         .map((memory) => {
+          // 统计在规范化记忆内容中出现的查询词
           const matches = words.filter((word) => memory.normalized_content.includes(word)).length;
           const score = words.length ? matches / words.length : 0;
           return { memory, score };
         })
+        // 过滤得分低于检索阈值的记忆
         .filter(({ score }) => score >= (options.minScore ?? 0))
+        // 先按相关度再按重要性倒序排列记忆
         .sort((a, b) => b.score - a.score || b.memory.importance - a.memory.importance)
         .slice(0, options.limit ?? 10)
+        // 将记忆及其得分转换为统一检索结果
         .map(({ memory, score }): MemorySearchResultData => ({
           id: memory.id, content: memory.content, category: memory.category, importance: memory.importance,
           semantic_score: score, final_score: score, created_at: memory.created_at, updated_at: memory.updated_at,
@@ -324,16 +340,19 @@ export const inMemoryRepositories: Repositories = {
         }));
       return { items, degraded: false };
     },
-    // 按条件列出进程内有效长期记忆。
+    // 按条件列出进程内有效长期记忆
     async list(userId, options = {}) {
       return (inMemoryMemories.get(userId) ?? [])
+        // 按有效状态和可选类别筛选待列出的记忆
         .filter((memory) => memory.status === "active" && (!options.category || memory.category === options.category))
+        // 先按重要性再按创建时间倒序排列记忆
         .sort((a, b) => b.importance - a.importance || b.created_at.localeCompare(a.created_at))
         .slice(0, options.limit ?? 50);
     },
-    // 更新进程内有效长期记忆。
+    // 更新进程内有效长期记忆
     async update(userId, memoryId, changes) {
       const memories = inMemoryMemories.get(userId) ?? [];
+      // 定位指定标识的有效记忆
       const index = memories.findIndex((memory) => memory.id === memoryId && memory.status === "active");
       if (index < 0) return null;
       const current = memories[index];
@@ -349,18 +368,20 @@ export const inMemoryRepositories: Repositories = {
       memories[index] = updated;
       return updated;
     },
-    // 软删除进程内长期记忆。
+    // 软删除进程内长期记忆
     async delete(userId, memoryId) {
       const memories = inMemoryMemories.get(userId) ?? [];
+      // 定位需要删除的有效记忆
       const memory = memories.find((item) => item.id === memoryId && item.status === "active");
       if (!memory) return false;
       memory.status = "deleted";
       memory.updated_at = nextIsoTimestamp(memory.updated_at);
       return true;
     },
-    // 清空指定用户的进程内长期记忆。
+    // 清空指定用户的进程内长期记忆
     async clearUser(userId) {
       const memories = inMemoryMemories.get(userId) ?? [];
+      // 仅保留清理前仍有效的记忆
       const active = memories.filter((memory) => memory.status === "active");
       inMemoryMemories.set(userId, []);
       return active.length;
@@ -393,10 +414,10 @@ class CloudflareRepositories implements Repositories {
 class CloudflareTurnRepository implements TurnRepository {
   private useLocalFallback = false;
 
-  // 初始化 Turn 仓储。
+  // 初始化 Turn 仓储
   constructor(private readonly _client: CloudflareMemoryClient) {}
 
-  // 原子创建 Turn 并保存用户消息。
+  // 原子创建 Turn 并保存用户消息
   async begin(conversationId: string, userId: string, clientMessageId: string, content: string, turnId?: string, userMessageId?: string) {
     if (this.useLocalFallback) return inMemoryRepositories.turn.begin(conversationId, userId, clientMessageId, content, turnId, userMessageId);
     try {
@@ -408,7 +429,7 @@ class CloudflareTurnRepository implements TurnRepository {
     }
   }
 
-  // 原子保存助手消息并完成 Turn。
+  // 原子保存助手消息并完成 Turn
   async complete(turnId: string, userId: string, message: MessageData): Promise<TurnData> {
     if (this.useLocalFallback) return inMemoryRepositories.turn.complete(turnId, userId, message);
     return this._client.completeTurn(
@@ -425,19 +446,19 @@ class CloudflareTurnRepository implements TurnRepository {
     );
   }
 
-  // 判断旧版 Gateway 是否尚未提供 Turn API。
+  // 判断旧版 Gateway 是否尚未提供 Turn API
   private isLegacyGateway(error: unknown): boolean {
     return error instanceof MemoryGatewayError && error.statusCode === 404 && error.code === "MEMORY_NOT_FOUND";
   }
 
-  // 切换到进程内 Turn 兼容层并只记录一次降级告警。
+  // 切换到进程内 Turn 兼容层并只记录一次降级告警
   private enableLocalFallback(): void {
     if (this.useLocalFallback) return;
     this.useLocalFallback = true;
     console.warn("[turn] Gateway does not expose Turn API; using local compatibility storage");
   }
 
-  // 原子创建或复用客户端消息对应的 Turn。
+  // 原子创建或复用客户端消息对应的 Turn
   async createOrGet(conversationId: string, userId: string, clientMessageId: string, turnId?: string) {
     if (this.useLocalFallback) {
       return inMemoryRepositories.turn.createOrGet(conversationId, userId, clientMessageId, turnId);
@@ -451,13 +472,13 @@ class CloudflareTurnRepository implements TurnRepository {
     }
   }
 
-  // 按用户读取 Turn。
+  // 按用户读取 Turn
   async get(turnId: string, userId: string): Promise<TurnData | null> {
     if (this.useLocalFallback) return inMemoryRepositories.turn.get(turnId, userId);
     return this._client.getTurn(turnId, userId);
   }
 
-  // 按合法状态机更新 Turn。
+  // 按合法状态机更新 Turn
   async update(
     turnId: string,
     userId: string,
@@ -468,7 +489,7 @@ class CloudflareTurnRepository implements TurnRepository {
   }
 }
 
-// ============ Cloudflare Profile Repository ==========
+// ============ Cloudflare 用户画像仓储 ==========
 
 class CloudflareProfileRepository implements ProfileRepository {
   // 初始化当前对象
@@ -501,7 +522,7 @@ class CloudflareProfileRepository implements ProfileRepository {
   }
 }
 
-// ============ Cloudflare Conversation Repository ==========
+// ============ Cloudflare 会话仓储 ==========
 
 class CloudflareConversationRepository implements ConversationRepository {
   // 初始化当前对象
@@ -540,7 +561,7 @@ class CloudflareConversationRepository implements ConversationRepository {
   }
 }
 
-// ============ Cloudflare Message Repository ==========
+// ============ Cloudflare 消息仓储 ==========
 
 class CloudflareMessageRepository implements MessageRepository {
   // 初始化当前对象
@@ -555,6 +576,7 @@ class CloudflareMessageRepository implements MessageRepository {
     await this._client.createMessagesBatch(
       conversationId,
       userId,
+      // 将消息记录转换为网关批量写入结构
       messages.map((message) => ({
         id: message.id,
         sequence_no: message.sequence_no,
@@ -582,7 +604,7 @@ class CloudflareMessageRepository implements MessageRepository {
   }
 }
 
-// ============ Cloudflare Memory Repository ==========
+// ============ Cloudflare 长期记忆仓储 ==========
 
 class CloudflareMemoryRepository implements MemoryRepository {
   // 初始化当前对象
@@ -667,10 +689,7 @@ class CloudflareMemoryRepository implements MemoryRepository {
     return count;
   }
 
-  /**
-   * 计算幂等性键
-   */
-  // 执行 computeIdempotencyKey 对应的业务逻辑
+  // 计算幂等性键
   private computeIdempotencyKey(userId: string, content: string): string {
     const data = new TextEncoder().encode(`${userId}:${content}`);
     let hash = 0;

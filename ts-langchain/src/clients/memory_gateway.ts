@@ -1,10 +1,10 @@
 /**
- * Cloudflare Service HTTP Client
+ * Cloudflare 服务 HTTP 客户端
  *
- * 提供与 Cloudflare Service 通信的 HTTP 客户端。
- * 所有请求通过 Service 进行，Agent 服务不直接持有 Cloudflare API Token。
- * 使用原生 fetch API，依赖 Node.js 18+ 或 Cloudflare Workers runtime。
- * 所有响应经过 Zod 运行时校验，确保不偏离契约。
+ * 提供与 Cloudflare Service 通信的 HTTP 客户端
+ * 所有请求通过 Service 进行，Agent 服务不直接持有 Cloudflare API Token
+ * 使用原生 fetch API，依赖 Node.js 18+ 或 Cloudflare Workers runtime
+ * 所有响应经过 Zod 运行时校验，确保不偏离契约
  */
 
 // ============ 错误类型定义 ============
@@ -67,71 +67,47 @@ const TurnSchema = z.object({
   completed_at: z.string().nullable(),
 });
 
-// 校验 Turn 网关响应数据。
+// 校验 Turn 网关响应数据
 function validateTurn(data: unknown): TurnData {
   return TurnSchema.parse(data);
 }
 
-/**
- * 校验 Gateway 统一响应信封
- */
-// 校验并判断 validateGatewayResponse 对应的状态
+// 校验 Gateway 统一响应信封
 function validateGatewayResponse(raw: unknown) {
   return GatewayResponseSchema.parse(raw);
 }
 
-/**
- * 校验用户画像数据
- */
-// 校验并判断 validateProfile 对应的状态
+// 校验用户画像数据
 function validateProfile(data: unknown) {
   return UserProfileSchema.parse(data);
 }
 
-/**
- * 校验会话数据
- */
-// 校验并判断 validateConversation 对应的状态
+// 校验会话数据
 function validateConversation(data: unknown) {
   return ConversationSchema.parse(data);
 }
 
-/**
- * 校验会话数组
- */
-// 校验并判断 validateConversationList 对应的状态
+// 校验会话数组
 function validateConversationList(data: unknown) {
   return z.array(ConversationSchema).parse(data);
 }
 
-/**
- * 校验消息分页数据
- */
-// 校验并判断 validateMessagesPage 对应的状态
+// 校验消息分页数据
 function validateMessagesPage(data: unknown) {
   return MessagesPageSchema.parse(data);
 }
 
-/**
- * 校验记忆数据
- */
-// 校验并判断 validateMemory 对应的状态
+// 校验记忆数据
 function validateMemory(data: unknown) {
   return MemorySchema.parse(data);
 }
 
-/**
- * 校验记忆数组
- */
-// 校验并判断 validateMemoryList 对应的状态
+// 校验记忆数组
 function validateMemoryList(data: unknown) {
   return z.array(MemorySchema).parse(data);
 }
 
-/**
- * 校验搜索结果
- */
-// 校验并判断 validateSearchResponse 对应的状态
+// 校验搜索结果
 function validateSearchResponse(data: unknown) {
   return SearchResponseSchema.parse(data);
 }
@@ -170,14 +146,7 @@ export class CloudflareMemoryClient {
 
   // ============ 内部请求方法 ============
 
-  /**
-   * 发送 HTTP 请求到 Gateway
-   * @param method HTTP 方法
-   * @param path 请求路径（不含 baseUrl）
-   * @param body 请求体（可选）
-   * @param idempotencyKey 幂等性键（可选）
-   */
-  // 执行 request 对应的业务逻辑
+  // 发送 HTTP 请求到 Gateway；@param method HTTP 方法；@param path 请求路径（不含 baseUrl）；@param body 请求体（可选）；@param idempotencyKey 幂等性键（可选）
   private async request(
     method: string,
     path: string,
@@ -202,6 +171,7 @@ export class CloudflareMemoryClient {
     }
 
     const controller = new AbortController();
+    // 请求超时后取消网关 HTTP 调用
     const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
@@ -293,13 +263,9 @@ export class CloudflareMemoryClient {
     }
   }
 
-  // ============ Profile API ============
+  // ============ 用户画像接口 ============
 
-  /**
-   * 获取用户画像
-   * @returns 画像数据，不存在时返回 null
-   */
-  // 获取 getProfile 对应的数据
+  // 获取用户画像；@returns 画像数据，不存在时返回 null
   async getProfile(userId: string): Promise<UserProfileData | null> {
     try {
       const result = validateGatewayResponse(await this.request(
@@ -315,9 +281,7 @@ export class CloudflareMemoryClient {
     }
   }
 
-  /**
-   * 创建或更新用户画像
-   */
+  // 创建或更新用户画像
   // 更新或保存 putProfile 对应的数据
   async putProfile(
     userId: string,
@@ -339,12 +303,9 @@ export class CloudflareMemoryClient {
     return validateProfile(result.data);
   }
 
-  // ============ Conversation API ============
+  // ============ 会话接口 ============
 
-  /**
-   * 创建会话
-   */
-  // 创建或注册 createConversation 所需的数据
+  // 创建会话
   async createConversation(
     userId: string,
     title: string,
@@ -361,10 +322,7 @@ export class CloudflareMemoryClient {
     return validateConversation(result.data);
   }
 
-  /**
-   * 列出用户的会话（分页）
-   */
-  // 获取 listConversations 对应的数据
+  // 列出用户的会话（分页）
   async listConversations(
     userId: string,
     limit: number = 20,
@@ -377,10 +335,7 @@ export class CloudflareMemoryClient {
     return validateConversationList(result.data);
   }
 
-  /**
-   * 获取会话详情
-   */
-  // 获取 getConversation 对应的数据
+  // 获取会话详情
   async getConversation(
     conversationId: string,
   ): Promise<ConversationData | null> {
@@ -398,10 +353,7 @@ export class CloudflareMemoryClient {
     }
   }
 
-  /**
-   * 删除会话（软删除）
-   */
-  // 删除或清理 deleteConversation 对应的数据
+  // 删除会话（软删除）
   async deleteConversation(conversationId: string): Promise<boolean> {
     try {
       await this.request(
@@ -417,12 +369,9 @@ export class CloudflareMemoryClient {
     }
   }
 
-  // ============ Message API ============
+  // ============ 消息接口 ============
 
-  /**
-   * 批量写入消息
-   */
-  // 创建或注册 createMessagesBatch 所需的数据
+  // 批量写入消息
   async createMessagesBatch(
     conversationId: string,
     userId: string,
@@ -435,10 +384,7 @@ export class CloudflareMemoryClient {
     );
   }
 
-  /**
-   * 获取会话消息列表
-   */
-  // 获取 getMessages 对应的数据
+  // 获取会话消息列表
   async getMessages(
     conversationId: string,
     limit: number = 50,
@@ -452,10 +398,7 @@ export class CloudflareMemoryClient {
     return validateMessagesPage(result.data);
   }
 
-  /**
-   * 清空会话消息
-   */
-  // 删除或清理 clearMessages 对应的数据
+  // 清空会话消息
   async clearMessages(conversationId: string): Promise<void> {
     await this.request(
       "DELETE",
@@ -463,7 +406,7 @@ export class CloudflareMemoryClient {
     );
   }
 
-  // 原子创建或复用客户端消息对应的 Turn。
+  // 原子创建或复用客户端消息对应的 Turn
   async createOrGetTurn(
     conversationId: string,
     userId: string,
@@ -480,7 +423,7 @@ export class CloudflareMemoryClient {
     return { turn: validateTurn(data), created: data.created === true };
   }
 
-  // 原子创建 Turn 并保存用户消息。
+  // 原子创建 Turn 并保存用户消息
   async beginTurn(
     conversationId: string,
     userId: string,
@@ -503,7 +446,7 @@ export class CloudflareMemoryClient {
     };
   }
 
-  // 原子保存助手消息并完成 Turn。
+  // 原子保存助手消息并完成 Turn
   async completeTurn(
     turnId: string,
     userId: string,
@@ -525,7 +468,7 @@ export class CloudflareMemoryClient {
     return validateTurn(result.data);
   }
 
-  // 按用户读取指定 Turn。
+  // 按用户读取指定 Turn
   async getTurn(turnId: string, userId: string): Promise<TurnData | null> {
     try {
       const result = validateGatewayResponse(await this.request(
@@ -539,7 +482,7 @@ export class CloudflareMemoryClient {
     }
   }
 
-  // 按合法状态机更新 Turn。
+  // 按合法状态机更新 Turn
   async updateTurn(
     turnId: string,
     userId: string,
@@ -554,13 +497,9 @@ export class CloudflareMemoryClient {
     return validateTurn(result.data);
   }
 
-  // ============ Memory API ============
+  // ============ 长期记忆接口 ============
 
-  /**
-   * 保存记忆（幂等）
-   * @param memoryId 记忆 ID（建议 UUID/ULID）
-   * @param idempotencyKey 幂等性键，相同键+相同内容幂等返回
-   */
+  // 保存记忆（幂等）；@param memoryId 记忆 ID（建议 UUID/ULID）；@param idempotencyKey 幂等性键，相同键+相同内容幂等返回
   // 更新或保存 saveMemory 对应的数据
   async saveMemory(
     userId: string,
@@ -587,10 +526,7 @@ export class CloudflareMemoryClient {
     return validateMemory(result.data);
   }
 
-  /**
-   * 列出用户的长期记忆
-   */
-  // 获取 listMemories 对应的数据
+  // 列出用户的长期记忆
   async listMemories(
     userId: string,
     options: { category?: string; limit?: number } = {},
@@ -605,9 +541,7 @@ export class CloudflareMemoryClient {
     return validateMemoryList(result.data);
   }
 
-  /**
-   * 更新记忆
-   */
+  // 更新记忆
   // 更新或保存 updateMemory 对应的数据
   async updateMemory(
     userId: string,
@@ -629,10 +563,7 @@ export class CloudflareMemoryClient {
     }
   }
 
-  /**
-   * 删除记忆（软删除）
-   */
-  // 删除或清理 deleteMemory 对应的数据
+  // 删除记忆（软删除）
   async deleteMemory(userId: string, memoryId: string): Promise<boolean> {
     try {
       await this.request(
@@ -648,11 +579,7 @@ export class CloudflareMemoryClient {
     }
   }
 
-  /**
-   * 语义搜索记忆
-   * @returns 搜索结果对象 { items, degraded }
-   */
-  // 查询 searchMemories 对应的结果
+  // 语义搜索记忆；@returns 搜索结果对象 { items, degraded }
   async searchMemories(
     userId: string,
     query: string,
@@ -674,16 +601,13 @@ export class CloudflareMemoryClient {
     return validateSearchResponse(result.data);
   }
 
-  // ============ Document API ==========
+  // ============ 文档接口 ==========
 
-  /**
-   * 上传文档
-   */
-  // 创建或注册 uploadDocument 所需的数据
+  // 上传文档
   async uploadDocument(
     userId: string,
     filename: string,
-    content: string, // base64 encoded
+    content: string, // 使用 Base64 编码的内容
     fileType?: string,
     category = "general",
   ): Promise<DocumentData> {
@@ -703,10 +627,7 @@ export class CloudflareMemoryClient {
     return (result.data as { document: DocumentData }).document;
   }
 
-  /**
-   * 列出用户文档
-   */
-  // 获取 listDocuments 对应的数据
+  // 列出用户文档
   async listDocuments(
     userId: string,
     options: { limit?: number; offset?: number; category?: string } = {},
@@ -724,10 +645,7 @@ export class CloudflareMemoryClient {
     return result.data;
   }
 
-  /**
-   * 获取文档详情
-   */
-  // 获取 getDocument 对应的数据
+  // 获取文档详情
   async getDocument(documentId: string): Promise<{ document: DocumentData; chunks: ChunkData[] } | null> {
     try {
       const result = validateGatewayResponse(await this.request(
@@ -743,10 +661,7 @@ export class CloudflareMemoryClient {
     }
   }
 
-  /**
-   * 删除文档
-   */
-  // 删除或清理 deleteDocument 对应的数据
+  // 删除文档
   async deleteDocument(documentId: string): Promise<boolean> {
     try {
       await this.request(
@@ -771,10 +686,7 @@ export class CloudflareMemoryClient {
     return result.data;
   }
 
-  /**
-   * 语义搜索文档
-   */
-  // 查询 searchDocuments 对应的结果
+  // 语义搜索文档
   async searchDocuments(
     userId: string,
     query: string,
@@ -800,11 +712,9 @@ export class CloudflareMemoryClient {
     };
   }
 
-  // ============ Audit Log API ==========
+  // ============ 审计日志接口 ==========
 
-  /**
-   * 批量写入审计日志（异步，不阻塞工具执行）
-   */
+  // 批量写入审计日志（异步，不阻塞工具执行）
   // 更新或保存 writeAuditLogs 对应的数据
   async writeAuditLogs(
     entries: Array<{
@@ -832,11 +742,9 @@ export class CloudflareMemoryClient {
     }
   }
 
-  // ============ Tool Metrics API ==========
+  // ============ 工具指标接口 ==========
 
-  /**
-   * 批量写入工具指标（异步，不阻塞工具执行）
-   */
+  // 批量写入工具指标（异步，不阻塞工具执行）
   // 更新或保存 writeToolMetrics 对应的数据
   async writeToolMetrics(
     entries: Array<{

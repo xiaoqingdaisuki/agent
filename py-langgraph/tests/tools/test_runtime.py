@@ -339,7 +339,7 @@ class TestRuntimeToolWrapper:
     async def test_scopes_model_supplied_user_id_to_trusted_context(self):
         @tool
         async def echo_user(user_id: str) -> str:
-            """Return the effective user id."""
+            """返回实际生效的用户标识"""
             return user_id
 
         descriptor = ToolDescriptor(
@@ -366,7 +366,7 @@ class TestRuntimeToolWrapper:
     async def test_requires_a_request_scope(self):
         @tool
         async def echo(value: str) -> str:
-            """Return the supplied value."""
+            """返回传入值"""
             return value
 
         descriptor = ToolDescriptor(

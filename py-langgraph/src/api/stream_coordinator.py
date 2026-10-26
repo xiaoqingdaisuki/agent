@@ -1,3 +1,5 @@
+"""协调流式对话事件、心跳、取消及单轮执行结算"""
+
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing
@@ -14,7 +16,7 @@ from src.api.sse import (
 from src.services import BusinessError, Message, TurnService
 
 
-# 统一转换 Agent 事件，避免两个外部路由维护重复协议分支。
+# 统一转换 Agent 事件，避免两个外部路由维护重复协议分支
 def encode_agent_event(sequencer: SseEventSequencer, event: dict) -> str:
     if event["type"] == "text":
         return sequencer.event(
@@ -48,7 +50,7 @@ def encode_agent_event(sequencer: SseEventSequencer, event: dict) -> str:
     )
 
 
-# 集中管理流式轮次的重放、超时、取消和终态写入。
+# 集中管理流式轮次的重放、超时、取消和终态写入
 async def stream_turn(
     request: Request,
     conversation_id: str,

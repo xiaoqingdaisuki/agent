@@ -1,7 +1,7 @@
 """
 Tool Runtime — 统一执行管线
 
-所有工具必须通过此 Runtime 执行，禁止绕过。
+所有工具必须通过此 Runtime 执行，禁止绕过
 
 执行管线：
   1. 参数校验（JSON Schema 严格模式）
@@ -63,10 +63,10 @@ def clear_audit_log() -> None:
 # ============ 权限检查 ============
 
 _permission_cache: dict[str, tuple[bool, str | None, float]] = {}
-_PERMISSION_CACHE_TTL = 5.0  # seconds
+_PERMISSION_CACHE_TTL = 5.0  # 单位为秒
 
 
-# 基于可信身份和服务端角色检查工具权限。
+# 基于可信身份和服务端角色检查工具权限
 def permission_check(
     context: ToolCallContext,
     descriptor: ToolDescriptor,
@@ -102,9 +102,9 @@ def validate_input(
     raw_input: Any,
 ) -> ToolRuntimeResult[TInput]:
     """
-    使用 Pydantic model 校验输入参数。
+    使用 Pydantic model 校验输入参数
 
-    严格模式：拒绝额外字段。
+    严格模式：拒绝额外字段
     """
     try:
         parsed = schema(**raw_input) if isinstance(raw_input, dict) else schema(raw_input)
@@ -137,7 +137,7 @@ _SENSITIVE_KEYS = frozenset(
 
 # 递归过滤结果中的敏感字段（密钥、Token、密码等），并对文本内容做内容级脱敏
 def sanitize_result(data: Any) -> Any:
-    """对工具返回结果进行脱敏 — key 过滤 + 字符串内容正则脱敏。"""
+    """对工具返回结果进行脱敏 — key 过滤 + 字符串内容正则脱敏"""
     if data is None or isinstance(data, (bool, int, float)):
         return data
 
@@ -216,8 +216,8 @@ def get_tool_call_context() -> ToolCallContext | None:
     return scope.context if scope else None
 
 
-# 在当前异步请求内隔离工具身份、预算与记忆去重状态
 @contextmanager
+# 在当前异步请求内隔离工具身份、预算与记忆去重状态
 def tool_call_scope(context: ToolCallContext):
     token = _runtime_scope.set(_RuntimeScope(context=context))
     try:
@@ -234,7 +234,7 @@ def reset_round_budget() -> None:
 
 # 检查工具调用预算，返回 None 表示通过，否则返回错误结果
 def budget_guard() -> ToolRuntimeResult[None] | None:
-    """检查预算限制，返回 None 表示通过，否则返回错误结果。"""
+    """检查预算限制，返回 None 表示通过，否则返回错误结果"""
     budget = _get_budget()
     if budget.tool_calls_this_round >= budget.max_per_round:
         return ToolRuntimeResult(
@@ -297,7 +297,7 @@ def _flush_audit_logs() -> None:
                     await client.write_audit_logs(entries)
                     del _audit_log[: len(entries)]
             except Exception:
-                # 保留未确认条目，等待后续工具调用再次触发刷新。
+                # 保留未确认条目，等待后续工具调用再次触发刷新
                 pass
             finally:
                 await client.close()
@@ -323,10 +323,10 @@ def _flush_audit_logs() -> None:
 
 class ToolExecutor(Generic[TInput, TOutput]):
     """
-    统一执行管线包装器。
+    统一执行管线包装器
 
     执行管线：
-      validate → permission_check → budget_guard → execute → sanitize → audit
+      依次校验参数、权限与预算，再执行工具、脱敏并审计：validate → permission_check → budget_guard → execute → sanitize → audit
     """
 
     # 初始化工具执行器
@@ -348,9 +348,9 @@ async def invoke_tool(
     context: ToolCallContext,
 ) -> ToolResultEnvelope[TOutput]:
     """
-    统一执行入口。
+    统一执行入口
 
-    所有工具必须通过此函数调用，不得绕过。
+    所有工具必须通过此函数调用，不得绕过
     """
     tool_name = executor.descriptor.name
     tool_version = executor.descriptor.version
@@ -420,7 +420,7 @@ async def invoke_tool(
             duration_ms,
         )
 
-    # 高风险工具在确认服务上线前始终拒绝直接执行，防止模型自行批准副作用。
+    # 高风险工具在确认服务上线前始终拒绝直接执行，防止模型自行批准副作用
     if executor.descriptor.approval_policy == "always":
         duration_ms = int((time.perf_counter() - start_time) * 1000)
         error = ToolError(code="APPROVAL_REQUIRED", message="该高风险操作需要用户显式确认")
@@ -586,7 +586,7 @@ def _record_audit(
 
 # 将 LangChain 工具包装为统一权限、预算、超时、脱敏和审计管线
 def wrap_tool_with_runtime(tool: BaseTool, descriptor: ToolDescriptor) -> StructuredTool:
-    # 将单次工具调用接入当前运行时作用域并执行统一的前后置管线。
+    # 将单次工具调用接入当前运行时作用域并执行统一的前后置管线
     async def wrapped_tool(**raw_input: Any) -> str:
         scope = _runtime_scope.get()
         if scope is None:

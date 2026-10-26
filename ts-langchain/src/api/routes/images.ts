@@ -1,3 +1,5 @@
+/** 处理图片生成任务提交、结果轮询和图片响应 */
+
 import type { FastifyInstance } from "fastify";
 
 import { config } from "../../config/index.js";
@@ -11,12 +13,13 @@ interface CloudflareImageResponse {
 
 const MAX_IMAGE_REQUEST_ATTEMPTS = 3;
 
-// 异步等待指定时长，用于请求重试的退避。
+// 异步等待指定时长，用于请求重试的退避
 function wait(milliseconds: number): Promise<void> {
+  // 等待指定时长后继续轮询图片任务
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-// 验证并拼接 Cloudflare Workers AI 模型运行接口地址。
+// 验证并拼接 Cloudflare Workers AI 模型运行接口地址
 function getImageApiUrl(): string | null {
   try {
     const url = new URL(config.IMAGE_BASE_URL);
@@ -27,7 +30,7 @@ function getImageApiUrl(): string | null {
   }
 }
 
-// 按模型选择 JSON 或 multipart 请求，并限制上游生图等待时间。
+// 按模型选择 JSON 或 multipart 请求，并限制上游生图等待时间
 async function requestImageGeneration(
   url: string,
   apiKey: string,
@@ -68,7 +71,7 @@ async function requestImageGeneration(
   throw lastError;
 }
 
-// 从 Cloudflare 响应中提取可安全返回给调用方的错误信息。
+// 从 Cloudflare 响应中提取可安全返回给调用方的错误信息
 function getErrorMessage(payload: CloudflareImageResponse | null): string {
   return (
     payload?.errors?.[0]?.message ||
@@ -77,10 +80,11 @@ function getErrorMessage(payload: CloudflareImageResponse | null): string {
   );
 }
 
-// 注册文本生图接口，并将 Cloudflare 的 Base64 图片转为 data URL。
+// 注册文本生图接口，并将 Cloudflare 的 Base64 图片转为 data URL
 export async function registerImageRoutes(app: FastifyInstance) {
   app.post<{ Body: { prompt?: string } }>(
     "/images/generations",
+    // 校验生图请求并提交模型任务或返回生成结果
     async (request, reply) => {
       const prompt = typeof request.body?.prompt === "string" ? request.body.prompt.trim() : "";
       if (!prompt || prompt.length > 2000) {
@@ -112,6 +116,7 @@ export async function registerImageRoutes(app: FastifyInstance) {
         }
         const payload = (await response
           .json()
+          // 将无法解析的上游 JSON 响应降级为空值
           .catch(() => null)) as CloudflareImageResponse | null;
 
         if (!response.ok) {

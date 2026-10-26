@@ -19,7 +19,7 @@ from src.tools.contracts import (
     SideEffect,
 )
 
-# ============ WMO Weather Codes ============
+# ============ WMO 天气代码映射 ============
 
 WEATHER_CODES = {
     0: "晴朗",
@@ -49,7 +49,7 @@ WEATHER_CODES = {
 }
 
 
-# ============ Tool Descriptor ============
+# ============ 工具描述符 ============
 
 _DESCRIPTOR = ToolDescriptor(
     name="weather.current",
@@ -67,7 +67,7 @@ _DESCRIPTOR = ToolDescriptor(
 )
 
 
-# ============ LangChain Tool ============
+# ============ LangChain 工具封装 ============
 
 
 class WeatherInput(BaseModel):
@@ -78,7 +78,7 @@ class WeatherInput(BaseModel):
 @tool(args_schema=WeatherInput)
 # 获取 get weather 对应的数据
 def get_weather(city: str, days: int = 7) -> str:
-    """查询指定城市的实时天气及未来 7 天天气预报。当用户问天气、气温、下雨、下雪等情况时使用。优先通过 Open-Meteo 获取，如果失败再用 web_search 搜索。"""
+    """查询指定城市的实时天气及未来 7 天天气预报。当用户问天气、气温、下雨、下雪等情况时使用。优先通过 Open-Meteo 获取，如果失败再用 web_search 搜索"""
     # 尝试 Open-Meteo
     try:
         with httpx.Client(timeout=5) as client:

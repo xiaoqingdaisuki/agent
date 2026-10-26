@@ -1,3 +1,5 @@
+/** 构建 Fastify 应用并注册中间件与业务路由 */
+
 import fastify from "fastify";
 import multipart from "@fastify/multipart";
 import cors from "@fastify/cors";
@@ -11,7 +13,7 @@ import { config } from "../config/index.js";
 export async function buildApp() {
   const app = fastify({
     logger: { level: "info" },
-    // 外层服务超时长于 Agent deadline，确保业务层先返回明确的 504。
+    // 外层服务超时长于 Agent deadline，确保业务层先返回明确的 504
     requestTimeout: config.SERVER_REQUEST_TIMEOUT_MS,
     // 连接超时
     connectionTimeout: 30_000,
@@ -30,6 +32,7 @@ export async function buildApp() {
 
   // External API v1（前端 UI 使用）— 带 /v1 前缀
   await app.register(
+    // 在统一前缀下注册业务接口和图片接口
     async (fastify) => {
       await registerV1Routes(fastify);
       await registerImageRoutes(fastify);

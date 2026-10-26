@@ -1,3 +1,5 @@
+"""构建具备工具调度、协议修复和流式输出的 LangGraph 状态图"""
+
 import asyncio
 import logging
 import re
@@ -49,10 +51,10 @@ _model_waiters = 0
 
 
 class ModelCapacityError(RuntimeError):
-    """模型并发队列已满或等待超时。"""
+    """模型并发队列已满或等待超时"""
 
 
-# 获取当前事件循环的模型并发闸门，避免上游模型服务在高并发下产生长尾。
+# 获取当前事件循环的模型并发闸门，避免上游模型服务在高并发下产生长尾
 def _get_model_semaphore() -> asyncio.Semaphore:
     global _model_semaphore, _model_semaphore_loop
     loop = asyncio.get_running_loop()
@@ -63,7 +65,7 @@ def _get_model_semaphore() -> asyncio.Semaphore:
 
 
 @asynccontextmanager
-# 在有界等待时间内获取模型并发槽并确保最终释放。
+# 在有界等待时间内获取模型并发槽并确保最终释放
 async def _model_capacity():
     global _model_waiters
     semaphore = _get_model_semaphore()
@@ -89,7 +91,7 @@ async def _model_capacity():
             semaphore.release()
 
 
-# 在短时限内读取记忆上下文，避免记忆网关阻塞模型调用。
+# 在短时限内读取记忆上下文，避免记忆网关阻塞模型调用
 async def _load_memory_context(user_id: str) -> str:
     try:
         from src.profile.service import MemoryService
@@ -102,7 +104,7 @@ async def _load_memory_context(user_id: str) -> str:
         return ""
 
 
-# 集中定义必须保留完整工具链的意图，避免实时、文件或记忆请求被误送到轻量模型路径。
+# 集中定义必须保留完整工具链的意图，避免实时、文件或记忆请求被误送到轻量模型路径
 TOOL_INTENT_PATTERNS = (
     re.compile(r"(?:20\d{2}|今年|明年).{0,12}(?:APEC|展会|会议|活动)", re.IGNORECASE),
     re.compile(r"(?:推荐|查询|查找|介绍).{0,30}(?:门店|店铺|餐厅|美食)|(?:门店|店铺|餐厅).{0,12}(?:地址|营业)", re.IGNORECASE),
@@ -182,7 +184,7 @@ MEMORY_MUTATION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# 仅白名单明确的普通生成任务进入无工具路径，未识别请求继续走保守路由。
+# 仅白名单明确的普通生成任务进入无工具路径，未识别请求继续走保守路由
 DIRECT_CHAT_PATTERNS = (
     re.compile(
         r"^(?:你好|您好|嗨|hi|hello|在吗|谢谢|感谢|晚安|早上好|下午好|晚上好|"
@@ -211,13 +213,13 @@ DIRECT_CHAT_PATTERNS = (
 )
 
 
-# 判断消息是否明确需要工具，保守保留实时数据、计算、文件和记忆能力。
+# 判断消息是否明确需要工具，保守保留实时数据、计算、文件和记忆能力
 def requires_tool_message(content: str) -> bool:
     normalized = content.strip().lower()
     return any(pattern.search(normalized) for pattern in TOOL_INTENT_PATTERNS)
 
 
-# 判断消息是否只是查询用户长期记忆，避免为确定性读取启动两轮模型工具编排。
+# 判断消息是否只是查询用户长期记忆，避免为确定性读取启动两轮模型工具编排
 def is_memory_recall_message(content: str) -> bool:
     normalized = re.sub(r"\s+", " ", content.strip().lower())
     return bool(normalized) and not MEMORY_MUTATION_PATTERN.search(normalized) and any(
@@ -225,7 +227,7 @@ def is_memory_recall_message(content: str) -> bool:
     )
 
 
-# 判断消息是否可跳过完整工具 schema，避免普通回答触发 ReAct 编排开销。
+# 判断消息是否可跳过完整工具 schema，避免普通回答触发 ReAct 编排开销
 def is_direct_chat_message(content: str) -> bool:
     normalized = content.strip().lower()
     return (
@@ -235,7 +237,7 @@ def is_direct_chat_message(content: str) -> bool:
     )
 
 
-# 返回无需模型调用的高频短问答，避免简单问题受外部模型抖动影响。
+# 返回无需模型调用的高频短问答，避免简单问题受外部模型抖动影响
 def get_fast_path_answer(content: str) -> str | None:
     normalized = re.sub(r"\s+", "", content.strip().lower())
     if normalized in {"你好", "您好", "嗨", "hi", "hello"}:
@@ -272,13 +274,13 @@ class AgentState(TypedDict, total=False):
     total_latency_ms: int
 
 
-# 估算普通文本 token，供持久化的序列化历史使用。
+# 估算普通文本 token，供持久化的序列化历史使用
 def _estimate_text_tokens(text: str) -> int:
     cjk_characters = len(re.findall(r"[\u3400-\u9fff\uf900-\ufaff]", text))
     return max(1, cjk_characters + (len(text) - cjk_characters + 3) // 4 + 4)
 
 
-# 以用户消息起始的完整轮次裁剪序列化历史，防止持久化历史绕过图状态预算。
+# 以用户消息起始的完整轮次裁剪序列化历史，防止持久化历史绕过图状态预算
 def trim_conversation_history_to_token_budget(
     history: list[dict[str, str]], token_budget: int = MAX_HISTORY_TOKENS
 ) -> list[dict[str, str]]:
@@ -303,7 +305,7 @@ def trim_conversation_history_to_token_budget(
     return history[keep_from:]
 
 
-# 移除已存在于图状态前缀中的持久化历史，避免同一轮上下文重复注入。
+# 移除已存在于图状态前缀中的持久化历史，避免同一轮上下文重复注入
 def _history_without_state_overlap(
     history: list[dict[str, str]], state_messages: list[BaseMessage]
 ) -> list[dict[str, str]]:
@@ -332,7 +334,7 @@ def _history_without_state_overlap(
     return filtered_history
 
 
-# 将未被图状态覆盖的持久化历史格式化为有界补充上下文。
+# 将未被图状态覆盖的持久化历史格式化为有界补充上下文
 def _conversation_history_message(
     history: list[dict[str, str]] | None,
     state_messages: list[BaseMessage],
@@ -360,7 +362,7 @@ def _conversation_history_message(
     )
 
 
-# 构建包含会话上下文、长期记忆和当前运行状态的模型消息序列。
+# 构建包含会话上下文、长期记忆和当前运行状态的模型消息序列
 def _model_messages(
     state: AgentState,
     system_prompt: str,
@@ -390,21 +392,21 @@ def _model_messages(
     return messages
 
 
-# 将消息内容归一化为文本，供上下文预算估算使用。
+# 将消息内容归一化为文本，供上下文预算估算使用
 def _message_content_text(content: object) -> str:
     import json
 
     return content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
 
 
-# 粗略估算中英文混合内容 token，在无模型专用 tokenizer 时采用保守预算。
+# 粗略估算中英文混合内容 token，在无模型专用 tokenizer 时采用保守预算
 def estimate_message_tokens(message: BaseMessage) -> int:
     text = _message_content_text(message.content)
     cjk_characters = len(re.findall(r"[\u3400-\u9fff\uf900-\ufaff]", text))
     return max(1, cjk_characters + (len(text) - cjk_characters + 3) // 4 + 4)
 
 
-# 保留完整用户轮次，避免拆开 assistant 工具调用与 ToolMessage 结果。
+# 保留完整用户轮次，避免拆开 assistant 工具调用与 ToolMessage 结果
 def trim_messages_to_token_budget(
     messages: list[BaseMessage], token_budget: int = MAX_HISTORY_TOKENS
 ) -> list[BaseMessage]:
@@ -427,7 +429,7 @@ def trim_messages_to_token_budget(
 
 # 修剪对话历史，限制 token 预算并保持用户轮次边界
 def trim_history(state: AgentState) -> dict:
-    """Bound checkpoint growth while keeping a complete user turn boundary."""
+    """限制检查点增长并保留完整的用户轮次边界"""
     messages = state["messages"]
     react_reset = {
         "react_state": "IDLE",
@@ -455,9 +457,9 @@ def trim_history(state: AgentState) -> dict:
     return {**react_reset, "messages": removals} if removals else react_reset
 
 
-# 根据配置获取 LLM 实例（OpenAI 或 Anthropic）。
+# 根据配置获取 LLM 实例（OpenAI 或 Anthropic）
 def get_llm(provider: str | None = None):
-    """根据配置获取 LLM。"""
+    """根据配置获取 LLM"""
     selected_provider = provider or settings.llm_provider
     if selected_provider == "anthropic":
         return ChatAnthropic(
@@ -535,15 +537,15 @@ def _get_default_checkpointer():
     return get_default_checkpointer()
 
 
-# 解码模型工具参数中的常见 XML 实体，避免把转义文本传给工具。
+# 解码模型工具参数中的常见 XML 实体，避免把转义文本传给工具
 def _decode_xml_text(value: str) -> str:
-    """Decode XML entities in a model-generated tool argument."""
+    """解码模型生成的工具参数中的 XML 实体"""
     return unescape(value.strip())
 
 
-# 解析一次 XML 工具调用中的参数，兼容两种供应商标签格式。
+# 解析一次 XML 工具调用中的参数，兼容两种供应商标签格式
 def _parse_xml_parameters(body: str) -> dict[str, str]:
-    """Parse both parameter=name and parameter name=name syntaxes."""
+    """解析 parameter=name 和 parameter name=name 两种参数语法"""
     args: dict[str, str] = {}
     patterns = (
         re.compile(
@@ -561,9 +563,9 @@ def _parse_xml_parameters(body: str) -> dict[str, str]:
     return args
 
 
-# 提取模型返回的 invoke/function XML，并记录原文范围以便从最终回答中移除。
+# 提取模型返回的 invoke/function XML，并记录原文范围以便从最终回答中移除
 def _parse_xml_tool_calls(content: str) -> list[dict]:
-    """Parse supported XML tool calls and their source spans."""
+    """解析受支持的 XML 工具调用及其在原文中的位置"""
     patterns = (
         re.compile(
             r'<invoke\s+name\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)</invoke\s*>',
@@ -611,6 +613,7 @@ def _parse_xml_tool_calls(content: str) -> list[dict]:
                     "end": match.end(),
                 }
             )
+    # 按起始位置升序排列解析出的工具调用
     return sorted(calls, key=lambda call: call["start"])
 
 
@@ -633,12 +636,12 @@ TOOL_NAME_ALIASES = {
 }
 
 
-# 将供应商使用的 Descriptor 名称映射为 LangGraph 实际注册的工具名称。
+# 将供应商使用的 Descriptor 名称映射为 LangGraph 实际注册的工具名称
 def _normalize_tool_name(name: str) -> str:
     return TOOL_NAME_ALIASES.get(name, name)
 
 
-# 规范化标准 tool_calls，兼容供应商把 descriptor 名称直接作为调用名称。
+# 规范化标准 tool_calls，兼容供应商把 descriptor 名称直接作为调用名称
 def _normalize_standard_tool_calls(message: BaseMessage) -> BaseMessage:
     tool_calls = getattr(message, "tool_calls", None) or []
     normalized_calls = []
@@ -663,11 +666,12 @@ def _normalize_standard_tool_calls(message: BaseMessage) -> BaseMessage:
     return message.model_copy(update={"tool_calls": normalized_calls})
 
 
-# 从回答中移除兼容协议文本，但不改变模型已经返回的原生工具调用。
+# 从回答中移除兼容协议文本，但不改变模型已经返回的原生工具调用
 def _remove_xml_tool_call_text(content: str, calls: list[dict]) -> str:
-    """Remove XML fallback spans while preserving surrounding answer text."""
+    """移除 XML 回退调用片段并保留周围的回答文本"""
     clean_content = content
     removed_ranges: set[tuple[int, int]] = set()
+    # 按起始位置倒序处理工具调用以避免删除偏移失效
     for call in sorted(calls, key=lambda item: item["start"], reverse=True):
         call_range = (call["start"], call["end"])
         if call_range in removed_ranges:
@@ -677,15 +681,15 @@ def _remove_xml_tool_call_text(content: str, calls: list[dict]) -> str:
     return clean_content.strip()
 
 
-# 判断消息是否仍包含未转换的 XML 工具调用。
+# 判断消息是否仍包含未转换的 XML 工具调用
 def _contains_xml_tool_calls(content: object) -> bool:
-    """Return whether content contains either supported XML call syntax."""
+    """判断正文是否包含任一种受支持的 XML 调用语法"""
     return isinstance(content, str) and bool(_parse_xml_tool_calls(content))
 
 
-# 将 XML 格式工具调用转换为 LangGraph 可识别的标准格式。
+# 将 XML 格式工具调用转换为 LangGraph 可识别的标准格式
 def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
-    """Convert provider XML calls into standard AIMessage tool calls."""
+    """将模型服务的 XML 调用转换为标准 AIMessage 工具调用"""
     content = message.content if hasattr(message, "content") else ""
     if not isinstance(content, str):
         return message
@@ -700,7 +704,7 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
         if not parsed_calls:
             return _normalize_standard_tool_calls(message)
         return AIMessage(
-            # 原生 tool_calls 是模型与当前 Agent 协商出的正式结果，兼容 XML 只允许被隐藏，不能覆盖或追加执行。
+            # 原生 tool_calls 是模型与当前 Agent 协商出的正式结果，兼容 XML 只允许被隐藏，不能覆盖或追加执行
             content=_remove_xml_tool_call_text(content, parsed_calls),
             tool_calls=_normalize_standard_tool_calls(message).tool_calls,
             id=message.id,
@@ -727,7 +731,7 @@ def _convert_xml_tool_calls(message: BaseMessage) -> BaseMessage:
 
 # 计算当前轮次（自最近一条用户消息以来）的工具调用总数
 def _current_turn_tool_call_count(messages: list[BaseMessage]) -> int:
-    """Count requested tools since the most recent user message."""
+    """统计最近一条用户消息之后请求执行的工具数量"""
     count = 0
     for message in reversed(messages):
         if message.type == "human":
@@ -740,7 +744,7 @@ def _current_turn_tool_call_count(messages: list[BaseMessage]) -> int:
 
 # 将模型提供的参数替换为服务端注入的 ownership ID（user_id, conversation_id）
 async def _scope_memory_tool_call(request: ToolCallRequest, execute):
-    """Replace model-supplied ownership IDs with server-side graph context."""
+    """使用服务端图上下文替换模型提供的归属标识"""
     name = request.tool_call["name"]
     args = dict(request.tool_call.get("args", {}))
     if name in {"memory_user_search", "memory_user_save"}:
@@ -766,9 +770,9 @@ async def _scope_memory_tool_call(request: ToolCallRequest, execute):
         return await execute(scoped_request)
 
 
-# 读取 LangChain 工具调用中的规范化名称和参数。
+# 读取 LangChain 工具调用中的规范化名称和参数
 def _tool_call_parts(tool_call: dict) -> tuple[str, object]:
-    """兼容 OpenAI function 格式和 LangChain 简化格式。"""
+    """兼容 OpenAI function 格式和 LangChain 简化格式"""
     function = tool_call.get("function", {})
     name = function.get("name") or tool_call.get("name", "")
     args = function.get("arguments", tool_call.get("args", {}))
@@ -782,9 +786,9 @@ def _tool_call_parts(tool_call: dict) -> tuple[str, object]:
     return str(name), args
 
 
-# 记录本轮模型请求的工具签名，用于步数、总调用数和重复调用防护。
+# 记录本轮模型请求的工具签名，用于步数、总调用数和重复调用防护
 def _track_react_tool_calls(state: AgentState, response: BaseMessage) -> dict:
-    """只记录结构化计数，不记录模型内部思维文本。"""
+    """只记录结构化计数，不记录模型内部思维文本"""
     signatures = dict(state.get("react_call_signatures", {}))
     names = list(state.get("react_tool_names", []))
     calls = list(getattr(response, "tool_calls", []) or [])
@@ -800,9 +804,9 @@ def _track_react_tool_calls(state: AgentState, response: BaseMessage) -> dict:
     }
 
 
-# 将工具节点输出转为 Observation，并把状态推进到 OBSERVING。
+# 将工具节点输出转为 Observation，并把状态推进到 OBSERVING
 def observe_node(state: AgentState) -> dict:
-    """统一处理工具成功和工具错误，确保错误也能回到下一轮 Reason。"""
+    """统一处理工具成功和工具错误，确保错误也能回到下一轮 Reason"""
     messages = state["messages"]
     new_observations = list(state.get("observations", []))
     tool_errors = int(state.get("tool_errors", 0))
@@ -836,7 +840,7 @@ def observe_node(state: AgentState) -> dict:
 
 # 判断 Agent 是否需要调用工具，或已达到调用上限
 def should_continue(state: AgentState) -> Literal["tools", "limit", END]:
-    """根据 ReAct 状态和硬限制选择工具节点、限制节点或结束。"""
+    """根据 ReAct 状态和硬限制选择工具节点、限制节点或结束"""
     last_message = state["messages"][-1]
     tool_calls = getattr(last_message, "tool_calls", None)
     if tool_calls:
@@ -874,7 +878,7 @@ def should_continue(state: AgentState) -> Literal["tools", "limit", END]:
             return "limit"
         enable_tool_budget()
         return "tools"
-    # Also check for XML-format tool calls (e.g. StepFun models)
+    # 同时检测 XML 格式工具调用，例如 StepFun 模型输出
     content = last_message.content if hasattr(last_message, "content") else ""
     if _contains_xml_tool_calls(content):
         enable_tool_budget()
@@ -892,7 +896,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
 
     Python 版: 显式定义每一步
       agent → conditional_edges(should_continue) → tools 或 END
-      tools → agent
+      工具完成后返回模型节点：tools → agent
     """
     from src.tools import tools
 
@@ -920,7 +924,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
         if response is None:
             raise RuntimeError("模型未返回任何流式响应")
 
-        # Handle XML-format tool calls (e.g. StepFun step-3.7-flash)
+        # 处理 XML 格式工具调用，例如 StepFun step-3.7-flash 的输出
         model_attempts = 1
         try:
             response = _convert_xml_tool_calls(response)
@@ -935,7 +939,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
                 ])
             response = _convert_xml_tool_calls(response)
 
-        # 同一响应中相同参数的记忆保存只保留首次调用，防止模型并行重复保存。
+        # 同一响应中相同参数的记忆保存只保留首次调用，防止模型并行重复保存
         if hasattr(response, "tool_calls") and response.tool_calls:
             seen_save_calls = set()
             deduped_calls = []
@@ -1034,8 +1038,8 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
 
     # 执行 limit node 对应的业务逻辑
     async def limit_node(state: AgentState):
-        # Drop the unexecuted tool-call message so providers do not reject a
-        # dangling assistant tool request without matching ToolMessages.
+        # 移除尚未执行的工具调用消息，避免模型服务拒绝请求
+        # 工具调用请求必须具有匹配的 ToolMessages 响应
         messages = state["messages"]
         if getattr(messages[-1], "tool_calls", None):
             messages = messages[:-1]
@@ -1111,7 +1115,7 @@ def _compile_tool_agent(checkpointer, base_prompt: str):
 
 # 生成缓存键，确保不同 checkpointer 实例不共享编译图
 def _get_cache_key(base_prompt: str, checkpointer) -> tuple:
-    """生成缓存键，确保不同 checkpointer 实例不共享同一个编译图。"""
+    """生成缓存键，确保不同 checkpointer 实例不共享同一个编译图"""
     if checkpointer is None:
         return (base_prompt, None)
     return (base_prompt, id(checkpointer))
@@ -1121,20 +1125,20 @@ def _get_cache_key(base_prompt: str, checkpointer) -> tuple:
 @lru_cache(maxsize=10)
 # 执行 build cached tool agent 对应的业务逻辑
 def _build_cached_tool_agent(base_prompt: str, checkpointer_id: int | None):
-    """使用 checkpointer 的 id 作为缓存键的一部分。"""
+    """使用 checkpointer 的 id 作为缓存键的一部分"""
     cp = None if checkpointer_id is None else _resolve_checkpointer(checkpointer_id)
     return _compile_tool_agent(cp, base_prompt)
 
 
 # 根据 checkpointer 的 id 获取实例，用于缓存重建
 def _resolve_checkpointer(checkpointer_id: int):
-    """根据 id 从当前默认 checkpointer 获取实例（用于缓存重建）。"""
+    """根据 id 从当前默认 checkpointer 获取实例（用于缓存重建）"""
     return _get_default_checkpointer()
 
 
 # 构建工具调用 Agent，复用已编译图以提升性能
 def build_tool_agent(checkpointer=None, system_prompt_override=None):
-    """Build a tool agent, reusing compiled graphs for the common checkpointer."""
+    """构建工具 Agent 并为共享检查点存储复用已编译的图"""
     from src.prompts.system import TOOL_CALLING_PROMPT
 
     base_prompt = system_prompt_override or TOOL_CALLING_PROMPT

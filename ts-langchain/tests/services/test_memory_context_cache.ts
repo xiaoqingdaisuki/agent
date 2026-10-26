@@ -1,3 +1,5 @@
+/** 验证 services/test_memory_context_cache 对应模块的行为与边界条件 */
+
 import { describe, expect, it, vi } from "vitest";
 import { MemoryService } from "../../src/profile/service.js";
 import { invalidateMemoryContext, loadMemoryContext } from "../../src/services/index.js";

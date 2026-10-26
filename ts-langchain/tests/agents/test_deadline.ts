@@ -1,3 +1,5 @@
+/** 验证 agents/test_deadline 对应模块的行为与边界条件 */
+
 import { describe, expect, it } from "vitest";
 
 import { AgentDeadline, AgentDeadlineError } from "../../src/agents/deadline.js";

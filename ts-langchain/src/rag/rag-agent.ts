@@ -1,3 +1,5 @@
+/** 构建结合文档检索工具的知识库问答 Agent */
+
 import { createChatModel } from "../config/model.js";
 /**
  * RAG Agent — TS 版（LangChain 声明式）
@@ -28,11 +30,7 @@ export interface RAGOptions {
   model?: string;
 }
 
-/**
- * 创建检索器工具
- * 将 RAG 检索包装成 LangChain Tool，Agent 可以自主调用
- */
-// 创建或注册 createRetrieverTool 所需的数据
+// 创建检索器工具；将 RAG 检索包装成 LangChain Tool，Agent 可以自主调用
 function createRetrieverTool(retriever: Retriever) {
   return new DynamicStructuredTool({
     name: "search_knowledge_base",
@@ -48,6 +46,7 @@ function createRetrieverTool(retriever: Retriever) {
       },
       required: ["query"],
     } as any,
+    // 检索与问题相关的文档并生成带来源的工具结果
     func: async (input: { query: string }) => {
       const results = await retriever.retrieve(input.query);
       if (results.length === 0) {
@@ -56,6 +55,7 @@ function createRetrieverTool(retriever: Retriever) {
 
       return results
         .map(
+          // 将检索片段格式化为带得分和来源的引用文本
           (r, i) =>
             `[Document ${i + 1}] (score: ${r.score.toFixed(3)})\n${r.content}\nSource: ${r.metadata.filename || r.metadata.document_name || "unknown"}`,
         )
@@ -80,10 +80,7 @@ export class RAGAgent {
     this.agent = this.createAgent(options);
   }
 
-  /**
-   * 创建 RAG Agent — 声明式配置
-   */
-  // 创建或注册 createAgent 所需的数据
+  // 创建 RAG Agent — 声明式配置
   private async createAgent(options: RAGOptions): Promise<AgentExecutor> {
     const model = createChatModel({ model: options.model });
 
@@ -120,10 +117,7 @@ Be concise and accurate in your responses.`,
     });
   }
 
-  /**
-   * 对话
-   */
-  // 执行 chat 对应的业务逻辑
+  // 对话
   async chat(message: string, history: any[] = []) {
     const agent = await this.agent;
     const result = await agent.invoke(

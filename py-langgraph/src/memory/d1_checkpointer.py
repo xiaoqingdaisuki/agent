@@ -44,7 +44,7 @@ class D1Checkpointer(BaseCheckpointSaver):
     """
     双写 checkpointer：MemorySaver（同步）+ Gateway/D1（异步）
 
-    重启后通过 Gateway 恢复 MemorySaver 状态，恢复对话连续性。
+    重启后通过 Gateway 恢复 MemorySaver 状态，恢复对话连续性
     """
 
     # 初始化当前对象
@@ -57,7 +57,7 @@ class D1Checkpointer(BaseCheckpointSaver):
         self._restored: set[str] = set()
         self._async_client: httpx.AsyncClient | None = None
 
-    # 获取当前应用事件循环复用的 Gateway 客户端。
+    # 获取当前应用事件循环复用的 Gateway 客户端
     async def _get_async_client(self) -> httpx.AsyncClient:
         if self._async_client is None or self._async_client.is_closed:
             self._async_client = httpx.AsyncClient(

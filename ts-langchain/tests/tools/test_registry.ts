@@ -1,3 +1,5 @@
+/** 验证 tools/test_registry 对应模块的行为与边界条件 */
+
 import { describe, it, expect } from "vitest";
 import { tools } from "../../src/tools/index.js";
 import { registry, getToolsForUser, getToolMetadata } from "../../src/tools/registry.js";
@@ -31,7 +33,7 @@ describe("Tool Registry", () => {
 
   it("R0 tools visible without permissions", () => {
     const visible = registry.getVisibleTools([]);
-    expect(visible.length).toBeGreaterThanOrEqual(1); // math.calculate
+    expect(visible.length).toBeGreaterThanOrEqual(1); // 校验 math.calculate 工具
   });
 
   it("R1 tools require permissions", () => {
@@ -41,10 +43,10 @@ describe("Tool Registry", () => {
     const withoutMap = new Map(without.map((d) => [d.name as string, d]));
     const withMap = new Map(withPerms.map((d) => [d.name as string, d]));
 
-    // web.read and web.search exist but are unavailable without perms
+    // web.read 和 web.search 工具已注册但缺少权限时不可用
     expect(withoutMap.get("web.read")?.available).toBe(false);
     expect(withoutMap.get("web.search")?.available).toBe(false);
-    // But they should be available with perms
+    // 具备对应权限时工具应可用
     expect(withMap.get("web.read")?.available).toBe(true);
     expect(withMap.get("web.search")?.available).toBe(true);
   });

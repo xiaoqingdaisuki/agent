@@ -18,13 +18,13 @@ import { getConversation } from "../repositories/conversation.js";
 
 const MAX_SEQUENCE_INSERT_ATTEMPTS = 3;
 
-// 识别会话消息序号的唯一约束冲突，以便仅重试由并发自动分配导致的冲突。
+// 识别会话消息序号的唯一约束冲突，以便仅重试由并发自动分配导致的冲突
 function isSequenceConflict(error: unknown): boolean {
   return error instanceof Error
     && /(?:unique|constraint).*(?:conversation_id|sequence_no)|(?:conversation_id|sequence_no).*(?:unique|constraint)/i.test(error.message);
 }
 
-// 从当前序号构造连续消息批次，显式传入的序号不会被自动覆盖。
+// 从当前序号构造连续消息批次，显式传入的序号不会被自动覆盖
 function formatMessageBatch(
   conversationId: string,
   userId: string,
@@ -34,9 +34,12 @@ function formatMessageBatch(
   let nextSequence = startSequence;
   const explicitSequences = new Set(
     messages
+      // 提取调用方指定的消息序号
       .map((message) => message.sequence_no)
+      // 仅保留显式指定的有效消息序号
       .filter((sequence): sequence is number => sequence !== undefined),
   );
+  // 为未指定序号的消息分配不与显式序号冲突的位置
   return messages.map((msg) => {
     while (explicitSequences.has(nextSequence)) nextSequence += 1;
     const sequenceNumber = msg.sequence_no ?? nextSequence++;
@@ -64,9 +67,11 @@ export function registerMessageRoutes(app: any) {
       return c.json({ ok: false, data: null, error: { code: "MEMORY_CONVERSATION_NOT_FOUND", message: "会话不存在或无权访问" }, meta: { request_id: c.get("requestId") } }, 404);
     }
 
+    // 检测批量消息中是否包含显式序号
     const hasExplicitSequence = parsed.messages.some((message) => message.sequence_no !== undefined);
     if (!hasExplicitSequence) {
       const now = new Date().toISOString();
+      // 规范化消息标识、角色和正文以构建原子写入请求
       const messages = parsed.messages.map((message) => ({
         id: message.id || crypto.randomUUID(),
         role: message.role || "user" as const,

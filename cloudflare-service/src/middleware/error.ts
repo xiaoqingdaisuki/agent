@@ -5,7 +5,7 @@
  * { ok: false, error: { code, message }, meta: { request_id, degraded, warnings } }
  *
  * 注意：Hono 4 的 onError 处理器中 c.json() 不可用，
- * 必须返回原生 Response 对象。
+ * 必须返回原生 Response 对象
  */
 
 import { HTTPException } from "hono/http-exception";
@@ -41,6 +41,7 @@ function getD1ErrorCode(error: any): string | undefined {
     if (typeof code === "string" && D1_ERROR_MAP[code]) return code;
   }
   const message = String(error?.message ?? "");
+  // 从异常消息中识别已知业务错误码
   return Object.keys(D1_ERROR_MAP).find((code) => message.includes(code));
 }
 
@@ -70,7 +71,7 @@ export function errorHandler(error: any, c: any) {
     );
   }
 
-  // Zod 请求校验失败应返回客户端参数错误，而不是误报为存储服务故障。
+  // Zod 请求校验失败应返回客户端参数错误，而不是误报为存储服务故障
   if (error?.name === "ZodError" || Array.isArray(error?.issues)) {
     return jsonResponse(
       {

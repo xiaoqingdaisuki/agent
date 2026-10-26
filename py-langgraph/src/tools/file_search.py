@@ -1,4 +1,4 @@
-"""file.search — 当前用户文件内容检索工具。"""
+"""file.search — 当前用户文件内容检索工具"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from src.tools.runtime.executor import get_tool_call_context
 
 
 class FileSearchInput(BaseModel):
-    """文件内容搜索工具的输入模型。"""
+    """文件内容搜索工具的输入模型"""
 
     query: str = Field(min_length=1, max_length=500, description="要搜索的文件内容或问题")
     file_ids: list[str] = Field(
@@ -40,7 +40,7 @@ _DESCRIPTOR = ToolDescriptor(
 )
 
 
-# 将文档搜索结果转换为 file.search 的稳定 JSON 输出。
+# 将文档搜索结果转换为 file.search 的稳定 JSON 输出
 def _format_results(results: list[dict[str, Any]], degraded: bool) -> str:
     items = []
     for result in results:
@@ -56,11 +56,11 @@ def _format_results(results: list[dict[str, Any]], degraded: bool) -> str:
     return json.dumps({"results": items, "degraded": degraded}, ensure_ascii=False)
 
 
-# 搜索当前可信用户的文件内容，并保留文件来源和位置。
+# 搜索当前可信用户的文件内容，并保留文件来源和位置
 @tool(args_schema=FileSearchInput)
 # 执行 file search 对应的业务逻辑
 async def file_search(query: str, file_ids: list[str] | None = None, top_k: int = 5) -> str:
-    """搜索当前用户文件中的相关片段。"""
+    """搜索当前用户文件中的相关片段"""
     context = get_tool_call_context()
     if context is None or not context.user_id:
         return json.dumps({"results": [], "error": "缺少可信用户上下文，无法搜索用户文件"}, ensure_ascii=False)

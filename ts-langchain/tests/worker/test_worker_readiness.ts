@@ -1,3 +1,5 @@
+/** 验证 worker/test_worker_readiness 对应模块的行为与边界条件 */
+
 import { describe, expect, it } from "vitest";
 import { workerConfigurationResponse } from "../../src/worker-readiness.js";
 

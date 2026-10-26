@@ -1,3 +1,5 @@
+"""验证 test_tool_agent 对应模块的行为与边界条件"""
+
 import asyncio
 
 import pytest
@@ -48,7 +50,7 @@ async def test_tool_failure_returns_to_model_instead_of_aborting_graph(monkeypat
 
     @tool
     async def failing_search(query: str) -> str:
-        """Search an unavailable provider."""
+        """检索当前不可用的数据源"""
         raise RuntimeError("Search temporarily unavailable")
 
     model = ToolCapableFakeModel(responses=[
@@ -109,7 +111,7 @@ async def test_tool_agent_binds_tools_and_preserves_the_full_message_chain(monke
 
 @pytest.mark.asyncio
 async def test_memory_gateway_timeout_does_not_block_agent_node(monkeypatch):
-    """记忆网关变慢时，Agent 仍应在短时限内继续请求模型。"""
+    """记忆网关变慢时，Agent 仍应在短时限内继续请求模型"""
     from src.profile.service import MemoryService
 
     async def slow_context(_user_id):
@@ -128,7 +130,7 @@ async def test_memory_gateway_timeout_does_not_block_agent_node(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_concurrent_memory_timeouts_cancel_all_gateway_requests(monkeypatch):
-    """并发慢 Gateway 必须被取消，不能遗留线程池任务拖慢后续对话。"""
+    """并发慢 Gateway 必须被取消，不能遗留线程池任务拖慢后续对话"""
     from src.profile.service import MemoryService
 
     cancelled = 0
@@ -153,7 +155,7 @@ async def test_concurrent_memory_timeouts_cancel_all_gateway_requests(monkeypatc
 
 
 def test_direct_chat_routing_skips_tools_for_ordinary_answer_styles():
-    """普通回答走快速路径，实时与工具类请求仍需完整 Agent。"""
+    """普通回答走快速路径，实时与工具类请求仍需完整 Agent"""
     assert graph_agents.is_direct_chat_message("你好") is True
     assert graph_agents.is_direct_chat_message("你是谁？") is True
     assert graph_agents.is_direct_chat_message("请用三句话解释递归") is True
@@ -202,7 +204,7 @@ def test_does_not_classify_memory_mutations_as_recall(question):
 
 
 def test_model_messages_keep_runtime_state_and_add_conversation_history():
-    """会话记录应作为补充上下文加入模型输入，而不是替换当前状态。"""
+    """会话记录应作为补充上下文加入模型输入，而不是替换当前状态"""
     messages = graph_agents._model_messages(
         {
             "messages": [HumanMessage(content="当前问题")],
@@ -220,7 +222,7 @@ def test_model_messages_keep_runtime_state_and_add_conversation_history():
 
 
 def test_model_messages_do_not_duplicate_checkpointed_history():
-    """已存在于图状态的持久化历史只能进入模型上下文一次。"""
+    """已存在于图状态的持久化历史只能进入模型上下文一次"""
     messages = graph_agents._model_messages(
         {
             "messages": [
@@ -242,7 +244,7 @@ def test_model_messages_do_not_duplicate_checkpointed_history():
 
 
 def test_static_fast_path_never_returns_a_location_specific_recommendation():
-    """地点推荐不得被静态回答劫持，必须保留完整 Agent 路由。"""
+    """地点推荐不得被静态回答劫持，必须保留完整 Agent 路由"""
     assert graph_agents.get_fast_path_answer("北京有什么好吃的") is None
     assert graph_agents.get_fast_path_answer("深圳南山有什么好玩的") is None
 
@@ -262,7 +264,7 @@ async def test_structured_memory_save_executes_once_without_unhashable_args(monk
 
     @tool
     async def memory_user_save(content: str, category: str, user_id: str) -> str:
-        """Save a user preference."""
+        """保存用户偏好"""
         saved.append((content, category, user_id))
         return "saved"
 
@@ -301,7 +303,7 @@ async def test_structured_memory_save_executes_once_without_unhashable_args(monk
 
 
 async def test_tool_agent_executes_invoke_name_xml_calls(monkeypatch):
-    """The provider invoke/name XML format must enter the normal tool graph."""
+    """验证模型服务的 invoke/name XML 格式进入正常工具执行图"""
     model = ToolCapableFakeModel(
         responses=[
             AIMessage(
@@ -402,7 +404,7 @@ async def test_identical_error_observation_stops_after_one_retry(monkeypatch):
 
     @tool
     async def failing_tool(query: str) -> str:
-        """Return a recoverable error."""
+        """返回可恢复的错误"""
         executed.append(query)
         return (
             '{"status":"error","data":null,"error":{"code":"INTERNAL_ERROR","message":"offline"}}'

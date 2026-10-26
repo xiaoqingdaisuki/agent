@@ -9,6 +9,7 @@ import { isPublicPath } from "../middleware/auth.js";
 
 // 执行 healthRoute 对应的业务逻辑
 export async function healthRoute(app: any) {
+  // 探测网关及各存储、索引和模型绑定的可用状态
   app.get("/v1/internal/health", async (c: any) => {
     const components: Record<string, string> = {
       gateway: "ok",
@@ -47,6 +48,7 @@ export async function healthRoute(app: any) {
       components.ai = "error";
     }
 
+    // 判断所有依赖组件是否均处于正常状态
     const allHealthy = Object.values(components).every((v) => v === "ok");
     return c.json({
       status: allHealthy ? "ok" : "degraded",

@@ -1,3 +1,5 @@
+/** 验证 api/test_turn_settlement 对应模块的行为与边界条件 */
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { terminateStreamTurn } from "../../src/api/stream-coordinator.js";
 import { TurnService } from "../../src/services/index.js";

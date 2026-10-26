@@ -1,3 +1,5 @@
+/** 验证 tools/runtime/test_runtime_context 对应模块的行为与边界条件 */
+
 import { describe, expect, it, vi } from "vitest";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";

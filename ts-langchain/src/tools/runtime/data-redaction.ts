@@ -4,7 +4,7 @@
  * 两层保护：
  *   1. 结构化数据：按 key 名过滤敏感字段（api_key, password, token 等）
  *   2. 内容级脱敏：对纯文本中的敏感值做正则替换（Bearer tokens、密钥格式、
- *      内部路径、邮箱等），防止工具返回的日志/报错/原始文本泄露敏感信息。
+ *      内部路径、邮箱等），防止工具返回的日志/报错/原始文本泄露敏感信息
  *
  * 设计原则：
  * - 替换为 [REDACTED]，保留数据结构和文本可读性
@@ -36,10 +36,7 @@ const SENSITIVE_KEYS = new Set([
   "csrf_token",
 ]);
 
-/**
- * 对结构化数据递归脱敏 — 按 key 名过滤 + 对字符串值做内容级脱敏
- */
-// 执行 redactStructuredData 对应的业务逻辑
+// 对结构化数据递归脱敏 — 按 key 名过滤 + 对字符串值做内容级脱敏
 export function redactStructuredData<T>(data: T): T {
   if (data === null || data === undefined) return data;
 
@@ -73,7 +70,7 @@ interface RedactionRule {
   replacement: string | ((match: string) => string);
 }
 
-// 仅遮蔽具有 JSON 头部和载荷的 JWT，保留普通域名和版本号。
+// 仅遮蔽具有 JSON 头部和载荷的 JWT，保留普通域名和版本号
 function redactJwtCandidate(candidate: string): string {
   try {
     const [encodedHeader, encodedPayload] = candidate.split(".");
@@ -89,7 +86,7 @@ function redactJwtCandidate(candidate: string): string {
 }
 
 const CONTENT_REDACTION_RULES: RedactionRule[] = [
-  // Bearer / Authorization tokens
+  // Bearer 与 Authorization 认证令牌
   {
     name: "bearer_token",
     pattern: /(Bearer\s+)[A-Za-z0-9\-._~+/]+=*/gi,
@@ -106,43 +103,43 @@ const CONTENT_REDACTION_RULES: RedactionRule[] = [
     pattern: /\b[a-f0-9]{64,}\b/gi,
     replacement: "[REDACTED]",
   },
-  // JWT tokens
+  // JWT 认证令牌
   {
     name: "jwt",
     pattern: /[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*/g,
     replacement: redactJwtCandidate,
   },
-  // Private keys
+  // 私钥内容
   {
     name: "private_key",
     pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PRIVATE\s+Key-----/gi,
     replacement: "[REDACTED]",
   },
-  // AWS-style keys
+  // AWS 格式访问密钥
   {
     name: "aws_key",
     pattern: /\b(AKIA|ASIA)[A-Z0-9]{16}\b/g,
     replacement: "[REDACTED]",
   },
-  // Internal file paths that may leak server structure
+  // 可能泄露服务器结构的内部文件路径
   {
     name: "server_path",
     pattern: /(?:[A-Za-z]:\\|\/)(?:home|var|etc|usr|root|opt|app|deploy|srv|mnt)[\/\\][^\s"'<>]*/gi,
     replacement: "[INTERNAL_PATH]",
   },
-  // Email addresses
+  // 电子邮箱地址
   {
     name: "email",
     pattern: /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g,
     replacement: "[REDACTED_EMAIL]",
   },
-  // IP addresses (internal ranges)
+  // 内部网段 IP 地址
   {
     name: "internal_ip",
     pattern: /\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b/g,
     replacement: "[REDACTED_IP]",
   },
-  // Generic password patterns in text
+  // 文本中的常见密码格式
   {
     name: "password_inline",
     pattern: /(password|passwd|pwd|pass)\s*[=:]\s*["']?[^\s"',;)}\]]+["']?/gi,
@@ -150,10 +147,7 @@ const CONTENT_REDACTION_RULES: RedactionRule[] = [
   },
 ];
 
-/**
- * 对纯文本内容做内容级脱敏，替换敏感信息为占位符
- */
-// 执行 redactTextContent 对应的业务逻辑
+// 对纯文本内容做内容级脱敏，替换敏感信息为占位符
 export function redactTextContent(text: string): string {
   let result = text;
   for (const rule of CONTENT_REDACTION_RULES) {
@@ -164,13 +158,7 @@ export function redactTextContent(text: string): string {
   return result;
 }
 
-/**
- * 对任意类型的数据做脱敏处理：
- * - 结构化对象：按 key 过滤 + 递归脱敏字符串值
- * - 纯文本：内容级正则脱敏
- * - 其他类型：原样返回
- */
-// 执行 redactData 对应的业务逻辑
+// 对任意类型的数据做脱敏处理：；- 结构化对象：按 key 过滤 + 递归脱敏字符串值；- 纯文本：内容级正则脱敏；- 其他类型：原样返回
 export function redactData<T>(data: T): T {
   if (typeof data === "string") {
     return redactTextContent(data) as T;

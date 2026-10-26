@@ -1,3 +1,5 @@
+# 构建并运行 TypeScript Agent 的容器镜像
+
 FROM node:20-alpine AS builder
 
 WORKDIR /app

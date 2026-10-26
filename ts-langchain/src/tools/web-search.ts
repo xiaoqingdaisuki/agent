@@ -83,10 +83,7 @@ class NonRetryableSearchError extends Error {}
 
 // ============ 辅助函数 ============
 
-/**
- * 将字符串安全地限制在整数范围内
- */
-// 执行 boundedInteger 对应的业务逻辑
+// 将字符串安全地限制在整数范围内
 function boundedInteger(
   raw: string | undefined,
   fallback: number,
@@ -102,8 +99,8 @@ function boundedInteger(
 /**
  * Mutex — 保护共享状态的并发访问
  *
- * TS 单线程事件循环中，await 会交出控制权，可能导致状态不一致。
- * 使用显式 Mutex 确保关键区段原子性，对齐 Python 的 threading.Lock。
+ * TS 单线程事件循环中，await 会交出控制权，可能导致状态不一致
+ * 使用显式 Mutex 确保关键区段原子性，对齐 Python 的 threading.Lock
  */
 class Mutex {
   private _locked = false;
@@ -113,9 +110,11 @@ class Mutex {
   async lock(): Promise<() => void> {
     if (!this._locked) {
       this._locked = true;
+      // 为持锁调用方返回释放锁的回调
       return () => this._unlock();
     }
 
+    // 锁被占用时登记等待者的唤醒回调
     return new Promise<() => void>((resolve) => {
       this._waiters.push(resolve);
     });
@@ -125,6 +124,7 @@ class Mutex {
   private _unlock(): void {
     const next = this._waiters.shift();
     if (next) {
+      // 为被唤醒的调用方返回释放锁的回调
       next(() => this._unlock());
     } else {
       this._locked = false;
@@ -227,6 +227,7 @@ async function fetchTavily(
       if (error instanceof NonRetryableSearchError) throw error;
       if (attempt === attempts - 1) throw error;
     }
+    // 按重试次数等待后重新调用搜索源
     await new Promise((resolve) => setTimeout(resolve, 120 * (attempt + 1)));
   }
   throw lastError instanceof Error
@@ -387,17 +388,13 @@ async function executeSearch(
 
 // ============ In-Flight 去重 ============
 
-/**
- * 创建一个带 Event 信号的 in-flight 条目。
- * 多个并发请求共享同一个 Promise，任一请求完成后所有等待者同时收到结果。
- * 对齐 Python 的 InFlightSearch(event=Event(), result=None) 模式。
- */
-// 创建或注册 createInFlightEntry 所需的数据
+// 创建一个带 Event 信号的 in-flight 条目；多个并发请求共享同一个 Promise，任一请求完成后所有等待者同时收到结果；对齐 Python 的 InFlightSearch(event=Event(), result=None) 模式
 function createInFlightEntry(
   task: Promise<SearchOutcome>,
 ): InFlightSearch {
   // 执行 resolveEntry 对应的业务逻辑
   let resolveEntry: (outcome: SearchOutcome) => void = () => {};
+  // 解析共享搜索结果并通知复用同一请求的等待者
   const done = task.then((outcome) => {
     resolveEntry(outcome);
     return outcome;
@@ -405,6 +402,7 @@ function createInFlightEntry(
 
   return {
     done,
+    // 为共享搜索项提供结果完成回调
     resolve: (outcome: SearchOutcome) => resolveEntry(outcome),
     outcome: null,
   };
@@ -523,6 +521,7 @@ export const webSearchTool: DynamicStructuredTool = new DynamicStructuredTool({
   description:
     "使用 Tavily 搜索实时互联网信息并返回来源链接。涉及新闻、当前数据、政策、人物或公司动态时必须使用。",
   schema: webSearchInputSchema,
+  // 执行多源网页搜索并格式化工具返回文本
   func: async ({ query }) =>
     searchResultsToText(await multiSourceSearch(query), query),
 });

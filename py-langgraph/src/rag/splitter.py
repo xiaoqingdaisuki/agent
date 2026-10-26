@@ -48,9 +48,9 @@ class TextSplitter:
             for i, chunk in enumerate(chunks)
         ]
 
-    # 逐个有界窗口选择分隔点，确保重叠后仍向前推进且大文档不耗尽调用栈。
+    # 逐个有界窗口选择分隔点，确保重叠后仍向前推进且大文档不耗尽调用栈
     def _split_text(self, text: str) -> list[str]:
-        """迭代切分，避免递归堆栈与大段剩余文本的反复复制。"""
+        """迭代切分，避免递归堆栈与大段剩余文本的反复复制"""
         chunks = []
         separators = ["\n\n", "\n", "。", ". ", " "]
         offset = 0

@@ -1,3 +1,5 @@
+/** 协调 SSE 消息流、连接背压、心跳与单轮执行结算 */
+
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { BusinessError, BusinessErrorCode, TurnService } from "../services/index.js";
 import type { AgentStreamEvent, Message } from "../services/index.js";
@@ -5,16 +7,17 @@ import { retainBackgroundTask } from "../runtime.js";
 import { logRequestError } from "./middleware/error.js";
 import { SseEventSequencer, encodeSseHeartbeat } from "./sse.js";
 
-// 在终态写入失败时保留有界后台重试，只有网关确认成功才视为完成。
+// 在终态写入失败时保留有界后台重试，只有网关确认成功才视为完成
 export async function terminateStreamTurn(turnId: string, userId: string, cancelled: boolean, code: string): Promise<boolean> {
   try {
     await TurnService.terminate(turnId, userId, cancelled, code);
     return true;
   } catch (error) {
     console.error("Turn settlement failed; retrying", turnId, error);
-    // 使用后台生命周期重试原始终态，失败次数有界并保留诊断日志。
+    // 使用后台生命周期重试原始终态，失败次数有界并保留诊断日志
     const retry = async () => {
       for (let attempt = 1; attempt <= 2; attempt++) {
+        // 等待递增间隔后重试单轮执行终止操作
         await new Promise((resolve) => setTimeout(resolve, attempt * 250));
         try {
           await TurnService.terminate(turnId, userId, cancelled, code);
@@ -29,12 +32,13 @@ export async function terminateStreamTurn(turnId: string, userId: string, cancel
   }
 }
 
-// 写入 SSE 并等待背压解除，连接关闭后由取消信号结束上游工作。
+// 写入 SSE 并等待背压解除，连接关闭后由取消信号结束上游工作
 async function writeSse(raw: FastifyReply["raw"], data: string): Promise<void> {
   if (raw.writableEnded || raw.destroyed) return;
   if (!raw.write(data)) {
+    // 等待背压解除或连接关闭后继续写入
     await new Promise<void>((resolve) => {
-      // 移除背压和断连监听，避免长流累积监听器。
+      // 移除背压和断连监听，避免长流累积监听器
       const finish = () => {
         raw.removeListener("drain", finish);
         raw.removeListener("close", finish);
@@ -46,7 +50,7 @@ async function writeSse(raw: FastifyReply["raw"], data: string): Promise<void> {
   }
 }
 
-// 将两类外部路由统一映射到稳定的 SSE 事件协议。
+// 将两类外部路由统一映射到稳定的 SSE 事件协议
 function encodeAgentEvent(sequencer: SseEventSequencer, event: AgentStreamEvent): string {
   if (event.type === "text") return sequencer.event("text", {
     delta: event.text, text: event.text, partial: event.partial ?? false,
@@ -65,11 +69,11 @@ interface StreamOptions {
   userId: string;
   turnId: string;
   completed: Message | null;
-  // 提供当前轮次事件来源，附件准备和 Agent 执行共享取消信号。
+  // 提供当前轮次事件来源，附件准备和 Agent 执行共享取消信号
   events(signal: AbortSignal): AsyncIterable<AgentStreamEvent>;
 }
 
-// 统一维护 SSE 取消、超时、重放、事件编码与 Turn 终态持久化。
+// 统一维护 SSE 取消、超时、重放、事件编码与 Turn 终态持久化
 export async function streamTurn(request: FastifyRequest, reply: FastifyReply, options: StreamOptions): Promise<void> {
   reply.hijack();
   reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -78,16 +82,18 @@ export async function streamTurn(request: FastifyRequest, reply: FastifyReply, o
   reply.raw.setHeader("X-Accel-Buffering", "no");
   reply.raw.flushHeaders();
   const controller = new AbortController();
+  // 到达流式请求硬上限时取消执行并携带业务错误
   const timer = setTimeout(() => controller.abort(new BusinessError(
     BusinessErrorCode.AGENT_TIMEOUT, "AI助手响应超时，请稍后重试。", 504,
   )), 270_000);
   timer.unref?.();
-  // 连接断开时立即取消模型和工具执行。
+  // 连接断开时立即取消模型和工具执行
   const disconnect = () => {
     if (!reply.raw.writableEnded) controller.abort(new Error("Client disconnected"));
   };
   request.raw.once("aborted", disconnect);
   reply.raw.once("close", disconnect);
+  // 定时发送心跳并在写入失败时处理断连
   const heartbeat = setInterval(() => {
     void writeSse(reply.raw, encodeSseHeartbeat()).catch(disconnect);
   }, 15_000);
@@ -129,6 +135,7 @@ export async function streamTurn(request: FastifyRequest, reply: FastifyReply, o
       completed = await terminateStreamTurn(options.turnId, options.userId, cancelled, cancelled ? "CLIENT_CANCELLED" : businessError.code);
     }
     logRequestError(request, failure, { conversation_id: options.conversationId, user_id: options.userId, stream: true });
+    // 消费单轮执行清理失败以避免覆盖流式错误
     await writeSse(reply.raw, sequencer.event("error", { ok: false, error: businessError.toJSON().error })).catch(() => undefined);
   } finally {
     if (!completed && !settlementRequested) await terminateStreamTurn(options.turnId, options.userId, true, "CLIENT_CANCELLED");
@@ -139,7 +146,7 @@ export async function streamTurn(request: FastifyRequest, reply: FastifyReply, o
     try {
       await writeSse(reply.raw, sequencer.done());
     } catch {
-      // 连接已关闭时无需发送结束标记。
+      // 连接已关闭时无需发送结束标记
     } finally {
       reply.raw.end();
     }

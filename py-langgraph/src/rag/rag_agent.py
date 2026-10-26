@@ -30,7 +30,7 @@ class RAGState(TypedDict):
     user_id: str
 
 
-# 根据统一 provider 配置创建 RAG 使用的文本模型。
+# 根据统一 provider 配置创建 RAG 使用的文本模型
 def _create_rag_llm():
     if settings.llm_provider == "anthropic":
         return get_llm()
@@ -54,9 +54,7 @@ def build_rag_agent(
     构建 RAG Agent — 显式图编排
 
     图结构：
-    START → agent → should_retrieve?
-                ├── true  → retrieve → grade → generate → END
-                └── false → generate → END
+    从入口依次执行检索、评分和回答生成：START → retrieve → grade → generate → END
     """
     llm = _create_rag_llm()
     retriever = Retriever(

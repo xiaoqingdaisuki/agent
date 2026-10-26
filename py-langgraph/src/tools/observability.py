@@ -6,8 +6,8 @@
 2. 结构化事件日志
 3. 审计日志导出
 
-不依赖外部 APM 系统，适合中小规模部署。
-生产环境可替换为 OpenTelemetry + Prometheus。
+不依赖外部 APM 系统，适合中小规模部署
+生产环境可替换为 OpenTelemetry + Prometheus
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ class MetricsCollector:
 
             snap.total_duration_ms += m.duration_ms
 
-            # by tool
+            # 按工具汇总
             if m.tool_name not in snap.by_tool:
                 snap.by_tool[m.tool_name] = {"calls": 0, "success": 0, "fail": 0}
             snap.by_tool[m.tool_name]["calls"] += 1
@@ -92,7 +92,7 @@ class MetricsCollector:
             else:
                 snap.by_tool[m.tool_name]["fail"] += 1
 
-            # by risk
+            # 按风险等级汇总
             snap.by_risk[m.risk_level] = snap.by_risk.get(m.risk_level, 0) + 1
 
         return snap
@@ -116,11 +116,11 @@ class MetricsCollector:
             )
         return events
 
-    # 读取最早一批待上传指标但暂不确认删除。
+    # 读取最早一批待上传指标但暂不确认删除
     def peek_pending(self, limit: int = 500) -> list[ToolCallMetric]:
         return list(self._metrics[:limit])
 
-    # 成功上传后确认删除指定数量的队首指标。
+    # 成功上传后确认删除指定数量的队首指标
     def acknowledge(self, count: int) -> None:
         del self._metrics[:count]
 
@@ -157,7 +157,7 @@ def _flush_metrics() -> None:
         from src.clients.memory_gateway import CloudflareMemoryClient
 
         client = CloudflareMemoryClient()
-        # 连续刷完当前积压，避免最后不足阈值的一批永久滞留。
+        # 连续刷完当前积压，避免最后不足阈值的一批永久滞留
         async def _do_flush() -> None:
             global _metrics_flush_inflight
             try:
@@ -181,7 +181,7 @@ def _flush_metrics() -> None:
                     await client.write_tool_metrics(entries)
                     _metrics.acknowledge(len(events))
             except Exception:
-                # 保留未确认指标，等待后续调用再次触发刷新。
+                # 保留未确认指标，等待后续调用再次触发刷新
                 pass
             finally:
                 await client.close()

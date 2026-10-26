@@ -1,8 +1,8 @@
 """
 memory.user — 用户长期记忆管理
 
-提供用户记忆的搜索和保存能力。
-统一通过 Repository 层访问当前配置的存储后端。
+提供用户记忆的搜索和保存能力
+统一通过 Repository 层访问当前配置的存储后端
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from src.repositories import get_repositories
 from src.tools.runtime.executor import get_tool_call_context
 
 
-# ============ Tool Descriptor ==========
+# ============ 工具描述符 ==========
 
 _USER_SEARCH_DESCRIPTOR = ToolDescriptor(
     name="memory.user.search",
@@ -89,7 +89,7 @@ _USER_DELETE_DESCRIPTOR = ToolDescriptor(
 )
 
 
-# ============ LangChain Tool: memory.user.search ==========
+# ============ LangChain 工具封装：memory.user.search ==========
 
 
 class UserSearchInput(BaseModel):
@@ -111,7 +111,7 @@ def memory_user_search(
     max_results: int = 10,
     state: Annotated[dict, InjectedState()] = None,
 ) -> str:
-    """搜索当前用户的长期记忆。当需要了解用户的偏好、习惯、个人信息等持久化记忆时使用。"""
+    """搜索当前用户的长期记忆。当需要了解用户的偏好、习惯、个人信息等持久化记忆时使用"""
     scoped_user_id = state.get("user_id") if state is not None else user_id
     if not scoped_user_id:
         return "🧠 未提供已认证的用户上下文，无法读取长期记忆。"
@@ -140,7 +140,7 @@ def memory_user_search(
         return f"🧠 记忆搜索失败：{e}"
 
 
-# ============ LangChain Tool: memory.user.save ==========
+# ============ LangChain 工具封装：memory.user.save ==========
 
 
 class UserSaveInput(BaseModel):
@@ -153,14 +153,14 @@ class UserSaveInput(BaseModel):
 
 
 class UserListInput(BaseModel):
-    """列出用户记忆的输入模型。"""
+    """列出用户记忆的输入模型"""
 
     category: str = Field(default="", description="可选的记忆类别过滤")
     max_results: int = Field(default=50, description="最多返回条数", ge=1, le=100)
 
 
 class UserDeleteInput(BaseModel):
-    """删除用户记忆的输入模型。"""
+    """删除用户记忆的输入模型"""
 
     memory_ids: list[str] = Field(min_length=1, max_length=20, description="要删除的精确记忆 ID 列表")
 
@@ -175,7 +175,7 @@ def memory_user_save(
     importance: int = 3,
     state: Annotated[dict, InjectedState()] = None,
 ) -> str:
-    """保存一条关于用户的重要信息到长期记忆。只有用户明确表达或有长期价值的信息才应该保存。"""
+    """保存一条关于用户的重要信息到长期记忆。只有用户明确表达或有长期价值的信息才应该保存"""
     scoped_user_id = state.get("user_id") if state is not None else user_id
     if not scoped_user_id:
         return "🧠 未提供已认证的用户上下文，无法保存长期记忆。"
@@ -191,13 +191,13 @@ def memory_user_save(
         return f"🧠 记忆保存失败：{e}"
 
 
-# 获取当前工具调用的可信用户 ID。
+# 获取当前工具调用的可信用户 ID
 def _scoped_user_id() -> str | None:
     context = get_tool_call_context()
     return context.user_id if context is not None and context.user_id else None
 
 
-# 将长期记忆转换为面向对话的最小公开字段。
+# 将长期记忆转换为面向对话的最小公开字段
 def _public_memory(memory: dict[str, Any]) -> dict[str, str]:
     return {
         "memory_id": str(memory.get("id", "")),
@@ -206,11 +206,11 @@ def _public_memory(memory: dict[str, Any]) -> dict[str, str]:
     }
 
 
-# 列出当前可信用户的长期记忆。
+# 列出当前可信用户的长期记忆
 @tool(args_schema=UserListInput)
 # 执行 memory user list 对应的业务逻辑
 def memory_user_list(category: str = "", max_results: int = 50) -> str:
-    """查看当前用户保存了哪些长期记忆。"""
+    """查看当前用户保存了哪些长期记忆"""
     user_id = _scoped_user_id()
     if not user_id:
         return json.dumps({"memories": [], "error": "缺少可信用户上下文"}, ensure_ascii=False)
@@ -225,11 +225,11 @@ def memory_user_list(category: str = "", max_results: int = 50) -> str:
         return json.dumps({"memories": [], "error": f"长期记忆读取失败：{exc!s}"}, ensure_ascii=False)
 
 
-# 按精确 ID 删除当前可信用户的长期记忆。
+# 按精确 ID 删除当前可信用户的长期记忆
 @tool(args_schema=UserDeleteInput)
 # 执行 memory user delete 对应的业务逻辑
 def memory_user_delete(memory_ids: list[str]) -> str:
-    """按精确 memory_id 删除当前用户的长期记忆。"""
+    """按精确 memory_id 删除当前用户的长期记忆"""
     user_id = _scoped_user_id()
     if not user_id:
         return json.dumps({"deleted": [], "error": "缺少可信用户上下文"}, ensure_ascii=False)

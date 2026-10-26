@@ -1,4 +1,4 @@
-"""time — 当前时间查询与 IANA 时区转换工具。"""
+"""time — 当前时间查询与 IANA 时区转换工具"""
 
 from __future__ import annotations
 
@@ -14,13 +14,13 @@ TIMEZONE_ERROR = "时区必须是有效的 IANA Time Zone，例如 Asia/Shanghai
 
 
 class CurrentTimeInput(BaseModel):
-    """当前时间工具的输入模型。"""
+    """当前时间工具的输入模型"""
 
     timezone: str = Field(default="Asia/Shanghai", min_length=1, description="IANA 时区名称")
 
 
 class ConvertTimezoneInput(BaseModel):
-    """时区转换工具的输入模型。"""
+    """时区转换工具的输入模型"""
 
     datetime: str = Field(description="来源时区中的本地日期时间，如 2026-08-21T15:00:00")
     from_timezone: str = Field(description="来源 IANA 时区")
@@ -56,7 +56,7 @@ _CONVERT_DESCRIPTOR = ToolDescriptor(
 )
 
 
-# 校验 IANA 时区名称并返回 ZoneInfo。
+# 校验 IANA 时区名称并返回 ZoneInfo
 def _timezone(name: str) -> ZoneInfo:
     try:
         return ZoneInfo(name)
@@ -64,7 +64,7 @@ def _timezone(name: str) -> ZoneInfo:
         raise ValueError(TIMEZONE_ERROR) from exc
 
 
-# 将时间格式化为需求文档约定的 JSON 数据。
+# 将时间格式化为需求文档约定的 JSON 数据
 def _format_time(value: datetime, timezone: str) -> dict[str, str]:
     local = value.astimezone(_timezone(timezone))
     return {
@@ -74,11 +74,11 @@ def _format_time(value: datetime, timezone: str) -> dict[str, str]:
     }
 
 
-# 获取指定时区的当前日期、时间和星期几。
+# 获取指定时区的当前日期、时间和星期几
 @tool(args_schema=CurrentTimeInput)
 # 执行 get current time 对应的业务逻辑
 def get_current_time(timezone: str = "Asia/Shanghai") -> str:
-    """获取指定 IANA 时区的当前日期、时间和星期几。"""
+    """获取指定 IANA 时区的当前日期、时间和星期几"""
     import json
 
     try:
@@ -87,11 +87,11 @@ def get_current_time(timezone: str = "Asia/Shanghai") -> str:
         return json.dumps({"error": str(exc)}, ensure_ascii=False)
 
 
-# 将来源时区的本地日期时间转换为目标时区。
+# 将来源时区的本地日期时间转换为目标时区
 @tool(args_schema=ConvertTimezoneInput)
 # 执行 convert timezone 对应的业务逻辑
 def convert_timezone(datetime: str, from_timezone: str, to_timezone: str) -> str:
-    """将一个 IANA 时区的本地时间转换为另一个 IANA 时区。"""
+    """将一个 IANA 时区的本地时间转换为另一个 IANA 时区"""
     import json
 
     try:
@@ -111,6 +111,7 @@ def convert_timezone(datetime: str, from_timezone: str, to_timezone: str) -> str
         ]
         if not candidates:
             raise ValueError("datetime 在来源时区不存在（夏令时切换）")
+        # 按 UTC 时间选择歧义本地时间对应的较早时刻
         instant = min(candidates, key=lambda value: value.astimezone(UTC))
         result = _format_time(instant, to_timezone)
         result.update(

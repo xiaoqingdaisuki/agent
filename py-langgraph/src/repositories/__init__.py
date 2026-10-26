@@ -1,8 +1,8 @@
 """
 Repositories — 数据仓储层
 
-根据 memory_enabled 选择进程内仓储或 Cloudflare Service。
-业务层只依赖统一仓储接口，关闭记忆网关时不会创建远端客户端。
+根据 memory_enabled 选择进程内仓储或 Cloudflare Service
+业务层只依赖统一仓储接口，关闭记忆网关时不会创建远端客户端
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def _get_or_create_event_loop() -> asyncio.AbstractEventLoop:
     return _sync_loop
 
 
-# 在同步业务层中安全执行仓储协程，并复用专用事件循环。
+# 在同步业务层中安全执行仓储协程，并复用专用事件循环
 def _run_sync(coro) -> Any:
     """在同步上下文中运行异步协程"""
     loop = _get_or_create_event_loop()
@@ -70,9 +70,9 @@ def _run_sync(coro) -> Any:
         raise
 
 
-# 返回当前配置对应的仓储单例，确保同一进程共享会话与记忆状态。
+# 返回当前配置对应的仓储单例，确保同一进程共享会话与记忆状态
 def get_repositories():
-    """按配置创建 Cloudflare 或进程内仓储实例。"""
+    """按配置创建 Cloudflare 或进程内仓储实例"""
     global _repositories
     if _repositories is None:
         if settings.memory_enabled:
@@ -84,12 +84,12 @@ def get_repositories():
     return _repositories
 
 
-# 读取消息最大序号并返回下一可用值，兼容显式序号留下的空洞。
+# 读取消息最大序号并返回下一可用值，兼容显式序号留下的空洞
 def _next_message_sequence(messages: list[dict]) -> int:
     return max((message["sequence_no"] + 1 for message in messages), default=0)
 
 
-# 关闭共享网关客户端及仓储事件循环，供应用优雅停机使用。
+# 关闭共享网关客户端及仓储事件循环，供应用优雅停机使用
 async def close_repositories() -> None:
     global _repositories, _sync_loop, _sync_loop_thread
     repositories = _repositories
@@ -105,10 +105,10 @@ async def close_repositories() -> None:
     _sync_loop_thread = None
 
 
-# 在线程卸载仓储操作后仍原子执行 Turn 状态变更，避免并发创建多个活动轮次。
+# 在线程卸载仓储操作后仍原子执行 Turn 状态变更，避免并发创建多个活动轮次
 def _serialize_turn(operation):
     @wraps(operation)
-    # 使用同一仓储实例的可重入锁保护一次完整的状态变更。
+    # 使用同一仓储实例的可重入锁保护一次完整的状态变更
     def execute(self, *args, **kwargs):
         with self._turn_lock:
             return operation(self, *args, **kwargs)
@@ -116,7 +116,7 @@ def _serialize_turn(operation):
 
 
 class InMemoryRepositories:
-    """关闭 Cloudflare 记忆模式时使用的进程内仓储。"""
+    """关闭 Cloudflare 记忆模式时使用的进程内仓储"""
 
     # 初始化进程内 profile、会话、消息和长期记忆存储
     def __init__(self):
@@ -193,6 +193,7 @@ class InMemoryRepositories:
             for conversation in self._conversations.values()
             if conversation["user_id"] == user_id and not conversation.get("deleted_at")
         ]
+        # 按创建时间倒序排列用户会话
         conversations.sort(key=lambda item: item["created_at"], reverse=True)
         return conversations[offset : offset + limit]
 
@@ -223,6 +224,7 @@ class InMemoryRepositories:
             if message.get("sequence_no") is None:
                 next_sequence += 1
         self._messages[conversation_id] = sorted(
+            # 按消息序号升序合并去重后的历史记录
             by_id.values(), key=lambda item: item["sequence_no"]
         )
 
@@ -238,7 +240,7 @@ class InMemoryRepositories:
     def clear_messages(self, conversation_id: str) -> None:
         self._messages[conversation_id] = []
 
-    # 原子创建或复用客户端消息对应的进程内 Turn。
+    # 原子创建或复用客户端消息对应的进程内 Turn
     def create_or_get_turn(
         self, conversation_id: str, user_id: str, client_message_id: str, turn_id: str | None = None
     ) -> tuple[dict, bool]:
@@ -270,7 +272,7 @@ class InMemoryRepositories:
         return dict(turn), True
 
     @_serialize_turn
-    # 原子创建进程内 Turn 并追加用户消息。
+    # 原子创建进程内 Turn 并追加用户消息
     def begin_turn(
         self,
         conversation_id: str,
@@ -343,7 +345,7 @@ class InMemoryRepositories:
         return dict(turn), dict(message), True
 
     @_serialize_turn
-    # 原子追加进程内助手消息并完成 Turn。
+    # 原子追加进程内助手消息并完成 Turn
     def complete_turn(self, turn_id: str, user_id: str, message: dict) -> dict:
         turn = self._turns.get(turn_id)
         if not turn or turn["user_id"] != user_id:
@@ -382,13 +384,13 @@ class InMemoryRepositories:
         )
         return dict(turn)
 
-    # 按用户读取进程内 Turn。
+    # 按用户读取进程内 Turn
     def get_turn(self, turn_id: str, user_id: str) -> dict | None:
         turn = self._turns.get(turn_id)
         return dict(turn) if turn and turn["user_id"] == user_id else None
 
     @_serialize_turn
-    # 按不可逆状态机更新进程内 Turn。
+    # 按不可逆状态机更新进程内 Turn
     def update_turn(self, turn_id: str, user_id: str, **changes) -> dict:
         turn = self._turns.get(turn_id)
         if not turn or turn["user_id"] != user_id:
@@ -456,6 +458,7 @@ class InMemoryRepositories:
                     "created_at": memory["created_at"], "updated_at": memory["updated_at"],
                     "source_conversation_id": memory["source_conversation_id"],
                 })
+        # 按综合得分和重要性倒序排列记忆结果
         results.sort(key=lambda item: (item["final_score"], item["importance"]), reverse=True)
         return {"items": results[:limit], "degraded": False}
 
@@ -466,10 +469,11 @@ class InMemoryRepositories:
             for memory in self._memories.get(user_id, [])
             if memory["status"] == "active" and (not category or memory["category"] == category)
         ]
+        # 按重要性和创建时间倒序排列记忆
         memories.sort(key=lambda item: (item["importance"], item["created_at"]), reverse=True)
         return memories[:limit]
 
-    # 异步读取本地记忆，保持与 Cloudflare 仓储一致的非阻塞调用契约。
+    # 异步读取本地记忆，保持与 Cloudflare 仓储一致的非阻塞调用契约
     async def list_memories_async(
         self, user_id: str, category: str | None = None, limit: int = 50
     ) -> list[dict]:
@@ -521,7 +525,7 @@ class Repositories:
         self._use_turn_fallback = False
 
     @staticmethod
-    # 判断旧版 Gateway 是否尚未提供 Turn API。
+    # 判断旧版 Gateway 是否尚未提供 Turn API
     def _is_legacy_turn_gateway(error: Exception) -> bool:
         from src.clients.memory_gateway import MemoryGatewayError
 
@@ -531,7 +535,7 @@ class Repositories:
             and error.code == "MEMORY_NOT_FOUND"
         )
 
-    # 切换到进程内 Turn 兼容层并只记录一次降级告警。
+    # 切换到进程内 Turn 兼容层并只记录一次降级告警
     def _enable_turn_fallback(self) -> None:
         if self._use_turn_fallback:
             return
@@ -540,7 +544,7 @@ class Repositories:
             "Gateway does not expose Turn API; using local compatibility storage"
         )
 
-    # Profile
+    # 用户画像
     # 获取 get or create profile 对应的数据
     def get_or_create_profile(self, user_id: str, name: str = "") -> dict:
         existing = _run_sync(self._client.get_profile(user_id))
@@ -556,7 +560,7 @@ class Repositories:
     def update_profile(self, user_id: str, name: str | None = None, preferences: dict | None = None) -> dict | None:
         return _run_sync(self._client.put_profile(user_id, name, preferences))
 
-    # Conversation
+    # 会话
     # 创建或注册 create conversation 所需的数据
     def create_conversation(
         self,
@@ -581,7 +585,7 @@ class Repositories:
     def delete_conversation(self, conversation_id: str) -> bool:
         return _run_sync(self._client.delete_conversation(conversation_id))
 
-    # Message
+    # 消息
     # 创建或注册 create message batch 所需的数据
     def create_message_batch(self, conversation_id: str, user_id: str, messages: list[dict]) -> None:
         return _run_sync(self._client.create_messages_batch(conversation_id, user_id, messages))
@@ -596,7 +600,7 @@ class Repositories:
     def clear_messages(self, conversation_id: str) -> None:
         return _run_sync(self._client.clear_messages(conversation_id))
 
-    # 原子创建或复用客户端消息对应的 Turn。
+    # 原子创建或复用客户端消息对应的 Turn
     def create_or_get_turn(
         self, conversation_id: str, user_id: str, client_message_id: str, turn_id: str | None = None
     ) -> tuple[dict, bool]:
@@ -619,7 +623,7 @@ class Repositories:
                 conversation_id, user_id, client_message_id, resolved_turn_id
             )
 
-    # 原子创建 Turn 并保存用户消息。
+    # 原子创建 Turn 并保存用户消息
     def begin_turn(
         self,
         conversation_id: str,
@@ -664,7 +668,7 @@ class Repositories:
                 resolved_message_id,
             )
 
-    # 原子保存助手消息并完成 Turn。
+    # 原子保存助手消息并完成 Turn
     def complete_turn(self, turn_id: str, user_id: str, message: dict) -> dict:
         if self._use_turn_fallback:
             return self._turn_fallback.complete_turn(turn_id, user_id, message)
@@ -683,19 +687,19 @@ class Repositories:
                 turn_id, user_id, message, assistant_content_json
             )
         )
-    # 按用户读取 Turn。
+    # 按用户读取 Turn
     def get_turn(self, turn_id: str, user_id: str) -> dict | None:
         if self._use_turn_fallback:
             return self._turn_fallback.get_turn(turn_id, user_id)
         return _run_sync(self._client.get_turn(turn_id, user_id))
 
-    # 按合法状态机更新 Turn。
+    # 按合法状态机更新 Turn
     def update_turn(self, turn_id: str, user_id: str, **changes) -> dict:
         if self._use_turn_fallback:
             return self._turn_fallback.update_turn(turn_id, user_id, **changes)
         return _run_sync(self._client.update_turn(turn_id, user_id, **changes))
 
-    # Memory
+    # 长期记忆
     # 更新或保存 save memory 对应的数据
     def save_memory(self, user_id: str, content: str, category: str = "fact", importance: int = 3, source: str = "user_explicit", source_conversation_id: str | None = None) -> dict:
         import uuid
@@ -709,7 +713,7 @@ class Repositories:
     def list_memories(self, user_id: str, category: str | None = None, limit: int = 50) -> list[dict]:
         return _run_sync(self._client.list_memories(user_id, category, limit))
 
-    # 直接在请求事件循环中读取记忆，避免同步桥接占用默认线程池。
+    # 直接在请求事件循环中读取记忆，避免同步桥接占用默认线程池
     async def list_memories_async(
         self, user_id: str, category: str | None = None, limit: int = 50
     ) -> list[dict]:
